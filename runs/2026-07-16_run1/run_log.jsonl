@@ -1,0 +1,1 @@
+{"ts": "2026-07-16T07:18:37.038171+00:00", "agent": "smoke", "event": "PostToolUse", "tool": "Glob", "tool_use_id": "toolu_01PxqU5TjwiYS3th1TpDUZXU", "tool_input": {"pattern": "*"}, "session_id": "f6953dde-e298-4a79-9e2d-933c2c63a742"}

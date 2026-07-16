@@ -14,6 +14,9 @@ from pathlib import Path
 from agents.base import run_agent
 from agents.smoke import SMOKE_AGENT, SMOKE_PROMPT
 
+from dotenv import load_dotenv
+load_dotenv()
+
 REPO_ROOT = Path(__file__).resolve().parent
 RUNS_DIR = REPO_ROOT / "runs"
 
