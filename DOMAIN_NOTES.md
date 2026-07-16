@@ -141,12 +141,33 @@ conservatively, never interpolate across, flag the pattern.
 
 ## 4. Channel trust
 
-### 4.1 Angular velocity / gyro channels are untrusted **[reported, rev2 only]**
-In rev2, `L_angvel_LPF` / `R_angvel_LPF` ring at ±40–80 deg/s during static postures where true
-velocity is ~0. Measured on `annotated_loco_rev2_trial_1.csv`: |angvel| p99 ≈ 105 deg/s.
+### 4.1 Angular velocity is RELIABLE — it is the derivative **[measured]**
 
-**[open]** The raw-family analogue is presumably `L_Gyro_*` / `R_Gyro_*`, but this has **not been
-verified**. Do not apply the rev2 policy to raw gyro channels without testing them first.
+`angvel_LPF` **is** `d(angle)/dt`: r = **0.999**, slope **0.98**. Use it directly. There is no need
+to re-derive velocity from the angle channels.
+
+**RETRACTED (2026-07-16):** an earlier entry claimed `L/R_angvel_LPF` "ring at ±40–80 deg/s during
+static postures" and instructed gradient-derivation instead. That claim was **[reported]**, never
+verified, and was then "confirmed" by measuring |angvel| p99 ≈ 105 deg/s on
+`annotated_loco_rev2_trial_1.csv` — **computed over the whole file, 93.7% of which is walking.**
+That measured walking and called it rest. The channel was never noisy; the measurement was wrong.
+
+**Lesson, kept deliberately:** a `[measured]` tag is only worth what the measurement isolated.
+Statistics over a whole file say nothing about a state that occupies 5% of it. See §11 item 1:
+*density needs mass.*
+
+### 4.1b Gyro units are inconsistent WITHIN a single file **[measured, reproduced on 95 then 42 files]**
+
+- **`B_Gyro_*` is rad/s. `L_Gyro_*` / `R_Gyro_*` is deg/s.** Same naming convention, same file.
+  Any feature mixing trunk and thigh gyro without conversion is off by **57.3×**.
+- **Axis convention: Y↔Z swap on every segment.** `d(Deg_Y)/dt` tracks **`Gyro_Z`**, not `Gyro_Y`.
+- `Deg_Y` needs **no sign normalization** — raw L vs R is already anti-phase in 84% of files.
+
+`Deg_Y` is the sagittal (flexion) channel. This is the channel the swap rule reads.
+
+**[open]** `stages/s1_clean/config.py: KEEP_MEASURED` currently keeps all 27 IMU channels with no
+unit awareness. Unit normalization belongs in the **clean layer** — it is a measurement property,
+not a feature choice.
 
 ### 4.2 Yaw is drift-contaminated **[reported]**
 In treadmill data, yaw correlated with session time at r ≈ −0.95 — measuring elapsed time, not
@@ -160,9 +181,13 @@ suspect until placement consistency is established per session.
 ### 4.4 `Time` is metadata, not a feature **[decided]**
 Used for dt / rate / segmentation only. Never fed to a model.
 
-### 4.5 `loco` is an outdated algorithm's output **[reported]**
-Not ground truth, not a feature. Recorded for provenance only. Must be dropped **by name** — in
-`0fda484e` files, dropping index 47 would delete the step counter instead.
+### 4.5 `loco` is severed and stays severed **[measured]**
+Its "standing" class contains a decile **as periodic at the gait frequency as median walking**. A
+label that fails inspection cannot validate anything. (It is also an outdated algorithm's output
+**[reported]**, but that is the weaker reason — the strong one is that it is demonstrably wrong.)
+
+Not ground truth, not a feature. Must be dropped **by name** — in `0fda484e` files, dropping index
+47 would delete the step counter instead.
 
 ---
 
@@ -186,7 +211,19 @@ meaning: absence means the labeler *could* tell.
 ### 5.4 Class imbalance makes accuracy meaningless **[measured]**
 93.7% walking. A "predict 10 always" model scores 93.7%. Macro-F1 is the headline metric.
 
-### 5.5 Current corpus class coverage **[reported]**
+### 5.5 Session ≠ subject, and subject is mostly UNKNOWN **[measured]**
+`20260114` contains both `sub1` and `sub2`, **both under `id=69`**. Filename field 2 is **not a
+subject** — it tracks the date block (device / firmware / protocol). Only **7 of 95** files mark
+the wearer at all.
+
+So grouping by session is **not sufficient** for cross-validation: subject leakage is the confound
+that inflates scores, and subject is unrecoverable for 88 of 95 files.
+
+This is a genuine **`needs_human`** finding — exactly the "AI cannot proceed without human input"
+case the PL asked to surface. Someone may be able to reconstruct wearer identity from session
+records; until then, no honest claim about cross-subject generalization is possible.
+
+### 5.6 Current corpus class coverage **[reported]**
 h-medi contains essentially only STANDING and WALKING. Rare-class separability (stairs, varied
 terrain) is **untestable** on current data. Any claim about rare-class performance is overclaiming.
 
@@ -203,11 +240,13 @@ angular-velocity channels.
 **Do not make rev2 the storage format.** Canonical storage is the name-resolved raw superset. A
 wide honest table can always be projected down; a narrow one can never be recovered.
 
-### 6.2 The raw→rev2 mapping is unresolved **[open]**
-`R_ang_LPF` opens at 85.43 and raw `R_Deg_Y` opens at 85.69 — suggestive that
-`*_ang_LPF ≈ LPF(*_Deg_Y)`, but those are different trials, so it is a **hypothesis, not a mapping**.
-LPF parameters unknown **[reported]**. Superseded in priority by incoming raw-format labeled data
-**[reported]**, which removes the need for a bridge.
+### 6.2 The raw→rev2 mapping is largely resolved **[measured]**
+`*_ang_LPF ≈ LPF(*_Deg_Y)`, and `*_angvel_LPF = d(*_ang_LPF)/dt` (r=0.999, §4.1). Supported by:
+`Deg_Y` is the sagittal channel, already anti-phase L vs R in 84% of files (§4.1b); and `R_ang_LPF`
+opens at 85.43 against raw `R_Deg_Y` at 85.69.
+
+**[open]** LPF parameters remain unknown. Incoming raw-format labeled data **[reported]** removes
+the need for a bridge, so this is no longer blocking.
 
 ---
 
@@ -219,7 +258,19 @@ LPF parameters unknown **[reported]**. Superseded in priority by incoming raw-fo
 - The measure layer is **blind**: objective numbers only, no opinion. All judgment lives in diagnose.
 - Ground truth already locates transitions exactly. Do not implement cross-correlation lag search.
 - UNKNOWN is excluded consistently across per-trial and corpus-level metrics.
-- Group by **session** for cross-validation. Era leakage is the confound to defend against.
+- Group by **session** for cross-validation — but see §5.5: session ≠ subject, and subject is
+  unknown for 88 of 95 files. Session grouping defends against era leakage; it does **not** defend
+  against subject leakage. Do not claim cross-subject generalization from it.
+- **Always select by time, never by index.** rev2 samples at **494 Hz, not 500** — jitter
+  accumulates to **4.2 s of drift by t=320 s**, so `int(t*fs)` points 4.2 seconds past the event.
+  **[open]** The wide path has not been audited for this.
+- **Per-file calibration, never corpus-wide.** A fixed threshold scores `walk_rec = 0.000` on rev8
+  (it calls every walking window standing); per-file calibration scores 1.000/1.000 on the same
+  file. Do not fit constants to more data — more data yields a better *global* constant, and global
+  is the disease. rev8 wants 0.426 where rev2 wants 0.605; the answer is not needing one.
+- **Abstain rather than force.** Coverage of 73–98% is acceptable; abstained windows genuinely
+  contain both states, mirroring the human `-1` label. Note the tension: the abstained windows are
+  the transitions, which is where a controller most needs an answer.
 
 ---
 
@@ -234,7 +285,12 @@ LPF parameters unknown **[reported]**. Superseded in priority by incoming raw-fo
 
 ## 9. Standing decisions
 
-- Window size held at 100 Hz / 10 ms unless performance data warrants revisiting.
+- Sample rate is 100 Hz (10 ms). **Window length is now an open tradeoff, and data warrants
+  revisiting it [measured]:** 2 s gives transition precision; 4 s is needed for slow gait (a 0.22 Hz
+  stride yields ~0.9 swaps per 2 s window and abstains). Wider windows cost wider abstention at
+  transitions.
+- **Band-limited features must not assume a healthy-adult gait band.** `(0.5, 3.0) Hz` is wrong for
+  this population, which runs to **0.13 Hz** (cadence 16–102 steps/min) **[measured]**.
 - Random Forest is the starting model. The windowing/feature-extraction layer is the durable,
   model-agnostic boundary — **feature selection lives there, not in the clean layer.**
 - **The canonical file keeps MEASURED channels only.** The line is measurement vs computation, not
@@ -260,9 +316,109 @@ LPF parameters unknown **[reported]**. Superseded in priority by incoming raw-fo
 
 ---
 
+## 10. The swap rule (S3 physics baseline) **[measured]**
+
+**Walking is the legs alternating.** Not how far they swing — *whether they swap*.
+
+> Count how many times `L_ang − R_ang` commits past `+1°` and then past `−1°` within a 2 s window.
+> **0 swaps → STANDING. ≥2 swaps → WALKING. Exactly 1 → AMBIGUOUS.**
+
+`1` is genuinely ambiguous, not a fudge: one leg passing the other happens both when you take a step
+and when you shift your weight.
+
+| file | stand_rec | walk_rec | coverage | macro-F1 |
+|---|---|---|---|---|
+| rev2_t1 | 0.930 | 0.989 | 0.830 | 0.928 |
+| rev2_t3 | 1.000 | 0.930 | 0.729 | 0.776 |
+| **rev8_t3** (held out) | **0.966** | **1.000** | **0.981** | **0.988** |
+
+**Zero fitted parameters.** `delta = 1°` is a sensor noise floor — 5× the measured standing noise
+came out 0.76–0.88° on all three files independently. `1 swap` is not a chosen threshold: standing
+measures **0** and walking measures **2** on every file across a **4× amplitude range** (rev8 swings
+22°, rev2 swings 49°), so 1 is the only integer between them.
+
+Known weakness: slow walking (0.22 Hz stride) yields ~0.9 swaps per 2 s window and abstains. A
+**window-length** problem, not a rule problem (§9).
+
+### 10.1 Validated descriptors **[measured]**
+
+| descriptor | status |
+|---|---|
+| `ileg_minhalf` — min of `ptp(L−R)` over the window's two halves | AUC 0.967 / 0.972 on two independent trials; medians 0.2–0.5 (standing) vs 39–41 (walking). **Needs per-file calibration.** |
+| `interleg_offset` — median of `L−R` | **Posture only** (AUC 0.50 for walk/stand). Separates feet-together from split-stance: baseline −3.3°, splits at **+17°** and **−22°** — opposite legs leading. |
+
+### 10.2 Recordings begin at rest **[measured, 26/28 files]**
+
+An **external** label — it comes from how sessions are run, not from any algorithm. It gives every
+file a standing reference measured on the same person, sensor and mounting minutes earlier. **This
+is the mechanism that makes per-file calibration possible** (§7), and it is the
+calibration-as-data-harvest insight arriving from the physics side.
+
+**[open]** 26 files also open with a segment of exactly 10 rows (§3.2). Possibly the same 26 —
+worth checking.
+
+### 10.3 States richer than the human labels **[measured]**
+
+Human labels are `0` / `10` / `-1`. The physics distinguishes more: `WALKING`; `WALKING_SLOW`
+(cadence < 0.6× the file's own median); `STANDING_FEET_TOGETHER`; `STANDING_SPLIT_L` / `_R` (0 swaps,
+offset +17°/−22° from baseline — stopped mid-stride, one leg leading); `STANDING_SHIFTING`
+(**unvalidated — rests on 3 and 8 windows**).
+
+In rev2_t1 the last **61.9 s** labeled WALKING is walking at a third the cadence, and the two
+STANDING bouts are **different postures**. The labels are coarser than the signal.
+
+**[open]** Only **three labeled trials exist**. rev8 is 133 windows / **35 seconds** — the perfect
+held-out scores rest on ~35 s. Do not overclaim.
+
+---
+
+## 11. Methodology warnings **[measured — each was hit in practice]**
+
+1. **Density needs mass.** Mode-finding declared files "unimodal — one behaviour" when a 5 s stand
+   was 0.4% of the file. Hit **twice**, the second time one message after invoking it as a lesson.
+   *A stop is not a mode; it is a stretch of time.* This is also what broke §4.1 (whole-file p99 on
+   a 93.7%-walking file).
+2. **Windows must not straddle edges.** A "32× cadence-invariant" claim measured whole phases, not
+   per-window. A bout analysis deleted UNKNOWNs *then* computed runs, silently merging across gaps.
+3. **Index ≠ time.** See §7.
+4. **The eyeball is not truth.** Claude called a 6.0 s standing bout "blurred, should be 2.5 s"; the
+   labels said **6,246 ms**. Same error as §3.1 — measuring the static plateau and treating it as
+   ground truth.
+
+### 11.1 Tests that were themselves broken **[measured]**
+
+- `cluster_stability` scores a **continuum at 0.974** vs real clusters at 1.000. It measures whether
+  k-means cuts repeatably (a gradient does, deterministically), not whether there is anything to cut.
+- An anchor-independence check became **tautological** once the anchor was defined by the descriptor
+  it was tested against.
+- A 0.994 check was **near-trivial**: predicting "high motion" from other motion channels.
+- **GMM + BIC counts Gaussians, not modes.** It selects k=8 with evenly-spaced means on a 2-state
+  signal. A bimodal density with skewed modes needs >2 Gaussians and still has exactly 2 states.
+
+### 11.2 Retracted claims **[measured]**
+
+- **"Walking with no rhythm" does not exist.** Those windows are identical to normal walking on every
+  descriptor except a `periodicity` measure that fails at **cadence changes**, not arrhythmia. They
+  occur at ~69 s and ~196 s in *both* trials independently — a protocol event, probably a turn.
+  Claude invented a category to explain its own artifact and nearly asked for it to be defined.
+- **`gyro_energy` bimodality (modes 22 / 61) was two subjects**, unimodal within each (sub1 at 43,
+  sub2 at 64) — not two behaviours.
+- **`0.605` (HI/p75 ratio) was `30/49.6` from one file counted twice.** rev8's true ratio is 0.426.
+
+### 11.3 Agent proposes, test disposes **[decided]**
+
+> *"Every rule asserted was wrong; every rule the tests checked survived or died honestly."*
+
+**Agent = rule discovery, not per-window labeling.** Reading graphs found slow walking and split
+stance that no descriptor encoded. The swap rule came from asking *what walking is*, not from
+fitting. This belongs in the S3 agent's system prompt verbatim.
+
+---
+
 ## Changelog
 
 | Date | Phase | Added |
 |---|---|---|
 | 2026-07-16 | 0 | v1 seeded: channel trust, rate confound, label semantics, eval rules, NumPy gotcha |
 | 2026-07-16 | 1 | v2 from the real corpus: 5 variants / 45-col contract / position-is-a-lie; two rate eras; quantization tiers; anti-aliasing proof; segments + startup burst; -1 vs 255; rev2 as lossy family; provenance tags |
+| 2026-07-16 | 1 | v3 merging the physics/rule-discovery track. **RETRACTED §4.1** (angvel is reliable, r=0.999 — the noise claim was never verified and the "confirming" measurement was taken over a 93.7%-walking file). **NEW:** §4.1b gyro units inconsistent within a file (B=rad/s, L/R=deg/s; Y↔Z swap); §5.5 session ≠ subject, subject unknown for 88/95 (needs_human); §10 the swap rule + validated descriptors + richer states; §11 methodology warnings, broken tests, retractions. **UPGRADED:** §4.5 loco severed with evidence; §6.2 raw→rev2 mapping largely resolved; §7 select-by-time, per-file calibration, abstain-don't-force; §9 window length now an open tradeoff, gait band 0.13 Hz not 0.5–3.0 |
