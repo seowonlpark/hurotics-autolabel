@@ -166,15 +166,3 @@ Current corpus: **88 files → 134 segments → 91 usable → 477.4 minutes** at
 
 See `PLAN.md` for each phase's gate. Sacrifice order if time runs short: Phase 4 first, then
 Phase 5. Never Phases 1–3 — they are the handoff-critical spine.
-
----
-
-## Gotchas
-
-- **PowerShell 5.1** does not accept `&&` as a statement separator. Run lines individually, or use
-  PowerShell 7+ / Git Bash.
-- **NumPy 2.0** removed the `.ptp()` ndarray method. Use `np.ptp(array, axis=...)`.
-- **Windows + subagents**: very long prompts can hit the 8191-character command-line limit. Define
-  subagents as filesystem files rather than inline prompts.
-- The bundled CLI warns that `ANTHROPIC_API_KEY` takes precedence over a claude.ai login. That is
-  expected — ignore it.
