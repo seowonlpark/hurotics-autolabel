@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import date
+import json
+import subprocess
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from agents.base import run_agent
@@ -16,6 +18,16 @@ from agents.smoke import SMOKE_AGENT, SMOKE_PROMPT
 
 REPO_ROOT = Path(__file__).resolve().parent
 RUNS_DIR = REPO_ROOT / "runs"
+
+
+def git_sha() -> str:
+    """runs/ is gitignored, so each run records the commit that produced it."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True
+        ).strip()
+    except Exception:
+        return "unknown"
 
 
 def new_run_dir() -> Path:
@@ -26,6 +38,13 @@ def new_run_dir() -> Path:
         n += 1
     run_dir = RUNS_DIR / f"{today}_run{n}"
     run_dir.mkdir(parents=True)
+    (run_dir / "run_meta.json").write_text(
+        json.dumps(
+            {"started": datetime.now(timezone.utc).isoformat(), "git_sha": git_sha()},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     return run_dir
 
 

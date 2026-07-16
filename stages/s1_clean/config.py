@@ -57,6 +57,75 @@ TIME_UNIT_MS = 1.0  # Time column is a device uptime counter in milliseconds
 GAP_FACTOR = 5.0    # dt > GAP_FACTOR * median(dt) counts as a gap
 PLAUSIBLE_HZ = (1.0, 2000.0)  # outside this, suspect the unit, not the device
 
+# --- Resampling --------------------------------------------------------------
+# Golden data arrives at 100 Hz, so 100 Hz is the canonical grid: 70 files already
+# sit there, 12 are decimated down, 6 are grid-corrected. Nothing is upsampled and
+# no bandwidth is invented.
+CANONICAL_HZ = 100.0
+CANONICAL_DT_MS = 1000.0 / CANONICAL_HZ
+
+# Measured rates are grouped into families within this relative tolerance. The
+# ~100 Hz family spans 99.38-100.0 because the device clock counts in binary
+# sub-ms ticks: dt lands on 10 + 2^-k ms (1/16, 1/32, 1/256). Those are the SAME
+# 100 Hz device, quantized differently — not different acquisition rates.
+RATE_TOLERANCE = 0.05
+
+# Gaps fall anywhere, unpredictably. The segment — a continuous run between gaps —
+# is therefore the unit of analysis, not the file. Nothing is ever resampled
+# across a gap: that would invent data that was never measured.
+MIN_SEGMENT_SAMPLES = 100  # 1 s at canonical rate; shorter runs are recorded, not used
+
+# Anti-aliasing is not optional when downsampling. Dropping every 5th sample folds
+# everything above 50 Hz into the passband — heel-strike transients and rig
+# vibration would masquerade as low-frequency gait signal.
+DECIMATE_FILTER = "fir"
+
+# Interpolation policy by role. Categorical channels must never be averaged.
+NEAREST_ROLES = ("label", "legacy_algo")
+
+# --- What the canonical file keeps -------------------------------------------
+# The line is MEASURED vs COMPUTED, not useful vs useless.
+#
+# The device *measures* IMU channels and load cells. It *computes* Cadence,
+# Stride Length, Hip_ROM, GCP, Adaptability, admittance, PID state — those are
+# the firmware's opinion, not observation, and belong in the same bucket as
+# `loco`. There is nothing to trust-check in a number the firmware derived.
+#
+# Two consequences beyond storage:
+#   1. Every column that churns position between variants (Step 46/47, Cadence
+#      45/46, the whole 83/79/91 tail) is a COMPUTED one. Dropping them collapses
+#      5 schema variants into 1.
+#   2. Computed values depend on firmware version, so training on them partly
+#      learns which firmware produced the file. That is the era confound baked
+#      straight into the feature set.
+KEEP_MEASURED = (
+    "Time",
+    *[f"{s}_{k}_{a}" for s in ("L", "R", "B") for k in ("Deg", "Gyro", "Acc") for a in "XYZ"],
+    "L LC",
+    "R LC",
+)
+
+# Documented exceptions to the measured-only rule. Each needs a reason.
+KEEP_EXCEPTIONS = {
+    # Computed, but the open-source gait dataset's Hip_Flex_L/R is its direct
+    # analogue, and that dataset is the primary real training asset. Dropping this
+    # severs the bridge. Deriving hip angle from thigh IMUs instead would require
+    # knowing the firmware's convention, which is unresolved.
+    "Hip_Deg_L": "bridge to open-source gait dataset (Hip_Flex_L)",
+    "Hip_Deg_R": "bridge to open-source gait dataset (Hip_Flex_R)",
+}
+
+# Kept when present: human ground truth travels with the data.
+KEEP_IF_PRESENT = ("Label",)
+
+# `loco` (outdated algorithm output) and `L/R_Ref_Force` (controller setpoints,
+# commanded not measured) are deliberately excluded. Both remain recoverable from
+# data/raw by name if a benchmark against the old algorithm is ever wanted.
+
+# Parquet, not CSV. Storage cost is a file-format problem, not a column-count
+# problem: ~5-10x smaller, ~10x faster to read, dtypes preserved.
+CLEAN_FORMAT = "parquet"
+
 # --- Session ---------------------------------------------------------------
 # data/raw/<YYYYMMDD[_n]>/<file>.csv — session date comes from the folder.
 SESSION_DIR_PATTERN = r"^(\d{8})(?:_(\d+))?$"
