@@ -5,3 +5,6 @@ data/raw/
 data/labeled
 data/clean/
 data/quarantine/
+
+runs/
+!runs/.gitkeep
