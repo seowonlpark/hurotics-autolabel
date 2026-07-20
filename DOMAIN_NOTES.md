@@ -328,6 +328,15 @@ they were once called.
 **Do not make rev2 the storage format.** Canonical storage is the name-resolved raw superset. A
 wide honest table can always be projected down; a narrow one can never be recovered.
 
+**The labeled rev\* set is MIXED-RATE across trials [measured, 2026-07-20].** Not one family rate:
+by median-dt, `rev13` is 100 Hz, `rev14` ~99.4 Hz, `rev2` `trial_1/2` are 500 Hz while `trial_3/4`
+are 200 Hz. (No contradiction with §7's "rev2 samples at 494 Hz" — that is the *span/n* estimate on
+one file; median-dt reads 500. The two legitimately disagree, which is exactly why `manifest.py`
+reports both.) Consequence: **never assume a rate for this family** — detect per trial and normalize.
+`stages/s2_ml/dataset.py` puts every trial on the 100 Hz grid via S1's `resample_file`, so windowing
+downstream sees one rate. Dropped in the process: only the §3.2 startup-burst fragments (~0.011% of
+rows), and they are counted, not silently discarded.
+
 ### 6.2 The raw→rev2 mapping is largely resolved **[measured]**
 `*_ang_LPF ≈ LPF(*_Deg_Y)`, and `*_angvel_LPF = d(*_ang_LPF)/dt` (r=0.999, §4.1). Supported by:
 `Deg_Y` is the sagittal channel, already anti-phase L vs R in 84% of files (§4.1b); and `R_ang_LPF`
