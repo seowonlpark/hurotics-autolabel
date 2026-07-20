@@ -1,6 +1,6 @@
 # H-CARE Agent Pipeline — Structure & Progression Plan
 
-**Owner:** Lu · **Status:** Phase 0 complete (gate passed) · Phase 1 in progress · **Last updated:** 2026-07-20
+**Owner:** Lu · **Status:** Phases 0–1 complete · Phase 2 (S1 exception agent) built, pending human sign-off · **Last updated:** 2026-07-20
 
 Goal: a staged, agent-assisted pipeline for IMU locomotion data — cleaning, ML experimentation, physics-based analysis, and reporting — where deterministic code does the work, Claude agents handle judgment at defined points, and every decision is logged and reconstructible. Built on the Claude Agent SDK (Python).
 
@@ -105,10 +105,12 @@ The gate is what `orchestrator.py` checks before the next stage may run.
 
 ### Phase 2 — S1 exception agent (1–2 days)
 *First real agent. Proving ground for prompt / tool-restriction / escalation patterns.*
-- ☐ Agent processes the real quarantine queue
-- ☐ Every decision has written rationale; `needs_human` fires on low confidence
-- ☐ Human review: agree with (or at least understand) every logged decision
-- ☐ DOMAIN_NOTES updated
+- ☑ Agent processes the real exception queue (`agents/s1_exception.py`; `orchestrator.py --phase 2`)
+- ☑ Every decision has written rationale grounded in a DOMAIN_NOTES section; `needs_human` fires
+      (the degenerate-time-base quarantines → re-export) while pipeline-handled anomalies/drift →
+      `known_expected`. Read-only agent; deterministic wrapper writes `exceptions_review.jsonl`
+- ☐ Human review: Lu agrees with (or understands) every logged decision
+- ☑ DOMAIN_NOTES updated
 
 ### Phase 3 — S2 loop (2–3 days)
 - ☐ Train + locoeval wrapped as single command; initial champion established and git-tagged
