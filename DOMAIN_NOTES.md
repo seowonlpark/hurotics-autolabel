@@ -291,6 +291,29 @@ file counts, if needed, come from parsing field 2 across `data/raw/`.)
 h-medi contains essentially only STANDING and WALKING. Rare-class separability (stairs, varied
 terrain) is **untestable** on current data. Any claim about rare-class performance is overclaiming.
 
+### 5.7 The labeled family IS the training asset; features are rotational for a reason **[decided + reported, 2026-07-20]**
+The supervised task is **stand (`0`) vs walk (`10`)**, `-1` excluded from targets (§5.2). The **only**
+labeled data is the `data/labeled/rev*/csv/annotated_loco_rev*_trial_*.csv` set — the derived rev2
+family (§6.1), whose four features are `L/R_ang_LPF` (low-pass sagittal angle) and `L/R_angvel_LPF`
+(low-pass angular velocity). The S1 clean corpus (raw IMU superset) carries **no labels**; the two
+never share a file. The open-source gait dataset config.py calls the "primary asset" is **not in the
+repo** — until it is, rev* is the training asset.
+
+**Why only those four (rotational) features — not the fuller raw set (Lu):** some trials are walked on
+a **treadmill**. Any channel encoding *linear translation* (net displacement / stride velocity /
+stride length / total gait length) reads ~0 on a treadmill even while the person is plainly walking,
+so it actively misleads a classifier. **Joint angle + angular velocity are rotational** — the limb
+swings the same whether or not the ground moves underneath — so they are treadmill-robust. (Those
+linear channels are exactly the *computed* columns S1 already prunes; the kept raw `Acc` still holds
+oscillatory gait content, but whether to *use* it is a feature-layer call per §9, not a clean-layer
+one. See §4.3: trunk placement itself was treadmill-suspect.)
+
+**The raw↔rev\* bridge (why this still classifies "loco state from a CSV"):** the four rev* features
+are **derivable from any raw device CSV** — `L_ang_LPF ≈ lowpass(L_Deg_Y)`, `L_angvel_LPF ≈
+lowpass(L_Gyro[sagittal])`, both kept by S1. So the model trains on rev* labels and **runs on a fresh
+raw CSV** by recomputing the same four features. Feature extraction is the bridge; the deliverable is
+CSV → four rotational features → per-window loco state.
+
 ---
 
 ## 6. Products / families
@@ -327,6 +350,16 @@ the need for a bridge, so this is no longer blocking.
   file, so this defends subject leakage directly. Session-day grouping is subsumed — one subject per
   day. Caveat: the subject pool is small and `69` dominates (see the census for the live count), so
   cross-subject claims are bounded by how few distinct subjects exist, not by unknown identity.
+- **The labeled family (rev\*) groups by `rev`, not by field 2** — those filenames have no subject
+  field. A `rev` is **one subject on one day** (identity + date unknown; trials within a rev share
+  both, Lu, 2026-07-20). So the group unit there is the rev, and a held-out rev is a genuine
+  "new subject/session" — the honest deployment bar for "classify loco state from an unseen CSV."
+- **Lockbox holdout [decided].** Split the labeled set **before any training**, grouped by rev so no
+  trial leaks: *train* (fit) / *validation* (the champion–challenger loop gates promotions here) /
+  *lockbox* (1–2 whole revs, sealed, opened **exactly once** at the very end for the honest number).
+  The loop must never see the lockbox, or the final macro-F1 is a number it optimized toward, not a
+  generalization estimate. Candidate lockbox spans both regimes — a balanced rev (`rev8` ~70/27) plus
+  a walk-heavy one (`rev13`).
 - **Always select by time, never by index.** rev2 samples at **494 Hz, not 500** — jitter
   accumulates to **4.2 s of drift by t=320 s**, so `int(t*fs)` points 4.2 seconds past the event.
   **AUDITED (2026-07-20) [measured]:** `stages/s1_clean/resample.py` is time-safe — every grid is
