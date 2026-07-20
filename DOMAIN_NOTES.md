@@ -367,9 +367,6 @@ offset +17°/−22° from baseline — stopped mid-stride, one leg leading); `ST
 In rev2_t1 the last **61.9 s** labeled WALKING is walking at a third the cadence, and the two
 STANDING bouts are **different postures**. The labels are coarser than the signal.
 
-**[open]** Only **three labeled trials exist**. rev8 is 133 windows / **35 seconds** — the perfect
-held-out scores rest on ~35 s. Do not overclaim.
-
 ---
 
 ## 11. Methodology warnings **[measured — each was hit in practice]**
