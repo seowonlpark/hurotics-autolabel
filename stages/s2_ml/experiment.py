@@ -212,18 +212,54 @@ def load_champion(out_dir: Path) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
+# Secondary criterion, applied ONLY when macro-F1 is a statistical tie (Lu, 2026-07-20).
+# Accuracy is the objective; error *type* is the tiebreaker. Of the buckets,
+# `steady_confusion` is the one to avoid: it is a sustained wrong call over a whole bout,
+# which on a powered device becomes a sustained wrong ACTION (stairs read as sitting).
+# `swallowed`/`omission` are fail-passive — no assistance — which is unhelpful rather
+# than hazardous. Wrong action beats no action as a hazard.
+STEADY_CONFUSION_MARGIN = 0.02
+
+
+def _steady(result_or_champion) -> float | None:
+    tax = (result_or_champion.taxonomy if isinstance(result_or_champion, ExperimentResult)
+           else result_or_champion.get("taxonomy"))
+    if not tax:
+        return None
+    return tax["fractions"]["steady_confusion"]
+
+
 def decide(challenger: ExperimentResult, champion: dict | None) -> tuple[bool, str]:
     """The promotion rule. Objective, margin-based, and the ONLY path to champion.
+
+    Primary: macro-F1 must clear PROMOTION_MARGIN. Secondary, only on a tie: a
+    materially lower `steady_confusion` share wins, because at equal accuracy the model
+    that fails passively is the better one to ship.
 
     Returns (promote, reason). The reason is recorded either way — a rejection with its
     number is what stops the same proposal coming back.
     """
     if champion is None:
         return True, "no incumbent champion; establishing baseline"
+
     delta = challenger.macro_f1 - champion["macro_f1"]
     if delta >= PROMOTION_MARGIN:
         return True, (f"macro-F1 {challenger.macro_f1:.4f} beats champion "
                       f"{champion['macro_f1']:.4f} by {delta:+.4f} >= {PROMOTION_MARGIN}")
+
+    # Statistical tie on the headline metric -> fall through to the error-type preference.
+    if abs(delta) < PROMOTION_MARGIN:
+        new, old = _steady(challenger), _steady(champion)
+        if new is not None and old is not None:
+            drop = old - new
+            if drop >= STEADY_CONFUSION_MARGIN:
+                return True, (
+                    f"macro-F1 {challenger.macro_f1:.4f} ties champion "
+                    f"{champion['macro_f1']:.4f} ({delta:+.4f}), but steady_confusion "
+                    f"falls {old:.3f} -> {new:.3f} ({drop:.3f} >= "
+                    f"{STEADY_CONFUSION_MARGIN}); at equal accuracy, prefer the model "
+                    f"that fails passively")
+
     return False, (f"macro-F1 {challenger.macro_f1:.4f} vs champion "
                    f"{champion['macro_f1']:.4f} ({delta:+.4f}); "
                    f"below the {PROMOTION_MARGIN} promotion margin")
@@ -247,11 +283,13 @@ def record(out_dir: Path, result: ExperimentResult, promoted: bool, reason: str,
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     if promoted:
+        # `taxonomy` is carried so decide() can apply the error-type tiebreaker against
+        # the incumbent; without it the secondary criterion silently never fires.
+        keys = ("ts", "git_sha", "spec", "macro_f1", "accuracy", "balanced_accuracy",
+                "per_rev_macro_f1", "n_features", "taxonomy")
         (out_dir / CHAMPION_FILENAME).write_text(
-            json.dumps({k: entry[k] for k in
-                        ("ts", "git_sha", "spec", "macro_f1", "accuracy",
-                         "balanced_accuracy", "per_rev_macro_f1", "n_features")},
-                       indent=2), encoding="utf-8")
+            json.dumps({k: entry[k] for k in keys if k in entry}, indent=2),
+            encoding="utf-8")
     return entry
 
 
