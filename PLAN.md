@@ -23,7 +23,7 @@ h-care-agents/
 ├── orchestrator.py        # runs stages in sequence; no intelligence lives here
 ├── agents/                # one file per agent: system prompt + allowed tools + max_turns
 ├── stages/
-│   ├── s1_clean/          # deterministic validator + derivation policy + exception agent
+│   ├── s1_clean/          # deterministic clean: census, resample, channel trust, quarantine
 │   ├── s2_ml/             # train + locoeval wrapper, champion/challenger loop
 │   ├── s3_physics/        # anchor features (gk lineage), plots, hypothesis agent
 │   └── s4_report/         # read-only reporter + label audit
@@ -31,7 +31,7 @@ h-care-agents/
 │   ├── raw/               # untouched inputs
 │   └── clean/             # S1 output, trusted channels only
 └── runs/YYYY-MM-DD_runN/  # per-run artifacts, append-only, never overwritten
-    ├── run_log.jsonl      # every tool call (via PreToolUse hook)
+    ├── run_log.jsonl      # every tool call (via PostToolUse hook)
     ├── costs.json         # per-stage USD from SDK result messages
     ├── s1_clean/ … s4_report/
 ```

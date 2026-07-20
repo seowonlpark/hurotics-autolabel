@@ -1,7 +1,7 @@
 """Stage orchestrator. Deliberately dumb: sequence, gate, log. No intelligence here.
 
 Usage:
-    python orchestrator.py --phase 0
+    python orchestrator.py --phase 2
 """
 
 from __future__ import annotations

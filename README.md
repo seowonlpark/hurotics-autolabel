@@ -94,8 +94,13 @@ Produces `data/clean/**.parquet` (gyro normalized to deg/s) with a per-file
 ### Agents
 
 ```powershell
-python orchestrator.py --phase 0
+python orchestrator.py --phase 2      # S1 exception triage over the latest clean run
 ```
+
+The S1 exception agent (`agents/s1_exception.py`) reads the clean stage's exception queue
+(`quarantine.jsonl` + `observations.jsonl`), judges each item — `known_expected` / `novel` /
+`needs_human`, grounded in `DOMAIN_NOTES` — and the deterministic wrapper writes
+`exceptions_review.jsonl`. It is read-only: the agent judges, code does the work.
 
 Every run gets `runs/YYYY-MM-DD_runN/` containing `run_meta.json` (commit SHA — `runs/` is
 gitignored, so each run records the commit that produced it), `run_log.jsonl` (every tool call, via
@@ -121,7 +126,7 @@ for the measured proof. The odd rates (99.3789 / 99.688 / 99.961 Hz) are *timest
 
 **Keeps measured channels only.** The device *measures* IMU channels and load cells; it *computes*
 Cadence, Stride Length, GCP, admittance, PID state. Computed columns are the firmware's opinion, not
-observation. Dropping them collapses 5 schema variants into 1 and removes firmware-version signal
+observation. Dropping them collapses the schema variants into 1 and removes firmware-version signal
 from the feature set. Documented exceptions live in `KEEP_EXCEPTIONS` in `stages/s1_clean/config.py`,
 each with its reason.
 
@@ -160,8 +165,8 @@ change the champion outside the S2 promotion path.
 | phase | state |
 |---|---|
 | 0 — skeleton | done |
-| 1 — S1 deterministic core | deterministic core complete — schema/rate/gaps, gyro unit+axis trust, yaw-drift trust, quarantine ledger; gate passes (every raw file accounted). Exception agent (Phase 2) not yet built |
-| 2 — S1 exception agent | not started |
+| 1 — S1 deterministic core | complete — schema/rate/gaps, gyro unit+axis trust, yaw-drift trust, degenerate-time-base rejection, quarantine ledger; gate passes (every raw file accounted) |
+| 2 — S1 exception agent | complete — `agents/s1_exception.py` triages the exception queue into known_expected / novel / needs_human with grounded rationale; verified on the real corpus |
 | 3 — S2 loop | not started |
 | 4 — S3 physics | not started |
 | 5 — S4 report | not started |
