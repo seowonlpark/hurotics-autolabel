@@ -588,8 +588,30 @@ training set is physically consistent, even though the *named* source axis diffe
 ## 8. Environment gotchas
 
 - **NumPy 2.0:** the `.ptp()` ndarray method was removed. Use `np.ptp(array, axis=...)`.
-- Windows: subagents with very long prompts can hit the 8191-char command-line limit. Define
-  subagents as filesystem files rather than inline prompts.
+- **Windows command-line limit — this PREDICTION CAME TRUE [measured, 2026-07-20].** Every agent
+  began failing with `CLINotFoundError: Claude Code not found at: …\_bundled\claude.exe` — pointing
+  at a binary that was present, 253 MB, and ran fine standalone. The message is a guess: the SDK
+  catches any `FileNotFoundError` during spawn and blames the CLI. The real cause was **WinError 206
+  `ERROR_FILENAME_EXCED_RANGE`** — on `CreateProcess` that means *the command line is too long*, not
+  the path.
+  Cause: `run_agent` injects all of DOMAIN_NOTES into the system prompt, and the SDK spent it on
+  argv (`--system-prompt <text>`). This file grew **30,029 → 54,551 chars in one day (+82%)**,
+  putting the system prompt at **56,765** against a ~32,767 `CreateProcess` cap. It worked in the
+  morning and not by evening; nothing in our code changed, only the size of this file.
+  **Fix:** `run_agent` writes the prompt to `runs/<run>/system_prompt.txt` and passes
+  `system_prompt={"type": "file", "path": …}`, which the SDK forwards as `--system-prompt-file`.
+  A path is O(1) on the command line, so institutional memory can now grow without a ceiling —
+  and the file doubles as an audit record of exactly what each agent was told.
+  **Diagnostic lesson:** an SDK error naming a missing file may be masking any spawn failure.
+  Unwrap `__cause__` before believing it — the stated path here was correct and healthy.
+- **Injecting all of DOMAIN_NOTES into every agent has a soft cost too [measured, 2026-07-20].**
+  On the same run, the cheap (haiku-class) exception agent returned 22 verdicts for 23 queue items
+  and stopped populating the `section` field (still citing sections in prose), while cost doubled
+  $0.052 → $0.111. Nothing else changed but prompt size. The deterministic wrapper caught the
+  missing verdict and marked it `needs_human` — no silent drop — but the trend is clear: the
+  whole-file injection does not scale indefinitely. When it bites again, inject the relevant
+  sections per agent rather than the entire file.
+- PowerShell 5.1 does not accept `&&` as a statement separator.
 - PowerShell 5.1 does not accept `&&` as a statement separator.
 
 ---

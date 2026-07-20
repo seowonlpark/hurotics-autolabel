@@ -25,6 +25,9 @@ DEFAULT_MAX_TURNS = 25
 
 TOOL_LOG_FILENAME = "run_log.jsonl"
 COST_FILENAME = "costs.json"
+# Written per run: the exact system prompt the agent saw, and the file the CLI reads it
+# from. Doubles as an audit record — the injected DOMAIN_NOTES is reconstructible later.
+SYSTEM_PROMPT_FILENAME = "system_prompt.txt"
 
 
 @dataclass
@@ -117,8 +120,20 @@ async def run_agent(spec: AgentSpec, prompt: str, run_dir: Path) -> AgentResult:
     run_dir.mkdir(parents=True, exist_ok=True)
     log_path = run_dir / TOOL_LOG_FILENAME
 
+    # The system prompt goes to the CLI as a FILE, never as an argv string.
+    #
+    # It carries all of DOMAIN_NOTES, which only ever grows. Passed inline, the SDK
+    # spends it on the command line, and Windows CreateProcess caps that at ~32 KB:
+    # once the notes crossed it, every agent died with WinError 206 ("filename or
+    # extension is too long") surfaced as a misleading CLINotFoundError pointing at a
+    # binary that was present and healthy. DOMAIN_NOTES §8 predicted this exact limit.
+    # A file path is O(1) on the command line, so institutional memory can grow without
+    # a ceiling — which is the whole point of the file.
+    prompt_path = run_dir / SYSTEM_PROMPT_FILENAME
+    prompt_path.write_text(_build_system_prompt(spec), encoding="utf-8")
+
     options = ClaudeAgentOptions(
-        system_prompt=_build_system_prompt(spec),
+        system_prompt={"type": "file", "path": str(prompt_path)},
         allowed_tools=spec.allowed_tools,
         model=spec.model,
         max_turns=spec.max_turns,
