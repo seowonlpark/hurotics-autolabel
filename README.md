@@ -57,9 +57,11 @@ You must activate the venv in every new terminal. Forgetting is the single most 
 data/
 ├── raw/<YYYYMMDD[_n]>/*.csv   88 unlabeled device logs. Session date comes from the FOLDER.
 ├── labeled/                   golden data. Never mixed into raw/.
-├── clean/<session>/*.parquet  S1 output: canonical 100 Hz, 30 measured + 2 documented-exception columns, gyro normalized to deg/s
-└── quarantine/                files that failed validation. Never deleted.
+└── clean/<session>/*.parquet  S1 output: canonical 100 Hz, 30 measured + 2 documented-exception columns, gyro normalized to deg/s
 ```
+
+Whole-file rejects are recorded in each run's `quarantine.jsonl` ledger; the raw file
+is never copied or moved.
 
 `data/`, `runs/` and `.env` are gitignored. Nothing from HUROTICS leaves the machine via git.
 
@@ -138,8 +140,8 @@ Non-negotiables:
 
 1. **Code does the work; agents judge the work.** Agents never touch data values and never crunch
    numbers themselves.
-2. **No silent mutation.** Failures go to quarantine, decisions get written rationale, low
-   confidence escalates to `needs_human`.
+2. **No silent mutation.** Failures are logged to the quarantine ledger, decisions get written
+   rationale, low confidence escalates to `needs_human`.
 3. **"Best" is defined by locoeval, not by an agent's opinion.** Champion changes only via a
    logged, metric-justified promotion.
 4. **Every phase closes with a `DOMAIN_NOTES.md` update.** Discoveries become permanent, not

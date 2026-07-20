@@ -8,7 +8,7 @@ Design principles (non-negotiable):
 
 1. **Code does the work; agents judge the work.** Agents never touch data values directly and never crunch numbers themselves.
 2. **Filesystem is the interface.** Stages communicate only through artifacts on disk. No agent-to-agent messaging.
-3. **No silent mutation.** Failed data goes to quarantine; agent decisions are logged with rationale; low confidence escalates to `needs_human`.
+3. **No silent mutation.** Failed files are recorded in the quarantine ledger (raw stays put); agent decisions are logged with rationale; low confidence escalates to `needs_human`.
 4. **"Best" is defined by locoeval, not by an agent's opinion.** Champion promotion is metric-gated.
 5. **Every phase ends with a DOMAIN_NOTES.md update.** Discoveries become permanent, not conversational.
 
@@ -29,8 +29,7 @@ h-care-agents/
 │   └── s4_report/         # read-only reporter + label audit
 ├── data/
 │   ├── raw/               # untouched inputs
-│   ├── clean/             # S1 output, trusted channels only
-│   └── quarantine/        # failed files/channels, never deleted
+│   └── clean/             # S1 output, trusted channels only
 └── runs/YYYY-MM-DD_runN/  # per-run artifacts, append-only, never overwritten
     ├── run_log.jsonl      # every tool call (via PreToolUse hook)
     ├── costs.json         # per-stage USD from SDK result messages
@@ -50,7 +49,7 @@ The gate is what `orchestrator.py` checks before the next stage may run.
 |---|---|
 | **Deterministic core** | Schema check · sub-Hz-precision sampling-rate measurement (resample to canonical rate or reject) · gap detection · gyro unit normalization + per-file channel-trust detection (`Gyro == d(Deg)/dt`; detect sagittal axis + unit, normalize to deg/s, abstain-and-fall-back on static files) · yaw-drift/session-time correlation test. *(The v1 "static-window angular-velocity noise test" and "drop provided velocity, gradient-derive from angle" policy are **retracted** — angvel is reliable, DOMAIN_NOTES §4.1.)* |
 | **Agent role** | Exception queue only. New failure modes → inspect, fix-vs-delete decision with written rationale, observation tags, `needs_human` flag when confidence is low |
-| **Outputs** | Clean CSVs · per-file `channel_trust.json` · `observations.jsonl` · quarantine folder |
+| **Outputs** | Clean parquet · per-file `channel_trust.json` · `observations.jsonl` · `quarantine.jsonl` ledger |
 | **Gate** | ☐ Every raw file accounted for as clean / quarantined / human-flagged — zero silent drops |
 
 ### S2 — ML
@@ -100,7 +99,7 @@ The gate is what `orchestrator.py` checks before the next stage may run.
 *No agent yet. Pure Python.*
 - ☐ Validator implements all S1 deterministic checks
 - ☐ Full raw corpus processed; S1 gate passes
-- ☐ Quarantine folder manually reviewed — checks catch what they should
+- ☐ Quarantine ledger manually reviewed — checks catch what they should
 - ☐ Exception rate measured (sizes Phase 2's workload)
 - ☐ DOMAIN_NOTES updated
 

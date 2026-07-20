@@ -229,23 +229,28 @@ meaning: absence means the labeler *could* tell.
 ### 5.4 Class imbalance makes accuracy meaningless **[measured]**
 93.7% walking. A "predict 10 always" model scores 93.7%. Macro-F1 is the headline metric.
 
-### 5.5 Session ≠ subject, and subject is mostly UNKNOWN **[measured]**
-`20260114` contains both `sub1` and `sub2`, **both under `id=69`**. Filename field 2 is **not a
-subject** — it tracks the date block (device / firmware / protocol). Only **7 of 95** files mark
-the wearer at all.
+### 5.5 Subject = filename field 2, and it is KNOWN for every file **[measured + confirmed with Lu, 2026-07-20]**
+**Corrected — this reverses the earlier entry.** An earlier version claimed filename field 2 "tracks
+the date block (device / firmware / protocol), not a subject," and concluded subject was
+unrecoverable (a `needs_human`). **Both are wrong.**
 
-So grouping by session is **not sufficient** for cross-validation: subject leakage is the confound
-that inflates scores, and subject is unrecoverable for 88 of 95 files.
+Field 2 is the **subject tag** (Lu, corroborated by the data): its value is constant within every
+session-day folder, and the value `69` recurs across **14 date folders spanning 2025-12-26 to
+2026-05-22** — five months. A date/firmware/protocol block cannot span five months of dates; a
+person tested repeatedly can.
 
-This is a genuine **`needs_human`** finding — exactly the "AI cannot proceed without human input"
-case the PL asked to surface. Someone may be able to reconstruct wearer identity from session
-records; until then, no honest claim about cross-subject generalization is possible.
+The corpus holds **5 subjects**: `30` and `86` (one session each), `63` and `100` (two each), and
+`69` — heavily tested, **56 of 88 files across 14 sessions**. The `sub1` / `sub2` markers on
+`20260114` (all field 2 = `69`) are **trial batches of subject 69, not two people** (Lu). They were
+misread as wearer ids; they are trial indices.
 
-**[reconcile]** The `95` in this section (and the `7 of 95` above) is a **stale/undefined count** —
-the current raw corpus is **88 files** (§0), and no 95-file set is defined anywhere. Treat the
-*ratio* (almost all files subject-unmarked), not the absolute counts, as the finding until the
-95-file universe is reconciled against the present corpus. Do not silently rewrite 95→88: the
-earlier snapshot may have included files since removed.
+**Consequences:**
+- Cross-validation groups by **field 2 (subject)**. This defends subject leakage fully; session-day
+  grouping is subsumed (one subject per day).
+- Subject identity is **not** a `needs_human`. **RESOLVED.**
+- Real remaining limitation (not a blocker): only **5 subjects**, and `69` is 64% of the files.
+  Cross-subject generalization is bounded by **n = 5 subjects** — three tested only once or twice —
+  not by unknown identity. State that limit honestly; do not overclaim breadth.
 
 ### 5.6 Current corpus class coverage **[reported]**
 h-medi contains essentially only STANDING and WALKING. Rare-class separability (stairs, varied
@@ -283,9 +288,10 @@ the need for a bridge, so this is no longer blocking.
 - The measure layer is **blind**: objective numbers only, no opinion. All judgment lives in diagnose.
 - Ground truth already locates transitions exactly. Do not implement cross-correlation lag search.
 - UNKNOWN is excluded consistently across per-trial and corpus-level metrics.
-- Group by **session** for cross-validation — but see §5.5: session ≠ subject, and subject is
-  unknown for 88 of 95 files. Session grouping defends against era leakage; it does **not** defend
-  against subject leakage. Do not claim cross-subject generalization from it.
+- Group by **subject (filename field 2)** for cross-validation (§5.5): subject is known for every
+  file, so this defends subject leakage directly. Session-day grouping is subsumed — one subject per
+  day. Caveat: only **5 subjects**, `69` dominates (64%), so cross-subject claims are bounded by
+  n = 5, not by unknown identity.
 - **Always select by time, never by index.** rev2 samples at **494 Hz, not 500** — jitter
   accumulates to **4.2 s of drift by t=320 s**, so `int(t*fs)` points 4.2 seconds past the event.
   **AUDITED (2026-07-20) [measured]:** `stages/s1_clean/resample.py` is time-safe — every grid is
@@ -447,4 +453,5 @@ fitting. This belongs in the S3 agent's system prompt verbatim.
 |---|---|---|
 | 2026-07-16 | 0 | v1 seeded: channel trust, rate confound, label semantics, eval rules, NumPy gotcha |
 | 2026-07-16 | 1 | v2 from the real corpus: 5 variants / 45-col contract / position-is-a-lie; two rate eras; quantization tiers; anti-aliasing proof; segments + startup burst; -1 vs 255; rev2 as lossy family; provenance tags |
+| 2026-07-20 | 1 | S1 hardening. **MEASURED:** §4.1b confirmed on all 88 files (gyro units normalized to deg/s in the clean layer, per-file `channel_trust.json`, detect-don't-assert with static-file abstention); §4.2 yaw is `Deg_Z`, drift is file-specific (13 chans / 11 files), flagged not dropped; §7 `resample.py` proven time-safe by drift test. **REVERSED §5.5:** filename field 2 IS the subject (`69` recurs across 5 months) — subject known for every file, `needs_human` RESOLVED (Lu confirmed `sub1/sub2` are trial batches). **DESIGN:** quarantine is a `quarantine.jsonl` ledger, raw file never moved. Docs reconciled (angvel "untrusted"→reliable §6.1; 30-vs-32 cols; PLAN/README status). |
 | 2026-07-16 | 1 | v3 merging the physics/rule-discovery track. **RETRACTED §4.1** (angvel is reliable, r=0.999 — the noise claim was never verified and the "confirming" measurement was taken over a 93.7%-walking file). **NEW:** §4.1b gyro units inconsistent within a file (B=rad/s, L/R=deg/s; Y↔Z swap); §5.5 session ≠ subject, subject unknown for 88/95 (needs_human); §10 the swap rule + validated descriptors + richer states; §11 methodology warnings, broken tests, retractions. **UPGRADED:** §4.5 loco severed with evidence; §6.2 raw→rev2 mapping largely resolved; §7 select-by-time, per-file calibration, abstain-don't-force; §9 window length now an open tradeoff, gait band 0.13 Hz not 0.5–3.0 |

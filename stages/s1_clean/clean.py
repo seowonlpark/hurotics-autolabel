@@ -8,7 +8,7 @@ Outputs, per source file:
 And for the run:
     segments.jsonl     every segment: rows, duration, source rate, method, usable
     observations.jsonl per-file channel-trust facts (the exception agent's input)
-    quarantine.jsonl   whole-file rejects (also copied to data/quarantine/)
+    quarantine.jsonl   ledger of whole-file rejects (the raw file stays put)
     clean_report.md    what happened to the corpus
 """
 
@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,21 +36,18 @@ from stages.s1_clean.resample import resample_file
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLEAN_DIR = REPO_ROOT / "data" / "clean"
-QUARANTINE_DIR = REPO_ROOT / "data" / "quarantine"
 
 
-def quarantine_file(path: Path, reason: str, evidence: dict) -> dict:
-    """Copy a whole-file reject into data/quarantine/<category>/ with a rationale.
+def quarantine_record(path: Path, reason: str, evidence: dict) -> dict:
+    """Build a ledger entry for a whole-file reject. The raw file is never touched.
 
-    Raw is source-of-truth, so the file is COPIED, never moved. The category slug is
-    the reason's leading phrase, so like failures fold into one folder. needs_human
-    is always set: a whole-file reject is exactly the "AI can't proceed" case.
+    Raw is source-of-truth and stays where it is; the quarantine is a ledger
+    (quarantine.jsonl), not a copy of the data. The category slug is the reason's
+    leading phrase, so like failures fold together. needs_human is always set: a
+    whole-file reject is exactly the "AI can't proceed" case.
     """
     category = re.sub(r"[^a-z0-9]+", "_", reason.split(":")[0].lower()).strip("_")[:40]
-    dest_dir = QUARANTINE_DIR / category
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(path, dest_dir / path.name)
-    rationale = {
+    return {
         "file": str(path.relative_to(REPO_ROOT)),
         "reason": reason,
         "category": category,
@@ -59,10 +55,6 @@ def quarantine_file(path: Path, reason: str, evidence: dict) -> dict:
         "evidence": evidence,
         "quarantined_at": datetime.now(timezone.utc).isoformat(),
     }
-    (dest_dir / f"{path.name}.rationale.json").write_text(
-        json.dumps(rationale, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return rationale
 
 
 def select_columns(present: list[str]) -> tuple[list[str], list[str]]:
@@ -131,7 +123,7 @@ def main() -> None:
         if err:
             failed.append((rel, err))
             evidence = {"segments": [r for r in rows]} if rows else {}
-            quarantined.append(quarantine_file(p, err, evidence))
+            quarantined.append(quarantine_record(p, err, evidence))
         else:
             written += 1
             kind = ("channel_trust_anomaly" if trust["anomalies"]
@@ -217,7 +209,7 @@ def main() -> None:
         "",
     ]
     lines += [f"- `{r['path']}` seg {r['index']}: {r['reason']}" for r in dropped] or ["none"]
-    lines += ["", "## Quarantined files (whole-file rejects -> data/quarantine/)", ""]
+    lines += ["", "## Quarantined files (whole-file rejects -> quarantine.jsonl ledger)", ""]
     lines += [f"- `{q['file']}`: {q['reason']} (needs_human)" for q in quarantined] or ["none"]
     (out_dir / "clean_report.md").write_text("\n".join(lines), encoding="utf-8")
 
