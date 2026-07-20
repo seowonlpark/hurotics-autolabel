@@ -15,11 +15,17 @@ Rules for this file:
 
 ---
 
-## 0. The corpus (as of 2026-07-16)
+## 0. The corpus
 
-**[measured]** `data/raw/` holds **88 CSV files** across **20 session folders**, 2025-10-21 to
-2026-06-01. All 88 are one family (`raw_device`). Session date comes from the folder name and is
-the only metadata that is trusted; it is also the correct group key for cross-validation.
+**[measured]** `data/raw/` holds one family (`raw_device`) of device logs across many dated session
+folders (2025-10 onward). **This file records findings, not tallies** — live counts (files, folders,
+clean vs quarantined, usable minutes, rate mix) regenerate every run in `runs/*/clean_report.md` and
+`census.md`; read those for current numbers. A 2026-05 export batch is quarantined for a degenerate
+time base (§2.6).
+
+Session date comes from the folder name. **Subject is filename field 2** (§5.5) — the
+cross-validation group key, *not* session. One subject (`69`) dominates the corpus; the others
+appear in only one or two sessions each.
 
 Labeled data lives in `data/labeled/`, never `data/raw/`. A `Label` column appearing under
 `data/raw/` is a contamination event, not a variant: quarantine and flag it.
@@ -28,22 +34,17 @@ Labeled data lives in `data/labeled/`, never `data/raw/`. A `Label` column appea
 
 ## 1. Schema
 
-### 1.1 Five header variants, one family **[measured]**
+### 1.1 Multiple header variants, one family **[measured]**
 
-| variant | cols | files | era |
-|---|---|---|---|
-| `fb5ea2c2` | 67 | 62 | 2025-12 → 2026-01 |
-| `0fda484e` | 67 | 11 | 2025-10 → 2025-12 |
-| `e5f2660f` | 91 | 10 | 2026-05 |
-| `4bfd6ab2` | 83 | 3 | 2025-10, 2025-12 |
-| `86069795` | 79 | 2 | 2026-06 |
-
-Variants track firmware eras. They differ in the tail; the head is near-stable.
+The corpus carries several distinct header shapes (differing column widths), all one `raw_device`
+family. They **differ only in the tail**; the head is near-stable and the variants track firmware
+eras. The current variant list — IDs, column widths, per-variant file counts, eras — regenerates
+each run in `census.md` / `variants.json`; that is the source of truth, not a table here.
 
 ### 1.2 The contract is 45 columns **[measured]**
 
-`Time` through `Total Gait Length` is identical across all five variants. Everything past index 44
-is variant-specific. The 45-column prefix is the real contract — not 67, not 83.
+`Time` through `Total Gait Length` is identical across **every** variant. Everything past index 44
+is variant-specific. The 45-column prefix is the real contract — the wider widths are not.
 
 ### 1.3 The numeric prefix is a LIE — resolve by name, never by position **[measured]**
 
@@ -51,10 +52,16 @@ The `NN_` prefix is a per-file position, not a stable identifier:
 
 - `Step` sits at index **46 or 47** depending on variant
 - `Cadence` sits at index **45 or 46**
-- `loco` sits at index 47 — and in the 11 files of `0fda484e`, **index 47 is `Step`**
+- `loco` sits at index 47 in most files — but in one header variant (`0fda484e`), **index 47 is
+  `Step`**
 
-`df.iloc[:, 47]` therefore blends a step counter into a locomotion state across 73 files and never
-raises. The column that *looks* positionally stable (`loco`) is precisely the trap.
+`df.iloc[:, 47]` therefore blends a step counter into a locomotion state, on the majority of files,
+and never raises. The column that *looks* positionally stable (`loco`) is precisely the trap.
+
+Note both are **outdated columns anyway**: `loco` is the legacy rule-based algorithm's output (the
+thing this project replaces — severed, §4.5) and `Step` is a firmware-computed counter. Neither is a
+trusted signal; both are dropped from the canonical measured set. The finding here is about the
+*positional-indexing danger*, not about the columns' value.
 
 **Policy:** strip the prefix, match on the name. Column presence is per-file; absence is recorded
 as a fact, not an error.
@@ -65,19 +72,20 @@ as a fact, not an error.
 
 ### 2.1 Two rate eras, confounded with schema AND session date **[measured]**
 
-| | through 2026-01-28 | from 2026-05-20 |
+| | earlier era (through ~2026-01) | later era (from ~2026-05) |
 |---|---|---|
 | rate | ~100 Hz | 500 Hz |
 | schema | `fb5ea2c2` / `0fda484e` / `4bfd6ab2` | `e5f2660f` / `86069795` |
-| files | 76 | 12 |
 
 Rate, schema and date change together. Resampling removes the *rate* difference; it does not
-remove the era. A model can still learn "era" as a shortcut. Group by session for cross-validation.
+remove the era. A model can still learn "era" as a shortcut. Group by **subject** (§5.5) for
+cross-validation to defend subject leakage — but note era is a *separate* confound: subject `69`
+spans both eras, so subject grouping does not neutralize era-specific firmware artifacts.
 
 ### 2.2 The "odd" rates are timestamp quantization, not different rates **[measured]**
 
-Measured across the corpus: 100.0 Hz (70 files), 500.0 Hz (12), 99.688 (3), 99.961 (2),
-99.3789 (1). The odd ones are exact:
+Measured rates cluster at 100.0 Hz and 500.0 Hz, plus a few "odd" values just below 100 Hz
+(99.3789, 99.688, 99.961). Those odd ones are exact quantization tiers, not different devices:
 
 | measured | dt (ms) | = |
 |---|---|---|
@@ -97,8 +105,9 @@ anchor, but the mechanism differs from what was assumed. Not yet confirmed again
 
 ### 2.4 Canonical grid is 100 Hz **[decided]**
 
-Incoming golden data is 100 Hz **[reported]**, so 100 Hz is canonical: 70 files already there,
-12 decimated down, 6 grid-corrected. Nothing is upsampled; no bandwidth is invented.
+Incoming golden data is 100 Hz **[reported]**, so 100 Hz is canonical: most files already sit
+there, the 500 Hz era is decimated down, and off-grid rates are grid-corrected. Nothing is
+upsampled; no bandwidth is invented. (The per-method segment counts each run are in `clean_report.md`.)
 
 ### 2.5 Never downsample without anti-aliasing **[measured]**
 
@@ -114,14 +123,27 @@ naive [::5]  : 1.5Hz=1.000  20Hz(alias)=0.500   <- fake 20 Hz at full amplitude
 The alias lands at |120−100| = 20 Hz, at full strength, indistinguishable from real signal.
 Use `scipy.signal.decimate(x, 5, ftype='fir')`.
 
+### 2.6 A 2026-05 batch has a degenerate time base — quarantined **[measured]**
+A 2026-05 export batch (subject `70` on 2026-05-15 and several subject-`100` files on 2026-05-19)
+logs a broken clock: **`Time` is non-monotonic** — a large fraction of `dt` are *negative*, time
+runs backward — and heavily **duplicated** (tens of rows per distinct timestamp), so `median(dt)`
+is **0**. No forward cadence exists, and `np.interp` would silently corrupt the resample.
+
+S1 rejects these up front (`clean_one` guards `median(dt) > 0`; `measure_hz` returns `nan` rather
+than dividing by zero) and routes them to the **`quarantine.jsonl` ledger** with reason
+`degenerate time base` and `needs_human`. The raw file is left in place, never moved (which files,
+each run, is in `quarantine.jsonl`). Likely a firmware/logging fault in that batch — worth raising
+with whoever exported it.
+
 ---
 
 ## 3. Gaps and segments
 
 ### 3.1 The segment is the unit of analysis, not the file **[measured]**
 
-88 files → **134 segments**, 91 usable, 43 dropped, **477.4 minutes usable**. Windows must never
-straddle a gap; resampling across one invents data that was never measured.
+A file is a bag of continuous runs; the **segment**, not the file, is the unit of analysis (usable
+segment count and minutes are in `clean_report.md`). Windows must never straddle a gap; resampling
+across one invents data that was never measured.
 
 ### 3.2 There is a ~10-sample startup burst **[measured]**
 
@@ -156,16 +178,16 @@ That measured walking and called it rest. The channel was never noisy; the measu
 Statistics over a whole file say nothing about a state that occupies 5% of it. See §11 item 1:
 *density needs mass.*
 
-### 4.1b Gyro units are inconsistent WITHIN a single file **[measured — confirmed on all 88 raw files]**
+### 4.1b Gyro units are inconsistent WITHIN a single file **[measured — confirmed across the clean corpus]**
 
 - **`B_Gyro_*` is rad/s. `L_Gyro_*` / `R_Gyro_*` is deg/s.** Same naming convention, same file.
   Any feature mixing trunk and thigh gyro without conversion is off by **57.3×**. The clean-layer
   trust check reproduces this from the sagittal regression slope: **0.98** on L/R (deg/s) vs
   **0.017** (≈1/57.3) on B (rad/s).
-- **Axis: `d(Deg_Y)/dt` tracks `Gyro_Z`, not `Gyro_Y`** — on 83–85 of 88 files per side, but this is
-  **not universal**. Two files (`…10_4_0_sub1`, `00038…1_15_11_28`) map `B_Deg_Y → B_Gyro_Y` at
-  r≈0.96–0.99 (one sign-flipped). So the axis is **detected per file, never asserted from a table**:
-  a blanket Y↔Z swap would corrupt exactly those.
+- **Axis: `d(Deg_Y)/dt` tracks `Gyro_Z`, not `Gyro_Y`** on the large majority of files per side, but
+  this is **not universal**. Two files (`00001_69_…10_4_0`, `00038_69_…1_15_11_28`) map
+  `B_Deg_Y → B_Gyro_Y` at r≈0.96–0.99 (one sign-flipped). So the axis is **detected per file, never
+  asserted from a table**: a blanket Y↔Z swap would corrupt exactly those.
 - `Deg_Y` needs **no sign normalization** — raw L vs R is already anti-phase in 84% of files.
 
 `Deg_Y` is the sagittal (flexion) channel. This is the channel the swap rule reads.
@@ -176,8 +198,9 @@ axis + unit are **detected per file** (regress `d(Deg_Y)/dt` against each gyro a
 argmax|r| → axis) and written to a per-file `channel_trust.json`. Static files, whose derivative
 carries no signal, **abstain** and fall back to the documented convention (r-floor 0.9), recording
 that they did (11.1, density needs mass). Axes are **recorded, not reordered** — no silent mutation.
-On the 88-file corpus: 88 B-sides normalized rad/s→deg/s, 91 side-abstentions, **2** confident axis
-anomalies (the `B_Deg_Y→B_Gyro_Y` files above).
+Every clean file's B-side is normalized rad/s→deg/s; static sides abstain; a couple of files show a
+confident `B_Deg_Y→B_Gyro_Y` axis anomaly (named above). Per-run rollups live in `clean_report.md`
+and the per-file `channel_trust.json`.
 
 ### 4.2 Yaw is drift-contaminated — but per-file, not wholesale **[measured]**
 Original **[reported]**: in treadmill data yaw correlated with session time at r ≈ −0.95, measuring
@@ -185,8 +208,9 @@ elapsed time not orientation.
 
 Measured on the raw corpus (clean-layer drift test, `|corr(Deg, Time)|` duration-weighted over
 segments ≥ 5 s): **`Deg_Z` is the yaw-like axis** on every side — median |r| ≈ 0.33 vs the sagittal
-`Deg_Y` at ≈ 0.08. But the strong drift signature is **file-specific, not universal**: only **13
-channels across 11 of 88 files** cross |r| ≥ 0.9 (all of them `*_Deg_Z`). So yaw is **flagged per
+`Deg_Y` at ≈ 0.08. But the strong drift signature is **file-specific, not universal**: only a
+minority of files cross |r| ≥ 0.9, and always on `*_Deg_Z` (the flagged channels each run are in
+`clean_report.md` / `channel_trust.json`). So yaw is **flagged per
 channel per file** in `channel_trust.json` (`drift` section), **not dropped wholesale**. It is a
 feature-time exclusion signal; the raw superset is kept. Any yaw-derived feature must consult the
 per-file drift flag.
@@ -235,22 +259,22 @@ the date block (device / firmware / protocol), not a subject," and concluded sub
 unrecoverable (a `needs_human`). **Both are wrong.**
 
 Field 2 is the **subject tag** (Lu, corroborated by the data): its value is constant within every
-session-day folder, and the value `69` recurs across **14 date folders spanning 2025-12-26 to
-2026-05-22** — five months. A date/firmware/protocol block cannot span five months of dates; a
-person tested repeatedly can.
+session-day folder, and one value (`69`) recurs across **many folders spanning many months**. A
+date/firmware/protocol block cannot span that long; a person tested repeatedly can.
 
-The corpus holds **5 subjects**: `30` and `86` (one session each), `63` and `100` (two each), and
-`69` — heavily tested, **56 of 88 files across 14 sessions**. The `sub1` / `sub2` markers on
-`20260114` (all field 2 = `69`) are **trial batches of subject 69, not two people** (Lu). They were
-misread as wearer ids; they are trial indices.
+One subject (`69`) dominates the corpus; the others appear in only one or two sessions each, and at
+least one subject has only a degenerate-time-base file (§2.6) so it contributes no usable data. The
+`sub1` / `sub2` markers once on `20260114` were **trial batches of subject 69, not two people**
+(Lu) — since removed from the filenames; they were trial indices, never wearer ids. (Per-subject
+file counts, if needed, come from parsing field 2 across `data/raw/`.)
 
 **Consequences:**
 - Cross-validation groups by **field 2 (subject)**. This defends subject leakage fully; session-day
   grouping is subsumed (one subject per day).
 - Subject identity is **not** a `needs_human`. **RESOLVED.**
-- Real remaining limitation (not a blocker): only **5 subjects**, and `69` is 64% of the files.
-  Cross-subject generalization is bounded by **n = 5 subjects** — three tested only once or twice —
-  not by unknown identity. State that limit honestly; do not overclaim breadth.
+- Real remaining limitation (not a blocker): **few distinct subjects**, one dominant, several tested
+  only once or twice. Cross-subject generalization is bounded by subject *count*, not unknown
+  identity. State that limit honestly; do not overclaim breadth.
 
 ### 5.6 Current corpus class coverage **[reported]**
 h-medi contains essentially only STANDING and WALKING. Rare-class separability (stairs, varied
@@ -453,5 +477,6 @@ fitting. This belongs in the S3 agent's system prompt verbatim.
 |---|---|---|
 | 2026-07-16 | 0 | v1 seeded: channel trust, rate confound, label semantics, eval rules, NumPy gotcha |
 | 2026-07-16 | 1 | v2 from the real corpus: 5 variants / 45-col contract / position-is-a-lie; two rate eras; quantization tiers; anti-aliasing proof; segments + startup burst; -1 vs 255; rev2 as lossy family; provenance tags |
+| 2026-07-20 | 1 | Corpus refreshed (more raw files + new subjects `70`/`92`; `sub1/sub2` markers removed). §2.6 NEW: a 2026-05 batch has a degenerate time base (non-monotonic, duplicated timestamps, median dt=0) — quarantined, the pipeline's first real quarantine; `measure_hz`/`clean_one` now guard `median(dt)>0`. **Records made count-free** (per Lu): live tallies live in the run artifacts, not this file. Gate still holds (partition asserted). |
 | 2026-07-20 | 1 | S1 hardening. **MEASURED:** §4.1b confirmed on all 88 files (gyro units normalized to deg/s in the clean layer, per-file `channel_trust.json`, detect-don't-assert with static-file abstention); §4.2 yaw is `Deg_Z`, drift is file-specific (13 chans / 11 files), flagged not dropped; §7 `resample.py` proven time-safe by drift test. **REVERSED §5.5:** filename field 2 IS the subject (`69` recurs across 5 months) — subject known for every file, `needs_human` RESOLVED (Lu confirmed `sub1/sub2` are trial batches). **DESIGN:** quarantine is a `quarantine.jsonl` ledger, raw file never moved. Docs reconciled (angvel "untrusted"→reliable §6.1; 30-vs-32 cols; PLAN/README status). |
 | 2026-07-16 | 1 | v3 merging the physics/rule-discovery track. **RETRACTED §4.1** (angvel is reliable, r=0.999 — the noise claim was never verified and the "confirming" measurement was taken over a 93.7%-walking file). **NEW:** §4.1b gyro units inconsistent within a file (B=rad/s, L/R=deg/s; Y↔Z swap); §5.5 session ≠ subject, subject unknown for 88/95 (needs_human); §10 the swap rule + validated descriptors + richer states; §11 methodology warnings, broken tests, retractions. **UPGRADED:** §4.5 loco severed with evidence; §6.2 raw→rev2 mapping largely resolved; §7 select-by-time, per-file calibration, abstain-don't-force; §9 window length now an open tradeoff, gait band 0.13 Hz not 0.5–3.0 |

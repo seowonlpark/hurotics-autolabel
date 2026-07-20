@@ -60,10 +60,15 @@ def segment_at_gaps(t: np.ndarray) -> list[tuple[int, int]]:
 
 
 def measure_hz(t: np.ndarray) -> float:
-    """Rate of one segment, from median dt. Segments are gap-free by construction."""
+    """Rate of one segment, from median dt. Segments are gap-free by construction.
+
+    Returns nan for a degenerate time base (median dt <= 0: duplicated or backward
+    timestamps) rather than dividing by zero — the caller drops such a segment.
+    """
     if t.size < 2:
         return float("nan")
-    return 1000.0 / float(np.median(np.diff(t)))
+    med = float(np.median(np.diff(t)))
+    return 1000.0 / med if med > 0 else float("nan")
 
 
 def rate_family(hz: float) -> float | None:

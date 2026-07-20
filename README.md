@@ -21,7 +21,7 @@ Built on the [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overvi
 is. Every entry carries a provenance tag: **[measured]** (reproducible by rerunning S1),
 **[reported]** (a human said so, unverified), **[decided]** (a design choice), **[open]** (known
 unknown). If you only read one thing, read §1.3 — the column prefix is a lie, and positional
-indexing silently corrupts 73 of 88 files without ever raising an error.
+indexing silently corrupts most of the corpus without ever raising an error.
 
 ---
 
@@ -55,7 +55,7 @@ You must activate the venv in every new terminal. Forgetting is the single most 
 
 ```
 data/
-├── raw/<YYYYMMDD[_n]>/*.csv   88 unlabeled device logs. Session date comes from the FOLDER.
+├── raw/<YYYYMMDD[_n]>/*.csv   unlabeled device logs. Session date comes from the FOLDER.
 ├── labeled/                   golden data. Never mixed into raw/.
 └── clean/<session>/*.parquet  S1 output: canonical 100 Hz, 30 measured + 2 documented-exception columns, gyro normalized to deg/s
 ```
@@ -87,7 +87,9 @@ label codes).
 python -m stages.s1_clean.clean --out runs\s1_clean
 ```
 
-Produces `data/clean/**.parquet`, plus `segments.jsonl` and `clean_report.md`.
+Produces `data/clean/**.parquet` (gyro normalized to deg/s) with a per-file
+`channel_trust.json` sidecar, plus per-run `segments.jsonl`, `observations.jsonl`,
+`quarantine.jsonl`, and `clean_report.md`.
 
 ### Agents
 
@@ -104,13 +106,14 @@ a PostToolUse hook) and `costs.json` (per-agent spend from the SDK's ResultMessa
 ## What S1 actually does, and why
 
 **Resolves columns by name, never by position.** The `NN_` prefix is a per-file position, not an
-identifier. `loco` sits at index 47 — but in 11 files, index 47 is `Step`. See `DOMAIN_NOTES` §1.3.
+identifier. `loco` sits at index 47 — but in one header variant, index 47 is `Step`. Both are
+outdated columns (legacy algorithm output / firmware counter) and pruned by clean. See `DOMAIN_NOTES` §1.3.
 
 **Segments at gaps.** Gaps land anywhere. A file is a bag of continuous runs, and the **segment**,
 not the file, is the unit of analysis. Nothing is ever resampled across a gap — that would invent
 data that was never measured.
 
-**Normalizes rate to 100 Hz.** The corpus has two eras: ~100 Hz (76 files) and 500 Hz (12).
+**Normalizes rate to 100 Hz.** The corpus has two eras: an earlier ~100 Hz era and a later 500 Hz era.
 Downsampling uses `scipy.signal.decimate(..., ftype='fir')`, never `[::5]` — naive decimation folds
 everything above 50 Hz into the gait band as a full-amplitude fake signal. See `DOMAIN_NOTES` §2.5
 for the measured proof. The odd rates (99.3789 / 99.688 / 99.961 Hz) are *timestamp quantization*
@@ -157,14 +160,16 @@ change the champion outside the S2 promotion path.
 | phase | state |
 |---|---|
 | 0 — skeleton | done |
-| 1 — S1 deterministic core | in progress — census + clean run on all 88 files; **channel trust checks and quarantine wiring outstanding** |
+| 1 — S1 deterministic core | deterministic core complete — schema/rate/gaps, gyro unit+axis trust, yaw-drift trust, quarantine ledger; gate passes (every raw file accounted). Exception agent (Phase 2) not yet built |
 | 2 — S1 exception agent | not started |
 | 3 — S2 loop | not started |
 | 4 — S3 physics | not started |
 | 5 — S4 report | not started |
 | 6 — hardening + handoff | not started |
 
-Current corpus: **88 files → 134 segments → 91 usable → 477.4 minutes** at canonical 100 Hz.
+Current corpus counts (files, clean vs quarantined, usable segments/minutes, subjects) live in the
+latest `runs/*/clean_report.md` and `census.md`, regenerated every run. A 2026-05 batch is
+quarantined for a broken time base (`DOMAIN_NOTES` §2.6).
 
 See `PLAN.md` for each phase's gate. Sacrifice order if time runs short: Phase 4 first, then
 Phase 5. Never Phases 1–3 — they are the handoff-critical spine.

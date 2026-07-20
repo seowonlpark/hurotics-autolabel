@@ -20,6 +20,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from stages.s1_clean.census import read_header, resolve
@@ -81,6 +82,14 @@ def clean_one(path: Path) -> tuple[Path | None, list[dict], str | None, dict | N
     if missing:
         return None, [], f"missing measured channels: {missing}", None
     df = df[kept]
+
+    # Time base must define a forward cadence. A batch of 2026-05 files logs
+    # duplicated and backward-running timestamps (median dt <= 0) — non-monotonic
+    # time that np.interp would silently corrupt. Reject the whole file rather than
+    # resample a broken clock; it lands in the quarantine ledger for a human.
+    t = df["Time"].to_numpy(float)
+    if t.size < 2 or float(np.median(np.diff(t))) <= 0.0:
+        return None, [], "degenerate time base: median dt <= 0 (duplicate/backward timestamps)", None
 
     out, segs = resample_file(df, "Time")
     rows = [{"path": str(path.relative_to(REPO_ROOT)), **s.to_dict()} for s in segs]
