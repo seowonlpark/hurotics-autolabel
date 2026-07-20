@@ -1,6 +1,6 @@
 # H-CARE Agent Pipeline — Structure & Progression Plan
 
-**Owner:** Lu · **Status:** Phase 0 not started · **Last updated:** 2026-07-16
+**Owner:** Lu · **Status:** Phase 0 complete (gate passed) · Phase 1 in progress · **Last updated:** 2026-07-20
 
 Goal: a staged, agent-assisted pipeline for IMU locomotion data — cleaning, ML experimentation, physics-based analysis, and reporting — where deterministic code does the work, Claude agents handle judgment at defined points, and every decision is logged and reconstructible. Built on the Claude Agent SDK (Python).
 
@@ -48,7 +48,7 @@ The gate is what `orchestrator.py` checks before the next stage may run.
 
 | | |
 |---|---|
-| **Deterministic core** | Schema check · sub-Hz-precision sampling-rate measurement (resample to canonical rate or reject) · gap detection · channel trust checks: static-window angular-velocity noise test, yaw-drift/session-time correlation test · derivation policy: drop provided velocity channels, gradient-derive velocity from filtered angle |
+| **Deterministic core** | Schema check · sub-Hz-precision sampling-rate measurement (resample to canonical rate or reject) · gap detection · gyro unit normalization + per-file channel-trust detection (`Gyro == d(Deg)/dt`; detect sagittal axis + unit, normalize to deg/s, abstain-and-fall-back on static files) · yaw-drift/session-time correlation test. *(The v1 "static-window angular-velocity noise test" and "drop provided velocity, gradient-derive from angle" policy are **retracted** — angvel is reliable, DOMAIN_NOTES §4.1.)* |
 | **Agent role** | Exception queue only. New failure modes → inspect, fix-vs-delete decision with written rationale, observation tags, `needs_human` flag when confidence is low |
 | **Outputs** | Clean CSVs · per-file `channel_trust.json` · `observations.jsonl` · quarantine folder |
 | **Gate** | ☐ Every raw file accounted for as clean / quarantined / human-flagged — zero silent drops |

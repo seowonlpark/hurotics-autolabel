@@ -156,18 +156,28 @@ That measured walking and called it rest. The channel was never noisy; the measu
 Statistics over a whole file say nothing about a state that occupies 5% of it. See §11 item 1:
 *density needs mass.*
 
-### 4.1b Gyro units are inconsistent WITHIN a single file **[measured, reproduced on 95 then 42 files]**
+### 4.1b Gyro units are inconsistent WITHIN a single file **[measured — confirmed on all 88 raw files]**
 
 - **`B_Gyro_*` is rad/s. `L_Gyro_*` / `R_Gyro_*` is deg/s.** Same naming convention, same file.
-  Any feature mixing trunk and thigh gyro without conversion is off by **57.3×**.
-- **Axis convention: Y↔Z swap on every segment.** `d(Deg_Y)/dt` tracks **`Gyro_Z`**, not `Gyro_Y`.
+  Any feature mixing trunk and thigh gyro without conversion is off by **57.3×**. The clean-layer
+  trust check reproduces this from the sagittal regression slope: **0.98** on L/R (deg/s) vs
+  **0.017** (≈1/57.3) on B (rad/s).
+- **Axis: `d(Deg_Y)/dt` tracks `Gyro_Z`, not `Gyro_Y`** — on 83–85 of 88 files per side, but this is
+  **not universal**. Two files (`…10_4_0_sub1`, `00038…1_15_11_28`) map `B_Deg_Y → B_Gyro_Y` at
+  r≈0.96–0.99 (one sign-flipped). So the axis is **detected per file, never asserted from a table**:
+  a blanket Y↔Z swap would corrupt exactly those.
 - `Deg_Y` needs **no sign normalization** — raw L vs R is already anti-phase in 84% of files.
 
 `Deg_Y` is the sagittal (flexion) channel. This is the channel the swap rule reads.
 
-**[open]** `stages/s1_clean/config.py: KEEP_MEASURED` currently keeps all 27 IMU channels with no
-unit awareness. Unit normalization belongs in the **clean layer** — it is a measurement property,
-not a feature choice.
+**RESOLVED (2026-07-20):** unit normalization now lives in the clean layer
+(`stages/s1_clean/channel_trust.py`). Every gyro channel is normalized to **deg/s**; the sagittal
+axis + unit are **detected per file** (regress `d(Deg_Y)/dt` against each gyro axis, slope → unit,
+argmax|r| → axis) and written to a per-file `channel_trust.json`. Static files, whose derivative
+carries no signal, **abstain** and fall back to the documented convention (r-floor 0.9), recording
+that they did (11.1, density needs mass). Axes are **recorded, not reordered** — no silent mutation.
+On the 88-file corpus: 88 B-sides normalized rad/s→deg/s, 91 side-abstentions, **2** confident axis
+anomalies (the `B_Deg_Y→B_Gyro_Y` files above).
 
 ### 4.2 Yaw is drift-contaminated **[reported]**
 In treadmill data, yaw correlated with session time at r ≈ −0.95 — measuring elapsed time, not
@@ -223,6 +233,12 @@ This is a genuine **`needs_human`** finding — exactly the "AI cannot proceed w
 case the PL asked to surface. Someone may be able to reconstruct wearer identity from session
 records; until then, no honest claim about cross-subject generalization is possible.
 
+**[reconcile]** The `95` in this section (and the `7 of 95` above) is a **stale/undefined count** —
+the current raw corpus is **88 files** (§0), and no 95-file set is defined anywhere. Treat the
+*ratio* (almost all files subject-unmarked), not the absolute counts, as the finding until the
+95-file universe is reconciled against the present corpus. Do not silently rewrite 95→88: the
+earlier snapshot may have included files since removed.
+
 ### 5.6 Current corpus class coverage **[reported]**
 h-medi contains essentially only STANDING and WALKING. Rare-class separability (stairs, varied
 terrain) is **untestable** on current data. Any claim about rare-class performance is overclaiming.
@@ -234,8 +250,9 @@ terrain) is **untestable** on current data. Any claim about rare-class performan
 ### 6.1 rev2 is a separate, lossy family **[measured]**
 `Time, L_ang_LPF, R_ang_LPF, L_angvel_LPF, R_angvel_LPF, Label` — 6 columns, sharing only `Time`
 with the raw device family. It discards the trunk IMU, **all accelerometers** (the gravity
-reference, hence all axis/calibration checks), load cells and GCP; and it keeps both untrusted
-angular-velocity channels.
+reference, hence all axis/calibration checks), load cells and GCP; and it keeps both
+angular-velocity channels — which are **reliable**, being `d(angle)/dt` (§4.1), not the "untrusted"
+they were once called.
 
 **Do not make rev2 the storage format.** Canonical storage is the name-resolved raw superset. A
 wide honest table can always be projected down; a narrow one can never be recovered.

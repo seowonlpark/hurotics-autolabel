@@ -11,9 +11,11 @@ COLUMN_PREFIX_PATTERN = r"^\d{2,}_"
 # per-file, not per-corpus.
 ROLE_BY_NAME = {
     "Time": "time",
-    # Thigh IMUs (L/R) — the trusted angle source per DOMAIN_NOTES 1.2
+    # Thigh/trunk IMUs (L/R/B) — the trusted angle source per DOMAIN_NOTES 4 / 6.2
     **{f"{s}_Deg_{a}": "imu_deg" for s in ("L", "R", "B") for a in "XYZ"},
-    # Gyro = angular velocity. DOMAIN_NOTES 1.1: untrusted as provided.
+    # Gyro = angular velocity, and it is reliable: Gyro == d(Deg)/dt (DOMAIN_NOTES
+    # 4.1). But units differ per side and axes are swapped — normalized in the clean
+    # layer, detected per file. See the "Gyro trust / normalization" section below.
     **{f"{s}_Gyro_{a}": "imu_gyro" for s in ("L", "R", "B") for a in "XYZ"},
     # Accelerometer = gravity reference. Required for axis/calibration checks.
     **{f"{s}_Acc_{a}": "imu_acc" for s in ("L", "R", "B") for a in "XYZ"},
@@ -82,6 +84,38 @@ DECIMATE_FILTER = "fir"
 
 # Interpolation policy by role. Categorical channels must never be averaged.
 NEAREST_ROLES = ("label", "legacy_algo")
+
+# --- Gyro trust / normalization ----------------------------------------------
+# DOMAIN_NOTES 4.1b: gyro is reliable (Gyro == d(Deg)/dt) but its UNITS and AXES
+# are inconsistent within one file — B_Gyro is rad/s, L/R_Gyro is deg/s (a silent
+# 57.3x), and d(Deg_Y)/dt tracks Gyro_Z, not Gyro_Y. That is a measurement
+# property, so it is corrected here, in the clean layer, before any feature runs.
+#
+# It is DETECTED per file, never asserted from the table above: for each side we
+# regress d(Deg_Y)/dt (deg/s) against every Gyro axis. The strongest-correlated
+# axis is the sagittal gyro (resolves Y<->Z); the regression slope reveals the
+# unit (~1 -> already deg/s, ~1/57.3 -> rad/s). This doubles as the channel-trust
+# check PLAN S1 requires, and it catches the files that break the corpus-wide rule
+# (e.g. some B/trunk channels map Y->Y).
+SIDES = ("L", "R", "B")
+GYRO_AXES = "XYZ"
+RAD2DEG = 57.29577951308232
+
+# The sagittal plane (flexion/extension) is where gait lives; Deg_Y is that axis.
+SAGITTAL_DEG_AXIS = "Y"
+CANONICAL_GYRO_UNIT = "deg/s"  # angle channels are degrees, so deg/s keeps slope~1
+UNIT_TO_DEGPS_SCALE = {"deg/s": 1.0, "rad/s": RAD2DEG}
+
+# Below this |r| on the sagittal fit, the file is too static for d(Deg_Y)/dt to
+# carry signal — the fit is noise (DOMAIN_NOTES 11.1, "density needs mass"). We do
+# NOT assert a unit from a motionless fit: detection abstains and falls back to the
+# documented convention, recording that it did.
+TRUST_R_FLOOR = 0.9
+
+# The documented convention, used only as the abstention fallback — never as the
+# first answer. Measured on 42 files (DOMAIN_NOTES 4.1b).
+DOCUMENTED_GYRO_UNIT = {"L": "deg/s", "R": "deg/s", "B": "rad/s"}
+DOCUMENTED_SAGITTAL_GYRO_AXIS = "Z"
 
 # --- What the canonical file keeps -------------------------------------------
 # The line is MEASURED vs COMPUTED, not useful vs useless.

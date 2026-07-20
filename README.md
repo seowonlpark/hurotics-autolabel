@@ -57,7 +57,7 @@ You must activate the venv in every new terminal. Forgetting is the single most 
 data/
 ├── raw/<YYYYMMDD[_n]>/*.csv   88 unlabeled device logs. Session date comes from the FOLDER.
 ├── labeled/                   golden data. Never mixed into raw/.
-├── clean/<session>/*.parquet  S1 output: canonical 100 Hz, 32 measured columns
+├── clean/<session>/*.parquet  S1 output: canonical 100 Hz, 30 measured + 2 documented-exception columns, gyro normalized to deg/s
 └── quarantine/                files that failed validation. Never deleted.
 ```
 
