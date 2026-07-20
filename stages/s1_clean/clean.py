@@ -28,6 +28,7 @@ from stages.s1_clean.channel_trust import detect_and_normalize
 from stages.s1_clean.config import (
     CANONICAL_HZ,
     CLEAN_FORMAT,
+    DOCUMENTED_GYRO_PERMUTATION,
     KEEP_EXCEPTIONS,
     KEEP_IF_PRESENT,
     KEEP_MEASURED,
@@ -188,15 +189,23 @@ def main() -> None:
         "",
         "## Gyro trust / normalization",
         "",
-        "Detected per file (not asserted): d(Deg_Y)/dt regressed against each gyro axis resolves",
-        "the sagittal axis and the unit. Every gyro channel is normalized to deg/s.",
+        "Detected per file (not asserted): d(Deg_A)/dt regressed against every gyro axis, for",
+        "every Deg axis A, recovers the Deg->Gyro permutation and the unit. Every gyro channel",
+        "is normalized to deg/s. The r-floor is per axis, so an axis with no signal abstains",
+        "rather than contributing a noise argmax (Deg_Z drifts, so it often has none).",
+        "",
+        "This resolves which gyro axis measures which angle axis. It does NOT resolve which axis",
+        "is SAGITTAL — that has no in-file signature (DOMAIN_NOTES 6.2) and is a variant lookup",
+        "in stages/s2_ml/transform.py.",
         "",
         f"- side-channels normalized rad/s -> deg/s: **{len(norm_sides)}**",
         f"- sides that abstained (too static; fell back to documented convention): **{len(abstained)}**",
         f"- confident anomalies (detected axis/unit disagree with the documented rule): **{len(anomalies)}**",
         "",
-        *([f"- anomaly: `{p}` side {s}: sagittal={r['sagittal_gyro_axis']} unit={r['unit']} "
-           f"r={r['r']} (documented: Z / per-side)" for p, s, r in anomalies] or ["- anomalies: none"]),
+        *([f"- anomaly: `{p}` side {s}: conflicts={r['conflicts_with_documented']} "
+           f"map={ {A: r['gyro_axis_by_deg_axis'][A] for A in r['resolved_deg_axes']} } "
+           f"unit={r['unit']} r={r['r']} (documented: {DOCUMENTED_GYRO_PERMUTATION})"
+           for p, s, r in anomalies] or ["- anomalies: none"]),
         "",
         "## Yaw / drift trust",
         "",

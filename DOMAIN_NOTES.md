@@ -218,6 +218,39 @@ Statistics over a whole file say nothing about a state that occupies 5% of it. S
   (`00001_69_…1_14_10_4_0`, `00038_69_…1_15_11_28`) map `B_Deg_Y → B_Gyro_Y` at |r| ≈ 0.96–0.99 (one
   sign-flipped). A blanket Y↔Z swap would corrupt exactly those — and, per the table above, would
   have to be applied to L and R too, which the earlier trunk-only framing would have missed.
+
+- **It is a full PERMUTATION, and it is variant-invariant [measured, 2026-07-20].** Extending the
+  regression to every Deg axis (not just `Deg_Y`) gives the same map on every variant that answers:
+
+  | | `Deg_X` → | `Deg_Y` → | `Deg_Z` → |
+  |---|---|---|---|
+  | `fb5ea2c2` | X ×68 | Z ×102 | Y ×70 |
+  | `0fda484e` | X ×15 | Z ×20 | Y ×10 |
+  | `4bfd6ab2` | X ×4 | Z ×5 | Y ×3 |
+
+  **X→X, Y→Z, Z→Y**, identically, with no firmware-era dependence. `DOCUMENTED_GYRO_PERMUTATION`.
+
+- **The permutation is NOT sagittality, and conflating them was a real bug [measured, 2026-07-20].**
+  This map says which gyro axis measures which angle axis — a correspondence *internal* to a file,
+  measurable because `Deg` is the reference. It does **not** say which axis is the sagittal plane;
+  that is a hardware-revision fact with no in-file signature (§6.2 measured every signal-only rule
+  for it at below chance) and lives in `SAGITTAL_AXIS_BY_VARIANT`.
+
+  `channel_trust.json` used to publish a field called **`sagittal_gyro_axis`**, which actually held
+  *"the gyro axis matching `Deg_Y`"*. On `fb5ea2c2` — **the majority variant** — sagittal is `Deg_X`,
+  so the field read `Z` and was wrong. Never a data-path bug (`transform.py` uses the variant
+  lookup and hard-fails on unknown variants), but the S1 exception agent triaged against it.
+  Replaced by `gyro_axis_by_deg_axis` + `conflicts_with_documented`. **§6.2's table and this
+  permutation never disagreed** — every entry there obeys X→X / Y→Z, so its gyro column is
+  derivable from its Deg column.
+
+- **Apply the r-floor PER AXIS, not per side [measured, 2026-07-20 — 11.1 one level down].**
+  First cut of the permutation detector scored the side once and then reported all three axes:
+  **25 anomalies**, nearly all of the form `{X→X, Y→Z, Z→X}` — the two real axes right, `Deg_Z`
+  garbage. `Deg_Z` is the yaw-like axis that *drifts rather than oscillates* (§4.2), so
+  `d(Deg_Z)/dt` is often noise even mid-walk, and its argmax is meaningless. Flooring per axis, so a
+  silent axis abstains instead of dissenting, returns exactly the **2** hand-named anomalies above.
+  *Density needs mass applies to each axis separately, not to the file.*
 - `Deg_Y` needs **no sign normalization** — raw L vs R is already anti-phase in 84% of files.
 
 `Deg_Y` is the sagittal (flexion) channel. This is the channel the swap rule reads.

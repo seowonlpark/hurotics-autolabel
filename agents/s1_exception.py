@@ -92,7 +92,8 @@ def build_queue(clean_run_dir: Path) -> tuple[list[dict], dict]:
                     "type": "gyro_axis_anomaly",
                     "file": o["path"],
                     "side": side,
-                    "detail": {k: rec[k] for k in ("sagittal_gyro_axis", "unit", "r")},
+                    "detail": {k: rec[k] for k in (
+                        "gyro_axis_by_deg_axis", "is_bijection", "unit", "r")},
                 })
             for ch in o.get("drift_contaminated", []):
                 queue.append({

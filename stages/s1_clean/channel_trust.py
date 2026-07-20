@@ -1,11 +1,21 @@
 """Per-file gyro trust + unit normalization.
 
 Gyro is reliable — it is the derivative of angle (DOMAIN_NOTES 4.1) — but its unit
-and sagittal axis vary within a single file (4.1b). This module resolves both by
-MEASUREMENT, not by asserting the documented table: for each side it regresses
-d(Deg_Y)/dt (deg/s) against every Gyro axis. The strongest-correlated axis is the
-sagittal gyro; the regression slope reveals the native unit (~1 -> deg/s,
-~1/57.3 -> rad/s). It then normalizes every gyro channel to deg/s.
+is inconsistent within a single file, and the Gyro axis LABELS are permuted relative
+to the Deg labels (4.1b). This module resolves both by MEASUREMENT, not by asserting
+the documented table: for each side it regresses d(Deg_A)/dt (deg/s) against every
+Gyro axis, for every Deg axis A. The strongest-correlated gyro axis is A's
+counterpart; the regression slope reveals the native unit (~1 -> deg/s, ~1/57.3 ->
+rad/s). It then normalizes every gyro channel to deg/s.
+
+**This module does not know what "sagittal" means, and must not pretend to.** It
+measures a correspondence *internal* to the file: which Gyro axis measures the rate
+of which Deg axis. Which axis is the sagittal (flexion) plane is a property of the
+hardware revision with no in-file signature — 6.2 measured every signal-only rule
+for it at BELOW CHANCE — and is resolved by variant lookup in
+stages/s2_ml/transform.py. The two questions were once conflated in a field called
+`sagittal_gyro_axis`, which reported the gyro matching Deg_Y and was therefore wrong
+on fb5ea2c2, the majority variant, where sagittal is Deg_X.
 
 When a file is too static for d(Deg_Y)/dt to carry signal, the fit is noise
 (11.1, "density needs mass"): detection abstains and falls back to the documented
@@ -22,12 +32,11 @@ import pandas as pd
 
 from stages.s1_clean.config import (
     CANONICAL_GYRO_UNIT,
+    DOCUMENTED_GYRO_PERMUTATION,
     DOCUMENTED_GYRO_UNIT,
-    DOCUMENTED_SAGITTAL_GYRO_AXIS,
     DRIFT_MIN_SEGMENT_S,
     GYRO_AXES,
     RAD2DEG,
-    SAGITTAL_DEG_AXIS,
     SIDES,
     TRUST_R_FLOOR,
     UNIT_TO_DEGPS_SCALE,
@@ -46,28 +55,30 @@ def _classify_unit(slope: float) -> str:
     return min(_UNIT_SLOPES, key=lambda u: abs(math.log10(a) - math.log10(_UNIT_SLOPES[u])))
 
 
-def _pooled(df: pd.DataFrame, side: str) -> tuple[np.ndarray, dict[str, np.ndarray]] | None:
-    """Pool d(Deg_Y)/dt [deg/s] and each Gyro axis across segments for one side.
+def _pooled(df: pd.DataFrame, side: str) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]] | None:
+    """Pool d(Deg_A)/dt [deg/s] for every axis A, and each Gyro axis, for one side.
 
     The derivative is computed within each gap-free segment — never across a gap —
     so a segment column is required. Time is milliseconds.
     """
-    deg_col = f"{side}_Deg_{SAGITTAL_DEG_AXIS}"
+    deg_cols = {a: f"{side}_Deg_{a}" for a in GYRO_AXES}
     gyro_cols = {a: f"{side}_Gyro_{a}" for a in GYRO_AXES}
-    if deg_col not in df.columns or not all(c in df.columns for c in gyro_cols.values()):
+    if not all(c in df.columns for c in (*deg_cols.values(), *gyro_cols.values())):
         return None
 
-    dY, gyro = [], {a: [] for a in GYRO_AXES}
+    ddeg = {a: [] for a in GYRO_AXES}
+    gyro = {a: [] for a in GYRO_AXES}
     for _, seg in df.groupby("segment", sort=True):
         if len(seg) < 3:
             continue
         t_s = seg["Time"].to_numpy(float) / 1000.0
-        dY.append(np.gradient(seg[deg_col].to_numpy(float), t_s))
         for a in GYRO_AXES:
+            ddeg[a].append(np.gradient(seg[deg_cols[a]].to_numpy(float), t_s))
             gyro[a].append(seg[gyro_cols[a]].to_numpy(float))
-    if not dY:
+    if not any(ddeg[a] for a in GYRO_AXES):
         return None
-    return np.concatenate(dY), {a: np.concatenate(v) for a, v in gyro.items()}
+    return ({a: np.concatenate(v) for a, v in ddeg.items()},
+            {a: np.concatenate(v) for a, v in gyro.items()})
 
 
 def _corr(x: np.ndarray, y: np.ndarray) -> float:
@@ -77,7 +88,14 @@ def _corr(x: np.ndarray, y: np.ndarray) -> float:
 
 
 def detect_side(df: pd.DataFrame, side: str) -> dict | None:
-    """Resolve one side's sagittal gyro axis + unit from the data.
+    """Resolve one side's Deg->Gyro axis permutation + unit from the data.
+
+    Deliberately NOT "the sagittal axis". This regression can only discover which
+    Gyro axis measures the rate of which Deg axis — a correspondence internal to the
+    file. WHICH axis is sagittal is a hardware-revision fact with no in-file
+    signature (DOMAIN_NOTES 6.2 measured every signal-only rule at below chance);
+    it is resolved by variant lookup in stages/s2_ml/transform.py. Conflating the
+    two is what made the old `sagittal_gyro_axis` field wrong on fb5ea2c2.
 
     Returns None when the side's channels are absent. Otherwise a record whose
     `method` is 'detected' (confident) or 'fallback_documented' (too static).
@@ -85,36 +103,71 @@ def detect_side(df: pd.DataFrame, side: str) -> dict | None:
     got = _pooled(df, side)
     if got is None:
         return None
-    dY, gyro = got
+    ddeg, gyro = got
 
-    best_axis, best_r = None, 0.0
-    for a in GYRO_AXES:
-        r = _corr(dY, gyro[a])
-        if np.isfinite(r) and abs(r) > abs(best_r):
-            best_axis, best_r = a, r
+    # For each Deg axis, the best-matching Gyro axis and its r.
+    #
+    # The r-floor is applied PER AXIS, not once to the side. A Deg axis whose
+    # derivative carries no signal has no argmax worth reading, and Deg_Z is
+    # routinely exactly that: it is the yaw-like axis, which drifts rather than
+    # oscillates (4.2), so d(Deg_Z)/dt is often noise even in a file that is
+    # vigorously walking. Scoring the side as a whole and then reporting all three
+    # axes would launder that noise into a confident-looking anomaly — the 11.1
+    # "density needs mass" failure, one level down.
+    match: dict[str, str | None] = {}
+    r_by_axis: dict[str, float] = {}
+    for A in GYRO_AXES:
+        best_axis, best_r = None, 0.0
+        for a in GYRO_AXES:
+            r = _corr(ddeg[A], gyro[a])
+            if np.isfinite(r) and abs(r) > abs(best_r):
+                best_axis, best_r = a, r
+        r_by_axis[A] = best_r
+        match[A] = best_axis if (best_axis and abs(best_r) >= TRUST_R_FLOOR) else None
 
-    confident = best_axis is not None and abs(best_r) >= TRUST_R_FLOOR
+    resolved = [A for A in GYRO_AXES if match[A] is not None]
+
+    # Unit comes from the strongest resolved pair — unit is a per-side property,
+    # so the best-resolved axis is the best evidence for it.
+    anchor = max(resolved, key=lambda A: abs(r_by_axis[A])) if resolved else None
+    best_r = r_by_axis.get(anchor, 0.0) if anchor else 0.0
+    confident = anchor is not None
+
     if confident:
-        slope = float(np.polyfit(dY, gyro[best_axis], 1)[0])
+        slope = float(np.polyfit(ddeg[anchor], gyro[match[anchor]], 1)[0])
         unit = _classify_unit(slope)
-        axis, method = best_axis, "detected"
+        method = "detected"
     else:
         slope = float("nan")
         unit = DOCUMENTED_GYRO_UNIT.get(side, CANONICAL_GYRO_UNIT)
-        axis, method = DOCUMENTED_SAGITTAL_GYRO_AXIS, "fallback_documented"
+        method = "fallback_documented"
 
-    doc_axis = DOCUMENTED_SAGITTAL_GYRO_AXIS
+    # Only axes that actually answered may contradict the documented map. An
+    # abstaining axis is silent, not dissenting.
+    conflicts = [A for A in resolved if match[A] != DOCUMENTED_GYRO_PERMUTATION[A]]
     doc_unit = DOCUMENTED_GYRO_UNIT.get(side)
     return {
-        "sagittal_gyro_axis": axis,
+        # Deg axis -> the Gyro axis measuring its rate; None = abstained, too
+        # little signal on that axis to read. NOT sagittality (see module docstring).
+        "gyro_axis_by_deg_axis": match,
+        "resolved_deg_axes": resolved,
+        "r_by_deg_axis": {A: round(r, 4) for A, r in r_by_axis.items()},
+        # A permutation is a bijection; claimable only when all three axes answered.
+        # Two resolved Deg axes pointing at one Gyro axis is a degenerate detection,
+        # not an exotic device.
+        "is_bijection": (len(resolved) == len(GYRO_AXES)
+                         and len({match[A] for A in resolved}) == len(GYRO_AXES)),
+        "conflicts_with_documented": conflicts,
+        "matches_documented_permutation": not conflicts,
+        "anchor_deg_axis": anchor,
         "unit": unit,
         "scale_to_degps": UNIT_TO_DEGPS_SCALE[unit],
         "r": round(best_r, 4),
         "slope": None if not np.isfinite(slope) else round(slope, 6),
-        "n": int(dY.size),
+        "n": int(ddeg[anchor].size) if anchor else 0,
         "confident": confident,
         "method": method,
-        "matches_documented": (axis == doc_axis and unit == doc_unit),
+        "matches_documented": (not conflicts and unit == doc_unit),
     }
 
 
@@ -161,7 +214,7 @@ def detect_and_normalize(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """Detect trust per side, normalize every gyro channel to deg/s.
 
     Returns (normalized_df, trust). Normalization is unit-only (a per-side scalar);
-    axes are NOT reordered — the resolved sagittal axis is recorded for downstream.
+    axes are NOT reordered — the resolved permutation is recorded for downstream.
     Sign is left intact and carried in `r` so polarity is never silently flipped.
     """
     out = df.copy()

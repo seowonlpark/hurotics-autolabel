@@ -93,20 +93,32 @@ NEAREST_ROLES = ("label",)
 # 57.3x), and d(Deg_Y)/dt tracks Gyro_Z, not Gyro_Y. That is a measurement
 # property, so it is corrected here, in the clean layer, before any feature runs.
 #
-# It is DETECTED per file, never asserted from the table above: for each side we
-# regress d(Deg_Y)/dt (deg/s) against every Gyro axis. The strongest-correlated
-# axis is the sagittal gyro (resolves Y<->Z); the regression slope reveals the
-# unit (~1 -> already deg/s, ~1/57.3 -> rad/s). This doubles as the channel-trust
-# check PLAN S1 requires, and it catches the files that break the corpus-wide rule
-# (e.g. some B/trunk channels map Y->Y).
+# It is DETECTED per file, never asserted from the table below: for each side we
+# regress d(Deg_A)/dt (deg/s) against every Gyro axis, for every Deg axis A. The
+# strongest-correlated gyro axis is A's counterpart (recovering the full
+# permutation); the regression slope reveals the unit (~1 -> already deg/s,
+# ~1/57.3 -> rad/s). This doubles as the channel-trust check PLAN S1 requires, and
+# it catches the files that break the corpus-wide rule (e.g. some B/trunk channels
+# map Y->Y, which is not a permutation at all).
 SIDES = ("L", "R", "B")
 GYRO_AXES = "XYZ"
 RAD2DEG = 57.29577951308232
 
-# The sagittal plane (flexion/extension) is where gait lives; Deg_Y is that axis.
-SAGITTAL_DEG_AXIS = "Y"
 CANONICAL_GYRO_UNIT = "deg/s"  # angle channels are degrees, so deg/s keeps slope~1
 UNIT_TO_DEGPS_SCALE = {"deg/s": 1.0, "rad/s": RAD2DEG}
+
+# The Deg->Gyro axis correspondence is a FIXED PERMUTATION of the device
+# (DOMAIN_NOTES 4.1b): the gyro labels carry a Y<->Z transposition relative to the
+# angle labels, X maps to itself. Measured across every variant that answers --
+# fb5ea2c2, 0fda484e, 4bfd6ab2 all identical, no firmware dependence.
+#
+# NOTE THIS IS NOT SAGITTALITY. This map says which Gyro axis measures the rate of
+# which Deg axis. It does NOT say which axis is the sagittal (flexion) plane -- that
+# is a per-hardware-revision fact, unanswerable from inside a file, and it lives in
+# SAGITTAL_AXIS_BY_VARIANT (stages/s2_ml/transform.py), resolved against paired
+# ground truth. Keep the two questions apart: this layer can measure the permutation
+# and cannot measure sagittality, so it asserts only the former.
+DOCUMENTED_GYRO_PERMUTATION = {"X": "X", "Y": "Z", "Z": "Y"}
 
 # Below this |r| on the sagittal fit, the file is too static for d(Deg_Y)/dt to
 # carry signal — the fit is noise (DOMAIN_NOTES 11.1, "density needs mass"). We do
