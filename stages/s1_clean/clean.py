@@ -137,7 +137,9 @@ def main() -> None:
             kind = ("channel_trust_anomaly" if trust["anomalies"]
                     else "channel_trust_abstained" if trust["abstained"]
                     else "channel_trust_ok")
-            observations.append({"path": rel, "kind": kind, "channel_trust": trust})
+            observations.append({"path": rel, "kind": kind,
+                                 "drift_contaminated": trust["drift"]["contaminated"],
+                                 "channel_trust": trust})
         print(f"[s1] {i}/{len(paths)} {p.name} -> {len(rows)} segment(s){' !! ' + err if err else ''}")
 
     with (out_dir / "segments.jsonl").open("w", encoding="utf-8") as fh:
@@ -166,6 +168,7 @@ def main() -> None:
     abstained = [(o["path"], s) for o in observations for s in o["channel_trust"]["abstained"]]
     anomalies = [(o["path"], s, o["channel_trust"]["sides"][s]) for o in observations
                  for s in o["channel_trust"]["anomalies"]]
+    drift_flagged = [(o["path"], c) for o in observations for c in o["drift_contaminated"]]
 
     lines = [
         "# S1 Clean Report",
@@ -193,6 +196,16 @@ def main() -> None:
         "",
         *([f"- anomaly: `{p}` side {s}: sagittal={r['sagittal_gyro_axis']} unit={r['unit']} "
            f"r={r['r']} (documented: Z / per-side)" for p, s, r in anomalies] or ["- anomalies: none"]),
+        "",
+        "## Yaw / drift trust",
+        "",
+        "A Deg channel whose value tracks session time is measuring integration drift, not",
+        "orientation (§4.2). Flagged per channel, not dropped — the raw superset is kept.",
+        "",
+        f"- Deg channels flagged drift-contaminated (|corr(Deg,Time)| >= 0.9): **{len(drift_flagged)}** "
+        f"across **{len({p for p, _ in drift_flagged})}** files",
+        "",
+        *([f"- drift: `{p}` channel `{c}`" for p, c in drift_flagged] or ["- drift-contaminated: none"]),
         "",
         "## Method",
         "",

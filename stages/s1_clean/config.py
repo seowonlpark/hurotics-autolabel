@@ -117,6 +117,16 @@ TRUST_R_FLOOR = 0.9
 DOCUMENTED_GYRO_UNIT = {"L": "deg/s", "R": "deg/s", "B": "rad/s"}
 DOCUMENTED_SAGITTAL_GYRO_AXIS = "Z"
 
+# --- Yaw / drift trust -------------------------------------------------------
+# DOMAIN_NOTES 4.2: a channel whose value tracks session TIME is measuring elapsed
+# time (integration drift), not orientation. Measured on the raw corpus, Deg_Z is
+# the yaw-like axis (median |corr(Deg,Time)| ~0.33 vs sagittal Y ~0.08), but drift
+# is FILE-SPECIFIC — strong on only a few files — so it is flagged per channel, per
+# file, never dropped wholesale. This is a feature-time exclusion signal, not a
+# quarantine trigger: the raw superset is kept.
+YAW_DRIFT_R_FLOOR = 0.9        # |corr(Deg, Time)| at/above this => drift-contaminated
+DRIFT_MIN_SEGMENT_S = 5.0      # a segment must span this long for its drift to mean anything
+
 # --- What the canonical file keeps -------------------------------------------
 # The line is MEASURED vs COMPUTED, not useful vs useless.
 #

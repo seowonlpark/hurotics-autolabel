@@ -24,12 +24,14 @@ from stages.s1_clean.config import (
     CANONICAL_GYRO_UNIT,
     DOCUMENTED_GYRO_UNIT,
     DOCUMENTED_SAGITTAL_GYRO_AXIS,
+    DRIFT_MIN_SEGMENT_S,
     GYRO_AXES,
     RAD2DEG,
     SAGITTAL_DEG_AXIS,
     SIDES,
     TRUST_R_FLOOR,
     UNIT_TO_DEGPS_SCALE,
+    YAW_DRIFT_R_FLOOR,
 )
 
 # The two units gyro can arrive in; detection picks whichever slope is nearer.
@@ -116,6 +118,45 @@ def detect_side(df: pd.DataFrame, side: str) -> dict | None:
     }
 
 
+def detect_drift(df: pd.DataFrame) -> dict:
+    """Flag Deg channels that track session time (integration drift, not orientation).
+
+    Per side, per Deg axis, the duration-weighted |corr(Deg, Time)| over segments
+    long enough (>= DRIFT_MIN_SEGMENT_S) for a drift slope to mean anything. A
+    sagittal channel oscillates -> near 0; a drifting channel tracks time -> near 1.
+    Flags, never drops (DOMAIN_NOTES 4.2): this is a feature-time exclusion signal.
+    """
+    sides: dict[str, dict] = {}
+    for side in SIDES:
+        axes: dict[str, dict] = {}
+        for a in GYRO_AXES:
+            col = f"{side}_Deg_{a}"
+            if col not in df.columns:
+                continue
+            num, den = 0.0, 0.0
+            for _, seg in df.groupby("segment", sort=True):
+                t = seg["Time"].to_numpy(float)
+                dur = float(t[-1] - t[0]) / 1000.0
+                if dur < DRIFT_MIN_SEGMENT_S:
+                    continue
+                r = _corr(seg[col].to_numpy(float), t)
+                if np.isfinite(r):
+                    num, den = num + abs(r) * dur, den + dur
+            if den == 0:
+                axes[a] = {"time_corr_absr": None, "drift_contaminated": False,
+                           "secs": 0.0, "inconclusive": True}
+            else:
+                wr = num / den
+                axes[a] = {"time_corr_absr": round(wr, 4),
+                           "drift_contaminated": bool(wr >= YAW_DRIFT_R_FLOOR),
+                           "secs": round(den, 1)}
+        sides[side] = axes
+
+    contaminated = [f"{s}_Deg_{a}" for s, ax in sides.items()
+                    for a, r in ax.items() if r["drift_contaminated"]]
+    return {"min_segment_s": DRIFT_MIN_SEGMENT_S, "sides": sides, "contaminated": contaminated}
+
+
 def detect_and_normalize(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """Detect trust per side, normalize every gyro channel to deg/s.
 
@@ -140,5 +181,6 @@ def detect_and_normalize(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         "sides": sides,
         "abstained": [s for s, r in sides.items() if r["method"] == "fallback_documented"],
         "anomalies": [s for s, r in sides.items() if r["confident"] and not r["matches_documented"]],
+        "drift": detect_drift(df),
     }
     return out, trust

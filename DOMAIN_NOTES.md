@@ -179,9 +179,17 @@ that they did (11.1, density needs mass). Axes are **recorded, not reordered** �
 On the 88-file corpus: 88 B-sides normalized rad/s→deg/s, 91 side-abstentions, **2** confident axis
 anomalies (the `B_Deg_Y→B_Gyro_Y` files above).
 
-### 4.2 Yaw is drift-contaminated **[reported]**
-In treadmill data, yaw correlated with session time at r ≈ −0.95 — measuring elapsed time, not
-orientation. Excluded. Any new yaw-derived feature must first pass a session-time correlation test.
+### 4.2 Yaw is drift-contaminated — but per-file, not wholesale **[measured]**
+Original **[reported]**: in treadmill data yaw correlated with session time at r ≈ −0.95, measuring
+elapsed time not orientation.
+
+Measured on the raw corpus (clean-layer drift test, `|corr(Deg, Time)|` duration-weighted over
+segments ≥ 5 s): **`Deg_Z` is the yaw-like axis** on every side — median |r| ≈ 0.33 vs the sagittal
+`Deg_Y` at ≈ 0.08. But the strong drift signature is **file-specific, not universal**: only **13
+channels across 11 of 88 files** cross |r| ≥ 0.9 (all of them `*_Deg_Z`). So yaw is **flagged per
+channel per file** in `channel_trust.json` (`drift` section), **not dropped wholesale**. It is a
+feature-time exclusion signal; the raw superset is kept. Any yaw-derived feature must consult the
+per-file drift flag.
 
 ### 4.3 The trunk (B) IMU was dropped from rev2 for a real reason **[reported]**
 Belly/trunk placement was inconsistent between subjects, and may have been treadmill-mounted in some
