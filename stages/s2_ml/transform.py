@@ -15,6 +15,14 @@ Two things here are easy to get wrong:
      how the IMU sat in that hardware revision, so it is resolved by schema variant,
      never guessed from the waveform. Signal-only detection was measured and scored
      BELOW CHANCE (§6.2) — do not reintroduce it. Unknown variant => abstain.
+
+Sagittality vs the permutation — keep them apart (§4.1b/§6.2). S1 measures the
+**permutation** (which Gyro axis is the rate of which Deg axis: X->X, Y->Z, Z->Y); that
+is universal across variants and knowable from inside one file. It does NOT say which
+plane is sagittal. Sagittality is per hardware revision, unanswerable from inside a
+file, and lives here — resolved against paired ground truth. Because the permutation is
+universal, the only independent per-variant fact is **which Deg axis is sagittal**; the
+gyro axis follows from it, so storing both would invite the two to drift apart.
 """
 
 from __future__ import annotations
@@ -25,18 +33,25 @@ import numpy as np
 import pandas as pd
 from scipy.signal import lfilter
 
+from stages.s1_clean.config import DOCUMENTED_GYRO_PERMUTATION
+
 # csv2mat.m: f_ang = 1; f_angvel = 1;  ("for locomotion classification").
 # f_angvel = 10 is the GCP variant and must NOT be used for this task.
 FC_ANG_HZ = 1.0
 FC_ANGVEL_HZ = 1.0
 
-# variant_id -> (Deg axis for *_ang_LPF, Gyro axis for *_angvel_LPF).
-# Measured on paired recordings, 19/19 exact (§6.2). Extend only with new evidence:
-# one paired raw+annotated file for the revision, never a guess.
-SAGITTAL_AXIS_BY_VARIANT = {
-    "fb5ea2c2": ("X", "X"),   # rev13 / rev14 — the §4.1b anomaly family
-    "0fda484e": ("Y", "Z"),   # rev7 / rev8   — the documented Y<->Z convention
-    "4bfd6ab2": ("Y", "Z"),   # rev4          — same convention
+# variant_id -> the Deg axis that revision's exporter treated as SAGITTAL.
+# The matching Gyro axis is NOT stored: it follows from DOCUMENTED_GYRO_PERMUTATION,
+# which every variant obeys. Measured on paired recordings, 19/19 exact (§6.2).
+# Extend only with new evidence: one paired raw+annotated file, never a guess.
+#
+# fb5ea2c2 is NOT an anomalous permutation — it is wired like every other variant and
+# simply has its sagittal plane on Deg_X. The genuine §4.1b anomalies are the two files
+# whose *permutation* breaks (B_Deg_Y -> B_Gyro_Y); that is a different question.
+SAGITTAL_DEG_AXIS_BY_VARIANT = {
+    "fb5ea2c2": "X",   # rev13 / rev14  (majority variant)
+    "0fda484e": "Y",   # rev7  / rev8
+    "4bfd6ab2": "Y",   # rev4
 }
 
 FEATURE_COLUMNS = ("L_ang_LPF", "R_ang_LPF", "L_angvel_LPF", "R_angvel_LPF")
@@ -94,16 +109,20 @@ def safe_dt(time_ms: np.ndarray) -> float:
 
 
 def resolve_axes(variant_id: str) -> tuple[str, str]:
-    """(deg_axis, gyro_axis) for a schema variant, or raise. Never guesses."""
-    axes = SAGITTAL_AXIS_BY_VARIANT.get(variant_id)
-    if axes is None:
+    """(deg_axis, gyro_axis) for a schema variant, or raise. Never guesses.
+
+    Only the Deg axis is stored; the Gyro axis is derived through the permutation S1
+    measures, so the two cannot fall out of sync.
+    """
+    deg_axis = SAGITTAL_DEG_AXIS_BY_VARIANT.get(variant_id)
+    if deg_axis is None:
         raise UnknownVariantError(
             f"no measured sagittal-axis mapping for variant {variant_id!r}. "
-            f"Known: {sorted(SAGITTAL_AXIS_BY_VARIANT)}. Signal-based detection scores "
-            f"below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired "
+            f"Known: {sorted(SAGITTAL_DEG_AXIS_BY_VARIANT)}. Signal-based detection "
+            f"scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired "
             f"raw+annotated recording instead of guessing."
         )
-    return axes
+    return deg_axis, DOCUMENTED_GYRO_PERMUTATION[deg_axis]
 
 
 def raw_to_features(df: pd.DataFrame, variant_id: str, dt_s: float | None = None,
