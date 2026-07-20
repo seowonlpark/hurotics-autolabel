@@ -166,7 +166,7 @@ change the champion outside the S2 promotion path.
 |---|---|
 | 0 — skeleton | done |
 | 1 — S1 deterministic core | complete — schema/rate/gaps, gyro unit+axis trust, yaw-drift trust, degenerate-time-base rejection, quarantine ledger; gate passes (every raw file accounted) |
-| 2 — S1 exception agent | complete — `agents/s1_exception.py` triages the exception queue into known_expected / novel / needs_human with grounded rationale; verified on the real corpus |
+| 2 — S1 exception agent | built, pending human sign-off — `agents/s1_exception.py` triages the exception queue into known_expected / novel / needs_human with grounded rationale; verified on the real corpus, awaiting Lu's review of the logged decisions |
 | 3 — S2 loop | not started |
 | 4 — S3 physics | not started |
 | 5 — S4 report | not started |
