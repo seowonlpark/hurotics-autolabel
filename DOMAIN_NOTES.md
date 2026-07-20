@@ -158,7 +158,7 @@ across one invents data that was never measured.
 
 ### 3.2 There is a ~10-sample startup burst **[measured]**
 
-26 files open with a segment of **exactly 10 rows**, then a gap, then the real trial. The 500 Hz
+Many files open with a segment of **exactly 10 rows**, then a gap, then the real trial. The 500 Hz
 era shows two tiny leading segments (2–8 rows each). Mechanical, not random.
 `MIN_SEGMENT_SAMPLES = 100` currently trims it as a side effect of a size filter — the right
 outcome for an incidental reason.
@@ -325,8 +325,8 @@ the need for a bridge, so this is no longer blocking.
 - UNKNOWN is excluded consistently across per-trial and corpus-level metrics.
 - Group by **subject (filename field 2)** for cross-validation (§5.5): subject is known for every
   file, so this defends subject leakage directly. Session-day grouping is subsumed — one subject per
-  day. Caveat: only **5 subjects**, `69` dominates (64%), so cross-subject claims are bounded by
-  n = 5, not by unknown identity.
+  day. Caveat: the subject pool is small and `69` dominates (see the census for the live count), so
+  cross-subject claims are bounded by how few distinct subjects exist, not by unknown identity.
 - **Always select by time, never by index.** rev2 samples at **494 Hz, not 500** — jitter
   accumulates to **4.2 s of drift by t=320 s**, so `int(t*fs)` points 4.2 seconds past the event.
   **AUDITED (2026-07-20) [measured]:** `stages/s1_clean/resample.py` is time-safe — every grid is
@@ -369,7 +369,7 @@ the need for a bridge, so this is no longer blocking.
   columns are the firmware's opinion, not observation — the same category as `loco`, and there is
   nothing to trust-check in a number the firmware derived. Two consequences beyond storage:
   **(a)** every column that churns position between variants (`Step` 46/47, `Cadence` 45/46, the
-  whole 83/79/91 tail) is a computed one, so dropping them **collapses 5 schema variants into 1**;
+  whole 83/79/91 tail) is a computed one, so dropping them **collapses the schema variants into one**;
   **(b)** computed values depend on firmware version, so training on them partly learns which
   firmware produced the file — the era confound baked into the feature set.
   Canonical = **30 measured columns**, defined as `KEEP_MEASURED` in `stages/s1_clean/config.py`.
@@ -417,14 +417,14 @@ Known weakness: slow walking (0.22 Hz stride) yields ~0.9 swaps per 2 s window a
 | `ileg_minhalf` — min of `ptp(L−R)` over the window's two halves | AUC 0.967 / 0.972 on two independent trials; medians 0.2–0.5 (standing) vs 39–41 (walking). **Needs per-file calibration.** |
 | `interleg_offset` — median of `L−R` | **Posture only** (AUC 0.50 for walk/stand). Separates feet-together from split-stance: baseline −3.3°, splits at **+17°** and **−22°** — opposite legs leading. |
 
-### 10.2 Recordings begin at rest **[measured, 26/28 files]**
+### 10.2 Recordings begin at rest **[measured — nearly all files]**
 
 An **external** label — it comes from how sessions are run, not from any algorithm. It gives every
 file a standing reference measured on the same person, sensor and mounting minutes earlier. **This
 is the mechanism that makes per-file calibration possible** (§7), and it is the
 calibration-as-data-harvest insight arriving from the physics side.
 
-**[open]** 26 files also open with a segment of exactly 10 rows (§3.2). Possibly the same 26 —
+**[open]** many files also open with a segment of exactly 10 rows (§3.2). Possibly the same files —
 worth checking.
 
 ### 10.3 States richer than the human labels **[measured]**
@@ -488,6 +488,7 @@ fitting. This belongs in the S3 agent's system prompt verbatim.
 |---|---|---|
 | 2026-07-16 | 0 | v1 seeded: channel trust, rate confound, label semantics, eval rules, NumPy gotcha |
 | 2026-07-16 | 1 | v2 from the real corpus: 5 variants / 45-col contract / position-is-a-lie; two rate eras; quantization tiers; anti-aliasing proof; segments + startup burst; -1 vs 255; rev2 as lossy family; provenance tags |
+| 2026-07-20 | 2→3 | Phase 2 gate CLOSED: Lu signed off on the exception review (7 `needs_human` = §2.6 broken-clock batch → re-export; 16 `known_expected`; 0 novel). Dead code removed (`Resolution.has`, unreachable `legacy_algo` interp-role). Count-free sweep extended past the prose into code comments, the generated `clean_report.md`, and surviving inventory counts (schema-variant / subject / startup-burst tallies); named-file example stats and this changelog keep their numbers. Phase 3 (S2 loop) starting. |
 | 2026-07-20 | 2 | Phase 2: S1 exception agent (`agents/s1_exception.py`). Read-only agent triages the clean stage's genuine exceptions (quarantines + gyro axis anomalies + yaw-drift flags; routine abstentions summarized, not triaged) into `known_expected` / `novel` / `needs_human`, each grounded in a DOMAIN_NOTES section; deterministic wrapper writes `exceptions_review.jsonl`. Degenerate-time-base quarantines → `needs_human` (re-export); handled anomalies/drift → `known_expected`. Deleted the Phase-0 smoke agent; fixed the shipped-but-uncalled `load_dotenv()`. |
 | 2026-07-20 | 1 | Corpus refreshed (more raw files + new subjects `70`/`92`; `sub1/sub2` markers removed). §2.6 NEW: a 2026-05 batch has a degenerate time base (non-monotonic, duplicated timestamps, median dt=0) — quarantined, the pipeline's first real quarantine; `measure_hz`/`clean_one` now guard `median(dt)>0`. **Records made count-free** (per Lu): live tallies live in the run artifacts, not this file. Gate still holds (partition asserted). |
 | 2026-07-20 | 1 | S1 hardening. **MEASURED:** §4.1b confirmed on all 88 files (gyro units normalized to deg/s in the clean layer, per-file `channel_trust.json`, detect-don't-assert with static-file abstention); §4.2 yaw is `Deg_Z`, drift is file-specific (13 chans / 11 files), flagged not dropped; §7 `resample.py` proven time-safe by drift test. **REVERSED §5.5:** filename field 2 IS the subject (`69` recurs across 5 months) — subject known for every file, `needs_human` RESOLVED (Lu confirmed `sub1/sub2` are trial batches). **DESIGN:** quarantine is a `quarantine.jsonl` ledger, raw file never moved. Docs reconciled (angvel "untrusted"→reliable §6.1; 30-vs-32 cols; PLAN/README status). |

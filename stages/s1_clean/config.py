@@ -2,8 +2,8 @@
 
 # --- Column naming -----------------------------------------------------------
 # Raw headers carry a positional prefix ("47_loco"). The prefix is a per-file
-# position, NOT a stable id: column 47 is `loco` in 62 files and `Step` in 11.
-# Resolution is always by name. This regex strips the prefix and nothing else.
+# position, NOT a stable id: at the same index one variant reads `loco`, another
+# reads `Step`. Resolution is always by name. This regex strips the prefix, nothing else.
 COLUMN_PREFIX_PATTERN = r"^\d{2,}_"
 
 # --- Channel roles -----------------------------------------------------------
@@ -60,9 +60,9 @@ GAP_FACTOR = 5.0    # dt > GAP_FACTOR * median(dt) counts as a gap
 PLAUSIBLE_HZ = (1.0, 2000.0)  # outside this, suspect the unit, not the device
 
 # --- Resampling --------------------------------------------------------------
-# Golden data arrives at 100 Hz, so 100 Hz is the canonical grid: 70 files already
-# sit there, 12 are decimated down, 6 are grid-corrected. Nothing is upsampled and
-# no bandwidth is invented.
+# Golden data arrives at 100 Hz, so 100 Hz is the canonical grid: ~100 Hz files
+# already sit there, 500 Hz files are decimated down, quantized clocks are
+# grid-corrected. Nothing is upsampled and no bandwidth is invented.
 CANONICAL_HZ = 100.0
 CANONICAL_DT_MS = 1000.0 / CANONICAL_HZ
 
@@ -82,8 +82,10 @@ MIN_SEGMENT_SAMPLES = 100  # 1 s at canonical rate; shorter runs are recorded, n
 # vibration would masquerade as low-frequency gait signal.
 DECIMATE_FILTER = "fir"
 
-# Interpolation policy by role. Categorical channels must never be averaged.
-NEAREST_ROLES = ("label", "legacy_algo")
+# Interpolation policy by role. Categorical channels must never be averaged. Only
+# Label reaches the resampler — legacy/computed columns are pruned before it runs —
+# so it is the only nearest-interpolated role in practice.
+NEAREST_ROLES = ("label",)
 
 # --- Gyro trust / normalization ----------------------------------------------
 # DOMAIN_NOTES 4.1b: gyro is reliable (Gyro == d(Deg)/dt) but its UNITS and AXES
@@ -113,7 +115,7 @@ UNIT_TO_DEGPS_SCALE = {"deg/s": 1.0, "rad/s": RAD2DEG}
 TRUST_R_FLOOR = 0.9
 
 # The documented convention, used only as the abstention fallback — never as the
-# first answer. Measured on 42 files (DOMAIN_NOTES 4.1b).
+# first answer. Measured across the corpus (DOMAIN_NOTES 4.1b).
 DOCUMENTED_GYRO_UNIT = {"L": "deg/s", "R": "deg/s", "B": "rad/s"}
 DOCUMENTED_SAGITTAL_GYRO_AXIS = "Z"
 
@@ -138,7 +140,7 @@ DRIFT_MIN_SEGMENT_S = 5.0      # a segment must span this long for its drift to 
 # Two consequences beyond storage:
 #   1. Every column that churns position between variants (Step 46/47, Cadence
 #      45/46, the whole 83/79/91 tail) is a COMPUTED one. Dropping them collapses
-#      5 schema variants into 1.
+#      the schema variants into a single canonical shape.
 #   2. Computed values depend on firmware version, so training on them partly
 #      learns which firmware produced the file. That is the era confound baked
 #      straight into the feature set.

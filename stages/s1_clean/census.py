@@ -87,9 +87,6 @@ class Resolution:
     label_columns: list[str]
     legacy_algo_columns: list[str]
 
-    def has(self, name: str) -> bool:
-        return name in self.index_by_name
-
 
 def resolve(raw_columns: list[str]) -> Resolution:
     """Map a header to roles by name. Absence is a fact, not an error."""

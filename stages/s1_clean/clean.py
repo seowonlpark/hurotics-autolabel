@@ -184,7 +184,7 @@ def main() -> None:
         f"- format: **{CLEAN_FORMAT}**",
         "",
         "Measured-only: every column that churns position between variants is a *computed* one,",
-        "so this collapses all 5 schema variants into a single canonical shape.",
+        "so this collapses every schema variant into a single canonical shape.",
         "",
         "## Gyro trust / normalization",
         "",
