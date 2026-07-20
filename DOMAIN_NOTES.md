@@ -123,17 +123,28 @@ naive [::5]  : 1.5Hz=1.000  20Hz(alias)=0.500   <- fake 20 Hz at full amplitude
 The alias lands at |120−100| = 20 Hz, at full strength, indistinguishable from real signal.
 Use `scipy.signal.decimate(x, 5, ftype='fir')`.
 
-### 2.6 A 2026-05 batch has a degenerate time base — quarantined **[measured]**
-A 2026-05 export batch (subject `70` on 2026-05-15 and several subject-`100` files on 2026-05-19)
-logs a broken clock: **`Time` is non-monotonic** — a large fraction of `dt` are *negative*, time
-runs backward — and heavily **duplicated** (tens of rows per distinct timestamp), so `median(dt)`
-is **0**. No forward cadence exists, and `np.interp` would silently corrupt the resample.
+### 2.6 A 2026-05 batch has a corrupted `Time` column — quarantined **[measured]**
+A few files from two 2026-05 sessions (subject `70` on 2026-05-15, some subject-`100` files on
+2026-05-19) have a **destroyed `Time` column**: it collapses to a small, non-monotonic range
+(median `dt` = 0, a large fraction of `dt` negative). No forward cadence exists, and `np.interp`
+would silently corrupt the resample.
 
-S1 rejects these up front (`clean_one` guards `median(dt) > 0`; `measure_hz` returns `nan` rather
-than dividing by zero) and routes them to the **`quarantine.jsonl` ledger** with reason
-`degenerate time base` and `needs_human`. The raw file is left in place, never moved (which files,
-each run, is in `quarantine.jsonl`). Likely a firmware/logging fault in that batch — worth raising
-with whoever exported it.
+**It is a per-file `Time` corruption, not a bad variant and not clock jitter.** Healthy sibling
+files of the *same* variant (`e5f2660f`) and era carry a clean monotonic 500 Hz clock — so the
+acquisition is fine; only these files' timestamps were overwritten. The *data* channels look
+intact and in row order (row-to-row continuity matches a healthy file). There is **no recoverable
+surrogate clock** in the file (the large monotone counter some carry is a normal column, present in
+the healthy files too).
+
+**Decision (2026-07-20, Lu): do NOT reconstruct a synthetic clock.** A uniform-rate clock would
+*fabricate* unmeasured time, which the pipeline refuses to do. These files stay quarantined as
+`needs_human` (re-export from the source is the only honest fix). The non-corrupted files proceed
+downstream normally — `data/clean/` only ever holds files that passed, so later stages never see
+the corrupted ones.
+
+S1 catches this up front (`clean_one` guards `median(dt) > 0`; `measure_hz` returns `nan` rather
+than dividing by zero) and routes it to the `quarantine.jsonl` ledger with reason
+`degenerate time base`. The raw file is left in place, never moved.
 
 ---
 
