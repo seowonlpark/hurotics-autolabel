@@ -152,14 +152,23 @@ KEEP_MEASURED = (
 )
 
 # Documented exceptions to the measured-only rule. Each needs a reason.
-KEEP_EXCEPTIONS = {
-    # Computed, but the open-source gait dataset's Hip_Flex_L/R is its direct
-    # analogue, and that dataset is the primary real training asset. Dropping this
-    # severs the bridge. Deriving hip angle from thigh IMUs instead would require
-    # knowing the firmware's convention, which is unresolved.
-    "Hip_Deg_L": "bridge to open-source gait dataset (Hip_Flex_L)",
-    "Hip_Deg_R": "bridge to open-source gait dataset (Hip_Flex_R)",
-}
+# Currently EMPTY, and that is the finding, not an oversight (DOMAIN_NOTES 9).
+#
+# `Hip_Deg_L`/`Hip_Deg_R` lived here as a "bridge to the open-source gait dataset's
+# Hip_Flex_L/R". Removed 2026-07-20 — the exception failed every test it implied:
+#   - REDUNDANT: corr with same-side Deg_Y is 0.991 (vs ~0.02-0.21 on X/Z). It is
+#     the sagittal angle already kept, re-zeroed.
+#   - NOT a clean function of it: slope ~0.96-0.99 with a per-file offset of -75
+#     to -88 deg and max residual 4-152 deg. The unmodeled remainder IS the
+#     firmware's zeroing convention -- precisely the firmware-version signal the
+#     measured-only rule exists to strip.
+#   - DEAD on 12 of 180 (file, side) pairs: zero-variance, and twice frozen at a
+#     NONZERO constant, which no `!= 0` guard would catch.
+#   - The bridge had no far side: the open dataset is not in the repo (5.7), and
+#     nothing downstream ever read the column.
+# Recoverable by name from data/raw if that dataset ever lands -- same standing as
+# `loco` and `L/R_Ref_Force` below. The mechanism stays; the entry is gone.
+KEEP_EXCEPTIONS: dict[str, str] = {}
 
 # Kept when present: human ground truth travels with the data.
 KEEP_IF_PRESENT = ("Label",)

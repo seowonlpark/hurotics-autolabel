@@ -127,8 +127,14 @@ for the measured proof. The odd rates (99.3789 / 99.688 / 99.961 Hz) are *timest
 **Keeps measured channels only.** The device *measures* IMU channels and load cells; it *computes*
 Cadence, Stride Length, GCP, admittance, PID state. Computed columns are the firmware's opinion, not
 observation. Dropping them collapses the schema variants into 1 and removes firmware-version signal
-from the feature set. Documented exceptions live in `KEEP_EXCEPTIONS` in `stages/s1_clean/config.py`,
-each with its reason.
+from the feature set. The exception mechanism (`KEEP_EXCEPTIONS` in `stages/s1_clean/config.py`) is
+**currently empty** — canonical == measured, no caveat. The one former exception, `Hip_Deg_L/R`, was
+cut once measured: 0.991 correlated with the `Deg_Y` already kept, its residual carrying nothing but
+the firmware's zeroing convention, and dead on part of the corpus. See `DOMAIN_NOTES` §9.
+
+Note that "measured" means *not app-layer-computed*. The `Deg` channels are the IMU's own on-sensor
+fusion output, not a transducer reading — kept, but see `DOMAIN_NOTES` §4.6 before treating them as
+ground truth.
 
 ---
 

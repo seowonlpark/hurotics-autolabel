@@ -195,10 +195,29 @@ Statistics over a whole file say nothing about a state that occupies 5% of it. S
   Any feature mixing trunk and thigh gyro without conversion is off by **57.3×**. The clean-layer
   trust check reproduces this from the sagittal regression slope: **0.98** on L/R (deg/s) vs
   **0.017** (≈1/57.3) on B (rad/s).
-- **Axis: `d(Deg_Y)/dt` tracks `Gyro_Z`, not `Gyro_Y`** on the large majority of files per side, but
-  this is **not universal**. Two files (`00001_69_…10_4_0`, `00038_69_…1_15_11_28`) map
-  `B_Deg_Y → B_Gyro_Y` at r≈0.96–0.99 (one sign-flipped). So the axis is **detected per file, never
-  asserted from a table**: a blanket Y↔Z swap would corrupt exactly those.
+- **Axis: the Deg↔Gyro name crossing is DEVICE-WIDE, not a trunk defect
+  [measured, 2026-07-20 — corrects an earlier trunk-only framing].** `d(Deg_Y)/dt` tracks `Gyro_Z`
+  on **every** side, not just B. Over the clean corpus, `argmax|r|` of `corr(d(Deg_Y)/dt, Gyro_axis)`
+  on files confident enough to answer (|r| ≥ 0.9):
+
+  | side | files that answer | axis picked | median \|r\| vs `Gyro_Y` | vs `Gyro_Z` |
+  |---|---|---|---|---|
+  | L | 62 | **Z, unanimously** | 0.161 | **0.986** |
+  | R | 65 | **Z, unanimously** | 0.147 | **0.987** |
+  | B | 47 | Z ×45, Y ×2 | 0.316 | **0.961** |
+
+  So there is no "the legs are fine, the trunk is swapped." **`L_Gyro_Y` is no more sagittal than
+  `B_Gyro_Y` is** — the column *name* and the physical axis disagree on all three sides identically.
+  Treat this as a naming convention of the device, not a bug in one IMU.
+
+  **Consequence for anyone reading the parquet: `*_Gyro_Y` is NOT the sagittal rate.** The channel
+  that matches `*_Deg_Y` (and hence `*_ang_LPF`) is `*_Gyro_Z`. Resolve it from the file's
+  `channel_trust.json` (`sides.<side>.sagittal_gyro_axis`), never from the column name.
+
+  Still **not universal**, which is why it is detected and not tabled: two files
+  (`00001_69_…1_14_10_4_0`, `00038_69_…1_15_11_28`) map `B_Deg_Y → B_Gyro_Y` at |r| ≈ 0.96–0.99 (one
+  sign-flipped). A blanket Y↔Z swap would corrupt exactly those — and, per the table above, would
+  have to be applied to L and R too, which the earlier trunk-only framing would have missed.
 - `Deg_Y` needs **no sign normalization** — raw L vs R is already anti-phase in 84% of files.
 
 `Deg_Y` is the sagittal (flexion) channel. This is the channel the swap rule reads.
@@ -212,6 +231,12 @@ that they did (11.1, density needs mass). Axes are **recorded, not reordered** �
 Every clean file's B-side is normalized rad/s→deg/s; static sides abstain; a couple of files show a
 confident `B_Deg_Y→B_Gyro_Y` axis anomaly (named above). Per-run rollups live in `clean_report.md`
 and the per-file `channel_trust.json`.
+
+**Verified on the clean output [measured, 2026-07-20]:** re-regressing `Gyro_Z` on `d(Deg_Y)/dt`
+*after* cleaning gives a median slope of **0.987 / 0.984 / 0.986** for L / R / B. The 57.3× is gone —
+B reads deg/s in the parquet like everything else. Note what this check does and does not cover: it
+confirms the **unit** fix landed, and it re-confirms the axis crossing (it had to be run against
+`Gyro_Z`, not `Gyro_Y`, to produce a slope near 1 at all).
 
 ### 4.2 Yaw is drift-contaminated — but per-file, not wholesale **[measured]**
 Original **[reported]**: in treadmill data yaw correlated with session time at r ≈ −0.95, measuring
@@ -231,6 +256,12 @@ Belly/trunk placement was inconsistent between subjects, and may have been tread
 trials. The raw family still carries `B_Deg_*` / `B_Gyro_*` / `B_Acc_*`; treat trunk channels as
 suspect until placement consistency is established per session.
 
+**This flag is about PLACEMENT only.** It is not an axis-labeling flag and it is not a unit flag:
+the Deg↔Gyro name crossing is device-wide (§4.1b), and the rad/s units are fixed in the clean layer.
+The two `B_Deg_Y→B_Gyro_Y` files are an axis anomaly, tracked in §4.1b, not evidence of bad trunk
+placement. Keep the two risks separate — conflating them makes the trunk look doubly untrustworthy
+and lets the L/R axis crossing hide.
+
 ### 4.4 `Time` is metadata, not a feature **[decided]**
 Used for dt / rate / segmentation only. Never fed to a model.
 
@@ -241,6 +272,36 @@ label that fails inspection cannot validate anything. (It is also an outdated al
 
 Not ground truth, not a feature. Must be dropped **by name** — in `0fda484e` files, dropping index
 47 would delete the step counter instead.
+
+### 4.6 `Deg` is a FUSED ESTIMATE, not a transducer reading **[decided, 2026-07-20]**
+
+The measured-vs-computed line in §9 is real but its label is too coarse. An IMU has exactly two
+transducers — a rate gyro and an accelerometer. **Angle is not among them.** `L/R/B_Deg_*` is the
+sensor's onboard fusion output (gyro integration corrected by the gravity vector, Kalman or
+complementary). It is *computed*; it just happens on the sensor die instead of in app-layer firmware.
+
+The honest partition is three-way, not two-way:
+
+| tier | channels | trust |
+|---|---|---|
+| **transducer** | `*_Gyro_*`, `*_Acc_*`, `L LC` / `R LC` | raw observation |
+| **on-sensor fusion** | `*_Deg_*` | computed, but vendor-fixed and firmware-*version*-stable |
+| **app-layer compute** | `Cadence`, `Step`, `Stride Length`, `Hip_ROM`, `GCP`, `Hip_Deg_*`, `loco`, admittance / PID state | the firmware's opinion; churns with firmware version |
+
+**This does not change what S1 keeps.** The drop rule targets the third tier, and that is still
+correct — tier 3 is what churns column position between variants and bakes in the era confound (§9).
+`Deg` stays.
+
+**What it changes is how `Deg` may be described.** Do not call it ground-truth measurement:
+- It is the reason **§4.2 yaw drift exists at all.** Drift is what dead-reckoned fusion does with no
+  magnetometer to correct heading. §4.2 reports drift as an empirical oddity; this is its mechanism,
+  and it predicts the finding: `Deg_Z` (heading, unobservable from gravity) drifts, while `Deg_Y`
+  (pitch, continuously corrected by the gravity vector) does not.
+- It means `Gyro` is the *more primitive* channel, not the derived one. §4.1's `Gyro == d(Deg)/dt`
+  is true, but the causality runs the other way: `Deg` was integrated **from** `Gyro`. That is why
+  the correlation is so tight (r = 0.999) — it is near-tautological, not independent corroboration.
+- Its fusion parameters are a device property. Two revisions may fuse differently even where every
+  column name matches.
 
 ---
 
@@ -468,10 +529,39 @@ training set is physically consistent, even though the *named* source axis diffe
   **(b)** computed values depend on firmware version, so training on them partly learns which
   firmware produced the file — the era confound baked into the feature set.
   Canonical = **30 measured columns**, defined as `KEEP_MEASURED` in `stages/s1_clean/config.py`.
-- **Documented exceptions to measured-only** (`KEEP_EXCEPTIONS`): `Hip_Deg_L` / `Hip_Deg_R` are
-  computed but retained, because the open-source gait dataset's `Hip_Flex_L/R` is their direct
-  analogue and that dataset is the primary real training asset. Deriving hip angle from thigh IMUs
-  instead would require the firmware's convention, which is unresolved. **[open]**
+  (The rule targets *app-layer* compute; on-sensor fusion is a separate tier — see §4.6.)
+- **The column count is 30, 32 or 33 depending on which question is asked. All three are right
+  [measured, 2026-07-20]** — recorded because the drift looked like a bug and is not:
+  | count | is | where it comes from |
+  |---|---|---|
+  | **30** | `KEEP_MEASURED` | `Time` + 27 IMU (3 sides × Deg/Gyro/Acc × XYZ) + 2 load cells |
+  | 32 | 30 + the `Hip_Deg` pair | **historical — no longer produced**, see below |
+  | **33** | what is on disk | 32 + `segment`, which the clean layer *adds* |
+
+  `segment` is pipeline metadata (§3.1), not a raw column, which is why it appears in no `KEEP_*`
+  tuple. `Label` is **not** among these: raw carries no labels (§0), so `KEEP_IF_PRESENT` only fires
+  on the labeled family. **After the `Hip_Deg` removal below, raw-side clean output is 31 columns**
+  (30 measured + `segment`).
+- **`KEEP_EXCEPTIONS` is now EMPTY — the measured-only rule has no exceptions
+  [decided, 2026-07-20 — reverses the entry below it].** `Hip_Deg_L` / `Hip_Deg_R` were retained as
+  a bridge to the open-source gait dataset's `Hip_Flex_L/R`. Removed, because every premise of the
+  exception failed when checked:
+  - **It is redundant.** `corr(Hip_Deg_<side>, <side>_Deg_Y)` = **0.991** median across the clean
+    corpus (vs ~0.02–0.21 against X and Z). It is the sagittal angle S1 already keeps, re-zeroed.
+  - **But not a clean function of it**, which is worse than being redundant. Affine fits give slope
+    ~0.96–0.99 with a per-file offset of −75 to −88°, and max residual **4° to 152°**. The
+    unmodeled remainder *is* the firmware's zeroing convention — the exact firmware-version signal
+    the measured-only rule exists to strip (§9 consequence **b**). The old entry flagged that
+    convention as `[open]`; the resolution is that we do not need it.
+  - **It is dead on part of the corpus.** Zero-variance on **12 of 180** (file, side) pairs — six
+    files, four flat at `0.0`, and twice **frozen at a nonzero constant** (`-7.42`, `+9.58`), which
+    no `!= 0` sanity guard would catch.
+  - **The bridge had no far side.** §5.7: the open dataset is *not in the repo*. Nothing downstream
+    ever read the column — S2 trains on the four rotational rev* features only.
+
+  Recoverable by name from `data/raw/` if that dataset ever arrives — the same standing as `loco`
+  and `L/R_Ref_Force`. **The exception mechanism stays in place; it just holds nothing.** An empty
+  `KEEP_EXCEPTIONS` is a stronger invariant than a populated one: canonical == measured, no caveat.
 - `L_Ref_Force` / `R_Ref_Force` are excluded as controller setpoints (commanded, not measured).
   **[open]** — not yet confirmed with the firmware side.
 - Storage cost is a file-format problem, not a column-count problem: clean output is **parquet**.
@@ -581,6 +671,7 @@ fitting. This belongs in the S3 agent's system prompt verbatim.
 
 | Date | Phase | Added |
 |---|---|---|
+| 2026-07-20 | 3 | Provenance audit (4 flags raised on the 33-column canonical set, all checked against the corpus). **CORRECTED §4.1b:** the Deg↔Gyro Y↔Z crossing is **device-wide, not a trunk defect** — `d(Deg_Y)/dt`→`Gyro_Z` unanimously on L (62 files) and R (65), and 45/47 on B; `L_Gyro_Y` is no more sagittal than `B_Gyro_Y` (median \|r\| 0.16 vs 0.99). The earlier trunk-only framing would have sent a fix to one side of a three-side convention. Post-clean slopes 0.987/0.984/0.986 confirm the unit fix landed. **§4.3 narrowed** to placement risk only. **NEW §4.6:** `Deg` is on-sensor *fusion*, not a transducer reading — three-tier provenance (transducer / on-sensor fusion / app-layer compute); explains §4.2 yaw drift mechanistically and demotes §4.1's r=0.999 from corroboration to near-tautology. **CUT `Hip_Deg_L/R`** — `KEEP_EXCEPTIONS` is now empty: 0.991 redundant with `Deg_Y`, residual = firmware zeroing convention, zero-variance on 12/180 (file,side) pairs (twice frozen nonzero), and the open dataset it bridged to is not in the repo (§5.7) — nothing read it. **§9 count reconciliation:** 30 / 32 / 33 all correct, different questions; raw-side clean output is now **31** (30 + `segment`). |
 | 2026-07-16 | 0 | v1 seeded: channel trust, rate confound, label semantics, eval rules, NumPy gotcha |
 | 2026-07-16 | 1 | v2 from the real corpus: 5 variants / 45-col contract / position-is-a-lie; two rate eras; quantization tiers; anti-aliasing proof; segments + startup burst; -1 vs 255; rev2 as lossy family; provenance tags |
 | 2026-07-20 | 2→3 | Phase 2 gate CLOSED: Lu signed off on the exception review (7 `needs_human` = §2.6 broken-clock batch → re-export; 16 `known_expected`; 0 novel). Dead code removed (`Resolution.has`, unreachable `legacy_algo` interp-role). Count-free sweep extended past the prose into code comments, the generated `clean_report.md`, and surviving inventory counts (schema-variant / subject / startup-burst tallies); named-file example stats and this changelog keep their numbers. Phase 3 (S2 loop) starting. |
