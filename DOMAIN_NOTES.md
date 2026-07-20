@@ -340,7 +340,7 @@ rows), and they are counted, not silently discarded.
 ### 6.2 The raw→rev2 mapping is RESOLVED EXACTLY **[measured, 2026-07-20 — supersedes the earlier approximation]**
 Established by reproducing the labeled columns from raw to **~1e-13 (float roundoff)** on **19 paired
 recordings** — annotated trials and raw files with identical `Time` vectors and row counts, found by
-matching `t[0]`/`t[-1]`/`n`. Source: HUROTICS MATLAB (`LPF.m`, `timestamp.m`, `csv2mat.m`).
+matching `t[0]`/`t[-1]`/`n`. Source: HUROTICS MATLAB LPF FILES (`LPF.m`, `timestamp.m`, `csv2mat.m`).
 
 **The transform.** First-order *causal* IIR (single pole), applied per channel:
 
