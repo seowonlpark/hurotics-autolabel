@@ -337,13 +337,66 @@ reports both.) Consequence: **never assume a rate for this family** — detect p
 downstream sees one rate. Dropped in the process: only the §3.2 startup-burst fragments (~0.011% of
 rows), and they are counted, not silently discarded.
 
-### 6.2 The raw→rev2 mapping is largely resolved **[measured]**
-`*_ang_LPF ≈ LPF(*_Deg_Y)`, and `*_angvel_LPF = d(*_ang_LPF)/dt` (r=0.999, §4.1). Supported by:
-`Deg_Y` is the sagittal channel, already anti-phase L vs R in 84% of files (§4.1b); and `R_ang_LPF`
-opens at 85.43 against raw `R_Deg_Y` at 85.69.
+### 6.2 The raw→rev2 mapping is RESOLVED EXACTLY **[measured, 2026-07-20 — supersedes the earlier approximation]**
+Established by reproducing the labeled columns from raw to **~1e-13 (float roundoff)** on **19 paired
+recordings** — annotated trials and raw files with identical `Time` vectors and row counts, found by
+matching `t[0]`/`t[-1]`/`n`. Source: HUROTICS MATLAB (`LPF.m`, `timestamp.m`, `csv2mat.m`).
 
-**[open]** LPF parameters remain unknown. Incoming raw-format labeled data **[reported]** removes
-the need for a bridge, so this is no longer blocking.
+**The transform.** First-order *causal* IIR (single pole), applied per channel:
+
+    a     = 2*pi*dt*fc / (2*pi*dt*fc + 1)
+    y[0]  = x[0]
+    y[n]  = a*x[n] + (1-a)*y[n-1]
+
+with **fc = 1 Hz** for BOTH angle and angular velocity (`csv2mat.m` sets `f_ang = 1; f_angvel = 1;`
+commented "for locomotion classification"; `f_angvel = 10` is the GCP variant — do not use it here).
+It is **causal, not zero-phase** — it introduces lag. Do NOT substitute `filtfilt`: that would shift
+features relative to labels.
+
+**Two earlier claims here were WRONG:**
+- `*_angvel_LPF` is **not** `d(*_ang_LPF)/dt`. It is `LPF(Gyro)` — filtered gyro, straight from the
+  raw gyro channel (`csv2mat.m` reads angle from cols 2:4/11:13 and angvel from cols 5:7/14:16).
+  The two merely *resemble* each other because `Gyro == d(Deg)/dt` (§4.1).
+- `*_ang_LPF` is **not** always `LPF(Deg_Y)`. The source axis is **device-revision dependent.**
+
+**The sagittal axis is a DEVICE property, not a signal property — resolve it by schema variant:**
+
+| variant | `*_ang_LPF` ← | `*_angvel_LPF` ← | revs | raw files |
+|---|---|---|---|---|
+| `fb5ea2c2` | `Deg_X` | `Gyro_X` | rev13, rev14 | 62 |
+| `0fda484e` | `Deg_Y` | `Gyro_Z` | rev7, rev8 | 11 |
+| `4bfd6ab2` | `Deg_Y` | `Gyro_Z` | rev4 | 5 |
+
+`0fda484e`/`4bfd6ab2` are exactly the documented convention (`SAGITTAL_DEG_AXIS="Y"`,
+`DOCUMENTED_SAGITTAL_GYRO_AXIS="Z"`, the §4.1b Y↔Z swap). `fb5ea2c2` is the anomaly family — and S1
+independently flagged it: the raw file paired with `rev13_trial_1` is `00001_69_…10_4_0.csv`, one of
+the two files §4.1b names by hand and one of the two the Phase-2 exception agent flagged.
+Coverage: **78 of 97 raw files (80%)**; unmapped are `e5f2660f` (mostly the §2.6 quarantine family)
+and `86069795`. Unknown variant ⇒ **abstain**, do not guess.
+
+**Signal-only axis detection DOES NOT WORK [measured — all rules scored below chance].** Over the 19
+ground-truth pairs: variant lookup **100%**, gait-band energy 16%, antiphase×amplitude 16%, raw
+amplitude 5% — against a 33% random baseline. Worse than chance is systematic, not noise: the
+highest-amplitude Deg axis is reliably *not* sagittal, because `Deg_Z`'s variance is dominated by yaw
+drift (§4.2). L/R antiphase is **necessary but not sufficient** — every projection of a planar leg
+swing is antiphase, so it cannot discriminate. Do not re-attempt these; extend the lookup instead.
+
+**The labeled features ARE all genuinely sagittal [measured].** Independent of any raw file, every
+one of the 9 revs shows L/R antiphase during walking (median r −0.43 to −0.86), including the revs
+with no raw counterpart (rev2/3/5/6). So the exporter picked a sagittal channel every time and the
+training set is physically consistent, even though the *named* source axis differs by revision.
+
+**Two defects in the upstream MATLAB [measured] — neither corrupted the current labeled set:**
+- `timestamp.m` returns only the **last** inter-sample interval: its loop overwrites `del_t` every
+  pass (the commented-out variant that accumulates `time_list` was the intent). With
+  `time_temp = time{i,j}` set once at `k==1`, one Δt filters the whole trial. If the final two
+  timestamps ever tie, `a = 0`, the recursion becomes `y[n] = y[n-1]`, and the output **freezes flat
+  for the entire trial, silently** — the §2.6 failure mode exactly. Checked all 44 trials:
+  last-dt/median-dt ∈ [0.90, 1.28], no zeros, so current features are sound. Fix: return the vector,
+  or use `median(diff(time))`, never `diff(end)`.
+- `csv2mat.m:35` does `data_table(1:5:end,:)` — **naive 5× decimation, no anti-aliasing**, precisely
+  what §2.5 forbids. The annotated set was NOT produced with it active (paired row counts are
+  identical), so labels are clean; but it will alias the next export that runs through it.
 
 ---
 
