@@ -461,10 +461,19 @@ features relative to labels.
 | `0fda484e` | `Deg_Y` | `Gyro_Z` | rev7, rev8 | 11 |
 | `4bfd6ab2` | `Deg_Y` | `Gyro_Z` | rev4 | 5 |
 
-`0fda484e`/`4bfd6ab2` are exactly the documented convention (`SAGITTAL_DEG_AXIS="Y"`,
-`DOCUMENTED_SAGITTAL_GYRO_AXIS="Z"`, the §4.1b Y↔Z swap). `fb5ea2c2` is the anomaly family — and S1
-independently flagged it: the raw file paired with `rev13_trial_1` is `00001_69_…10_4_0.csv`, one of
-the two files §4.1b names by hand and one of the two the Phase-2 exception agent flagged.
+**Every row of this table obeys the §4.1b permutation** (X→X, Y→Z, Z→Y): `fb5ea2c2` pairs `Deg_X`
+with `Gyro_X`, the others pair `Deg_Y` with `Gyro_Z`. So the **`*_angvel_LPF` column above is
+derivable from the `*_ang_LPF` column** and carries no independent information — the only per-variant
+fact here is *which Deg axis the exporter treated as sagittal*.
+
+`fb5ea2c2` is therefore **not** an anomalous *permutation* — it is wired like every other variant.
+It is simply a revision whose sagittal plane is `Deg_X`. (An earlier version of this entry called it
+"the anomaly family" by pointing at `SAGITTAL_DEG_AXIS`/`DOCUMENTED_SAGITTAL_GYRO_AXIS`, constants
+that conflated the permutation with sagittality and have since been **deleted** — see §4.1b.) The
+genuine §4.1b anomalies are the two files whose *permutation* breaks, `B_Deg_Y → B_Gyro_Y`; one of
+them, `00001_69_…1_14_10_4_0.csv`, happens to be the raw file paired with `rev13_trial_1`, which is
+why S1 and the Phase-2 exception agent both flagged it. That coincidence is what made the two
+questions look like one.
 Coverage: **78 of 97 raw files (80%)**; unmapped are `e5f2660f` (mostly the §2.6 quarantine family)
 and `86069795`. Unknown variant ⇒ **abstain**, do not guess.
 

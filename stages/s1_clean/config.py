@@ -120,16 +120,18 @@ UNIT_TO_DEGPS_SCALE = {"deg/s": 1.0, "rad/s": RAD2DEG}
 # and cannot measure sagittality, so it asserts only the former.
 DOCUMENTED_GYRO_PERMUTATION = {"X": "X", "Y": "Z", "Z": "Y"}
 
-# Below this |r| on the sagittal fit, the file is too static for d(Deg_Y)/dt to
-# carry signal — the fit is noise (DOMAIN_NOTES 11.1, "density needs mass"). We do
-# NOT assert a unit from a motionless fit: detection abstains and falls back to the
-# documented convention, recording that it did.
+# Below this |r| the axis is too static for d(Deg_A)/dt to carry signal — the fit is
+# noise (DOMAIN_NOTES 11.1, "density needs mass"). We do NOT assert from a motionless
+# fit: that axis abstains and is recorded as unresolved.
+#
+# Applied PER DEG AXIS, not once per side. Deg_Z is the yaw-like axis, which drifts
+# rather than oscillates (4.2), so its derivative is often noise even mid-walk;
+# scoring the side as a whole would launder that noise into a confident anomaly.
 TRUST_R_FLOOR = 0.9
 
 # The documented convention, used only as the abstention fallback — never as the
 # first answer. Measured across the corpus (DOMAIN_NOTES 4.1b).
 DOCUMENTED_GYRO_UNIT = {"L": "deg/s", "R": "deg/s", "B": "rad/s"}
-DOCUMENTED_SAGITTAL_GYRO_AXIS = "Z"
 
 # --- Yaw / drift trust -------------------------------------------------------
 # DOMAIN_NOTES 4.2: a channel whose value tracks session TIME is measuring elapsed
