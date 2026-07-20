@@ -93,7 +93,7 @@ The gate is what `orchestrator.py` checks before the next stage may run.
 - ☐ `orchestrator.py` runs one trivial agent end-to-end via Agent SDK
 - ☐ PreToolUse logging hook writes `run_log.jsonl`
 - ☐ Per-stage cost logging from SDK result messages → `costs.json`
-- ☐ DOMAIN_NOTES.md v1 seeded with known findings: angvel ringing at rest (±40–80 deg/s) → gradient-derive instead · yaw drift (r ≈ −0.95 vs. session time) → excluded · sampling-rate confound (99.4 vs 100.0 Hz dominated clustering geometry; gyro_energy rate-dependent) · STANDING label includes ramps vs. plateau-only ground truth · NumPy 2.0 `.ptp()` removal
+- ☐ DOMAIN_NOTES.md v1 seeded with known findings: angvel ringing at rest (±40–80 deg/s) → gradient-derive instead *(RETRACTED in v3 — angvel is reliable, §4.1; kept here as the Phase-0 seed of record)* · yaw drift (r ≈ −0.95 vs. session time) → excluded · sampling-rate confound (99.4 vs 100.0 Hz dominated clustering geometry; gyro_energy rate-dependent) · STANDING label includes ramps vs. plateau-only ground truth · NumPy 2.0 `.ptp()` removal
 - ☐ Spend cap set on API account; `max_turns` default defined
 
 ### Phase 1 — S1 deterministic core (2–3 days)

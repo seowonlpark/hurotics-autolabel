@@ -280,7 +280,11 @@ the need for a bridge, so this is no longer blocking.
   against subject leakage. Do not claim cross-subject generalization from it.
 - **Always select by time, never by index.** rev2 samples at **494 Hz, not 500** — jitter
   accumulates to **4.2 s of drift by t=320 s**, so `int(t*fs)` points 4.2 seconds past the event.
-  **[open]** The wide path has not been audited for this.
+  **AUDITED (2026-07-20) [measured]:** `stages/s1_clean/resample.py` is time-safe — every grid is
+  built from real timestamps (`np.arange(t[0], t[-1], …)`) and every value interpolated against the
+  measured time vector, never reconstructed from a rate. A synthetic 494 Hz segment places a
+  true-t=160000 ms event at output **160000.0 ms (err 0.00)**, vs **+1943 ms** under the
+  `int(t*fs)@500` bug. `manifest.py` / `census.py` never invert rate to an index either.
 - **Per-file calibration, never corpus-wide.** A fixed threshold scores `walk_rec = 0.000` on rev8
   (it calls every walking window standing); per-file calibration scores 1.000/1.000 on the same
   file. Do not fit constants to more data — more data yields a better *global* constant, and global
