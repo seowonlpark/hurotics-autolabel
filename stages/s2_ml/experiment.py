@@ -58,6 +58,12 @@ class ExperimentSpec:
     rationale: str                                  # why this should help, in one line
     drop_features: list[str] = field(default_factory=list)
     window_s: float | None = None                   # None => champion/default window
+    # Stride is INDEPENDENT of window length, and that independence is load-bearing.
+    # Tying stride to window (the first version of this) means changing window_s also
+    # changes the training-set size: 2s->4s halved it, 5,226 windows -> 2,477. The
+    # resulting comparison confounds "longer window" with "half the data" and cannot
+    # attribute the difference to either. Leave as None to keep the champion's stride.
+    stride_s: float | None = None
     model_params: dict = field(default_factory=dict)  # overrides on BASE_MODEL_PARAMS
 
     def resolved_params(self) -> dict:
@@ -98,6 +104,49 @@ def git_sha() -> str:
         return "unknown"
 
 
+# The hyperparameters a proposal may touch, with bounds. A whitelist, not a blacklist:
+# an agent-authored dict otherwise reaches the estimator constructor verbatim, where a
+# stray key is at best a crash and at worst a silent resource or determinism change.
+# `random_state` and `n_jobs` are deliberately absent — reproducibility and machine
+# resources are the pipeline's to decide, not a proposal's.
+ALLOWED_MODEL_PARAMS = {
+    "n_estimators": (10, 2000),
+    "max_depth": (1, 100),
+    "min_samples_leaf": (1, 100),
+    "min_samples_split": (2, 100),
+    "max_features": None,       # categorical: "sqrt" | "log2" | float | int
+    "criterion": None,          # categorical: "gini" | "entropy" | "log_loss"
+    "class_weight": None,       # categorical: "balanced" | "balanced_subsample" | None
+}
+WINDOW_S_RANGE = (0.5, 10.0)
+
+
+def validate_spec(spec: ExperimentSpec) -> None:
+    """Reject a proposal that steps outside the vocabulary. Raises ValueError.
+
+    Runs BEFORE any training: a bad proposal should cost nothing and say why.
+    """
+    if not spec.name or not spec.rationale:
+        raise ValueError("a spec needs both a name and a rationale")
+
+    for key, value in spec.model_params.items():
+        if key not in ALLOWED_MODEL_PARAMS:
+            raise ValueError(
+                f"model_params key {key!r} is not permitted; "
+                f"allowed: {sorted(ALLOWED_MODEL_PARAMS)}"
+            )
+        bounds = ALLOWED_MODEL_PARAMS[key]
+        if bounds and value is not None:
+            lo, hi = bounds
+            if not isinstance(value, (int, float)) or not (lo <= value <= hi):
+                raise ValueError(f"model_params[{key!r}]={value!r} outside [{lo}, {hi}]")
+
+    if spec.window_s is not None:
+        lo, hi = WINDOW_S_RANGE
+        if not (lo <= spec.window_s <= hi):
+            raise ValueError(f"window_s={spec.window_s} outside [{lo}, {hi}] s")
+
+
 def select_features(all_feats: list[str], drop: list[str]) -> list[str]:
     """Feature set after drops. Unknown names are an error, not a silent no-op —
     a typo'd drop would otherwise 'pass' while changing nothing."""
@@ -113,8 +162,13 @@ def select_features(all_feats: list[str], drop: list[str]) -> list[str]:
 def run_experiment(spec: ExperimentSpec, trials=None, *, taxonomy: bool = False,
                    stride_s: float = DEFAULT_INFERENCE_STRIDE_S) -> ExperimentResult:
     """Train + score one spec under leave-one-rev-out. The lockbox is never touched."""
+    validate_spec(spec)
     trials = trials if trials is not None else load_dataset()
-    wspec = WindowSpec(window_s=spec.window_s, stride_s=spec.window_s) if spec.window_s else WindowSpec()
+    default = WindowSpec()
+    wspec = WindowSpec(
+        window_s=spec.window_s if spec.window_s else default.window_s,
+        stride_s=spec.stride_s if spec.stride_s else (spec.window_s or default.stride_s),
+    )
     windows = build_windows(trials, wspec)
 
     train_df = windows[(windows["split"] == "train") &
@@ -199,6 +253,40 @@ def record(out_dir: Path, result: ExperimentResult, promoted: bool, reason: str,
                          "balanced_accuracy", "per_rev_macro_f1", "n_features")},
                        indent=2), encoding="utf-8")
     return entry
+
+
+PROPOSALS_FILENAME = "proposals.jsonl"
+
+
+def record_proposal(out_dir: Path, proposal: dict, critic: dict, ran: bool,
+                    note: str = "") -> dict:
+    """Log every proposal and its fate — including ones the critic stopped.
+
+    Kept separate from `experiments.jsonl`, which means "things that were actually
+    measured". A proposal killed before training has no metrics and does not belong
+    there. It still has to be recorded somewhere, though: otherwise the next cycle's
+    experimenter cannot see that an idea was already raised and refused, and will
+    cheerfully propose it again.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "git_sha": git_sha(),
+        "proposal": proposal,
+        "critic": critic,
+        "ran": ran,
+        "note": note,
+    }
+    with (out_dir / PROPOSALS_FILENAME).open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return entry
+
+
+def proposals(out_dir: Path) -> list[dict]:
+    path = out_dir / PROPOSALS_FILENAME
+    if not path.exists():
+        return []
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 def ledger(out_dir: Path) -> list[dict]:
