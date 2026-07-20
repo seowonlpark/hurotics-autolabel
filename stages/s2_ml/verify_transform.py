@@ -25,6 +25,7 @@ from stages.s1_clean.census import fingerprint, read_header, strip_prefix
 from stages.s2_ml.dataset import TIME_COL, _read_raw, find_trials
 from stages.s2_ml.transform import (
     FEATURE_COLUMNS,
+    TRUST_UNCHECKED,
     UnknownVariantError,
     matlab_dt,
     raw_to_features,
@@ -80,7 +81,12 @@ def main() -> None:
         ann = pd.read_csv(ann_path)
         ann.columns = [c.strip() for c in ann.columns]
         try:
-            feat = raw_to_features(raw, vid, dt_s=matlab_dt(raw["Time"].to_numpy(float)))
+            # TRUST_UNCHECKED deliberately: this verifies the transform MATH against
+            # ground truth, on files whose features the MATLAB already produced. The
+            # per-file axis check is a provenance guard for inference on new raw files;
+            # applying it here would make a regression test refuse its own fixtures.
+            feat = raw_to_features(raw, vid, trust=TRUST_UNCHECKED,
+                                   dt_s=matlab_dt(raw["Time"].to_numpy(float)))
         except UnknownVariantError:
             abstained.append((ann_path.name, vid))
             continue

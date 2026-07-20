@@ -212,7 +212,15 @@ Statistics over a whole file say nothing about a state that occupies 5% of it. S
 
   **Consequence for anyone reading the parquet: `*_Gyro_Y` is NOT the sagittal rate.** The channel
   that matches `*_Deg_Y` (and hence `*_ang_LPF`) is `*_Gyro_Z`. Resolve it from the file's
-  `channel_trust.json` (`sides.<side>.sagittal_gyro_axis`), never from the column name.
+  `channel_trust.json` (`sides.<side>.gyro_axis_by_deg_axis`), never from the column name.
+
+  **[decided] vs [measured] — read the tag.** The sentence above is an *instruction to readers*,
+  not a description of what the code does. Enforced since 2026-07-20 on exactly one path:
+  `transform.py:check_axis_trust` refuses a file whose measured permutation conflicts on the axis
+  it is about to read. **Nothing else consults the record.** Before that date this path resolved
+  axes from the documented map alone — S1 measured the answer and no consumer read it. When
+  judging whether an anomaly is *handled*, verify a consumer exists; a note saying a record is
+  "recorded" or "must be consulted" is not evidence that anything consults it.
 
   Still **not universal**, which is why it is detected and not tabled: two files
   (`00001_69_…1_14_10_4_0`, `00038_69_…1_15_11_28`) map `B_Deg_Y → B_Gyro_Y` at |r| ≈ 0.96–0.99 (one
@@ -281,8 +289,16 @@ segments ≥ 5 s): **`Deg_Z` is the yaw-like axis** on every side — median |r|
 minority of files cross |r| ≥ 0.9, and always on `*_Deg_Z` (the flagged channels each run are in
 `clean_report.md` / `channel_trust.json`). So yaw is **flagged per
 channel per file** in `channel_trust.json` (`drift` section), **not dropped wholesale**. It is a
-feature-time exclusion signal; the raw superset is kept. Any yaw-derived feature must consult the
-per-file drift flag.
+feature-time exclusion signal; the raw superset is kept.
+
+**Any yaw-derived feature must consult the per-file drift flag — [decided], and currently
+UNENFORCED [measured, 2026-07-20].** No code reads `drift_contaminated`. The flag is inert rather
+than honoured, and it happens to cost nothing only because no feature reads `Deg_Z` at all: S2
+trains on the four rotational rev\* features, whose sources are the sagittal `Deg` axis and its
+gyro rate (§6.2). **The first yaw-derived feature must add the consumer** — writing one against
+this section and assuming the exclusion already happens would silently train on drift. Recorded
+here because the earlier wording read as a description of pipeline behaviour and the S1 exception
+agent triaged against it.
 
 ### 4.3 The trunk (B) IMU was dropped from rev2 for a real reason **[reported]**
 Belly/trunk placement was inconsistent between subjects, and may have been treadmill-mounted in some
@@ -506,8 +522,35 @@ training set is physically consistent, even though the *named* source axis diffe
 ## 7. Evaluation
 
 - Headline metric: **macro-F1**.
-- Error taxonomy is a strictly precedence-ordered MECE partition:
-  `correct → omission → flicker → late → early → steady_confusion → remainder`.
+- Error taxonomy is a strictly precedence-ordered MECE partition. **Corrected against the
+  implementation [measured, 2026-07-20]** — `locoeval/diagnose.py` in
+  `seowonlpark/hurotics-locotool`, now ported verbatim to `stages/s2_ml/taxonomy.py`:
+
+      correct
+        > omission — a gt segment pred never reaches, split by what pred did instead:
+            · swallowed     — pred flanks it with the SAME label both sides (bout absorbed, no trace)
+            · omission      — pred flanks it with two DIFFERENT labels (transitioned, skipped the class)
+            · edge_omission — touches a recording boundary, so one flank does not exist
+          > flicker — a pred run shorter than 200 ms flanked by equal labels
+            > late  — pred still shows the old label after a gt transition
+              > early — pred already shows the new label before a gt transition
+                > steady_confusion — pred stays in another class for the WHOLE gt segment
+
+  The earlier line here was wrong twice: **there is no `remainder` bucket** (`steady_confusion`
+  absorbs whatever precedence leaves, so the partition closes without a catch-all), and
+  **`omission` splits three ways** — `swallowed` is the one worth watching, since a fully
+  absorbed bout leaves no trace at all. Thresholds: `FLICKER_MAX_MS=200`, `LAG_MAX_MS=1000`,
+  `SUSTAINED_FRACTION=0.5`, `MIN_EVENTS_FOR_STATISTIC=10`, `WEAK_CLASS_F1=0.5`.
+- **The taxonomy is ROW-level (~10 ms) and a windowed classifier cannot be scored by it
+  directly [decided].** A model predicting once per 2 s is piecewise-constant over that
+  span, so it *cannot emit* a run shorter than `FLICKER_MAX_MS` — flicker would read zero
+  by construction, not by merit, and lag would quantize to whole windows. Inference
+  therefore slides the window at a small stride (`stages/s2_ml/predict.py`, 100 ms default,
+  finer than the flicker threshold) and assigns each prediction to the rows around its
+  **centre** — leading-edge assignment would shift every predicted transition half a window
+  late and manufacture `late` rows. Training is unaffected; this is inference-side only.
+  Scoring at row level is also what makes our classifier directly comparable to the
+  incumbent algorithm under its own metrics.
 - The measure layer is **blind**: objective numbers only, no opinion. All judgment lives in diagnose.
 - Ground truth already locates transitions exactly. Do not implement cross-correlation lag search.
 - UNKNOWN is excluded consistently across per-trial and corpus-level metrics.
@@ -713,6 +756,7 @@ fitting. This belongs in the S3 agent's system prompt verbatim.
 
 | Date | Phase | Added |
 |---|---|---|
+| 2026-07-20 | 3 | **"Recorded" ≠ "handled" — audited both places this file claimed handling it did not have.** §4.1b's "resolve it from `channel_trust.json`" and §4.2's "must consult the per-file drift flag" both read as descriptions of pipeline behaviour; **neither had a consumer.** `transform.py` resolved axes from `SAGITTAL_DEG_AXIS_BY_VARIANT` + `DOCUMENTED_GYRO_PERMUTATION` and never opened the per-file record, so a file whose *permutation* breaks on its sagittal axis would have been read on the documented column silently — inert to date only because both known anomalies are B-side and the feature path reads L/R. **FIXED:** `transform.check_axis_trust` hard-fails such a file (same idiom as `UnknownVariantError` — refuse, never guess); `trust` is now a **required** argument on `raw_to_features` with an explicit `TRUST_UNCHECKED` opt-out, so skipping the check is a decision at the call site. Bridge still exact: 19/19 pairs at 7.4e-13. Drift flag left **unenforced and now labelled so** — no yaw feature exists to exclude. **S1 exception agent reworked** for the same root cause: `known_expected`/`novel`/`needs_human` collided on two different axes with no precedence, so the agent now answers two orthogonal questions — `explained` (yes/no/**contradicts**) and `action` (none/human) — and `collapse()` derives the disposition deterministically, so the taxonomy is the pipeline's and not re-decided per run. A contradicted note lands in `novel` (it is a find) with `action` forced to human (never acted on), which was the case the old contradiction rule buried. Queue items now carry machine-derived `handled {value, why}` computed from the real consumers, plus the `conflicts_with_documented` field that was the missing grievance; `confidence` pinned to the disposition, not the cause. Same partition on the current corpus (7 + 2 + 14). |
 | 2026-07-20 | 3 | Provenance audit (4 flags raised on the 33-column canonical set, all checked against the corpus). **CORRECTED §4.1b:** the Deg↔Gyro Y↔Z crossing is **device-wide, not a trunk defect** — `d(Deg_Y)/dt`→`Gyro_Z` unanimously on L (62 files) and R (65), and 45/47 on B; `L_Gyro_Y` is no more sagittal than `B_Gyro_Y` (median \|r\| 0.16 vs 0.99). The earlier trunk-only framing would have sent a fix to one side of a three-side convention. Post-clean slopes 0.987/0.984/0.986 confirm the unit fix landed. **§4.3 narrowed** to placement risk only. **NEW §4.6:** `Deg` is on-sensor *fusion*, not a transducer reading — three-tier provenance (transducer / on-sensor fusion / app-layer compute); explains §4.2 yaw drift mechanistically and demotes §4.1's r=0.999 from corroboration to near-tautology. **CUT `Hip_Deg_L/R`** — `KEEP_EXCEPTIONS` is now empty: 0.991 redundant with `Deg_Y`, residual = firmware zeroing convention, zero-variance on 12/180 (file,side) pairs (twice frozen nonzero), and the open dataset it bridged to is not in the repo (§5.7) — nothing read it. **§9 count reconciliation:** 30 / 32 / 33 all correct, different questions; raw-side clean output is now **31** (30 + `segment`). |
 | 2026-07-16 | 0 | v1 seeded: channel trust, rate confound, label semantics, eval rules, NumPy gotcha |
 | 2026-07-16 | 1 | v2 from the real corpus: 5 variants / 45-col contract / position-is-a-lie; two rate eras; quantization tiers; anti-aliasing proof; segments + startup burst; -1 vs 255; rev2 as lossy family; provenance tags |

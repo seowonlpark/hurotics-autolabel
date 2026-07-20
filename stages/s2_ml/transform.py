@@ -23,11 +23,21 @@ plane is sagittal. Sagittality is per hardware revision, unanswerable from insid
 file, and lives here — resolved against paired ground truth. Because the permutation is
 universal, the only independent per-variant fact is **which Deg axis is sagittal**; the
 gyro axis follows from it, so storing both would invite the two to drift apart.
+
+But "universal" is a corpus finding, not a guarantee, and §4.1b names two files that
+break it. So the variant lookup is checked against the file's own measured record
+(`check_axis_trust`) before any column is read: the lookup says which axis SHOULD be
+sagittal, S1 says whether THIS file obeys the permutation, and a disagreement is fatal.
+Until 2026-07-20 this path resolved axes from the documented map alone and never opened
+`channel_trust.json` — S1 measured the answer and nothing read it. That is why `trust`
+is a required argument with an explicit opt-out rather than an optional one.
 """
 
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -63,6 +73,23 @@ class UnknownVariantError(Exception):
     Deliberately fatal rather than defaulted: guessing the axis feeds the classifier a
     channel that is not the one it was trained on, and nothing downstream would notice.
     """
+
+
+class AxisConflictError(Exception):
+    """Raised when a file's MEASURED permutation contradicts the documented one on the
+    axis this path is about to read.
+
+    Same failure as `UnknownVariantError` and the same remedy — refuse rather than
+    guess. The variant lookup answers "which axis is sagittal for this hardware"; it
+    cannot answer "does this particular file obey the permutation." S1 measures that
+    per file, and until now nothing read the answer.
+    """
+
+
+# Explicit opt-out for callers with no per-file trust record to offer. A sentinel
+# rather than `None`, so skipping the check is a decision in the call site instead of
+# the silent default that let this gap sit open.
+TRUST_UNCHECKED = "trust_unchecked"
 
 
 def alpha(dt_s: float, fc_hz: float) -> float:
@@ -125,14 +152,74 @@ def resolve_axes(variant_id: str) -> tuple[str, str]:
     return deg_axis, DOCUMENTED_GYRO_PERMUTATION[deg_axis]
 
 
-def raw_to_features(df: pd.DataFrame, variant_id: str, dt_s: float | None = None,
+def load_trust(raw_path: Path, repo_root: Path | None = None) -> dict:
+    """The `channel_trust.json` S1 wrote beside a raw file's clean parquet.
+
+    Missing is an error, not an empty record: a raw file with no trust record was never
+    cleaned (quarantined, or S1 has not run), and inventing a permissive default here is
+    exactly the "recorded but never read" hole this check exists to close.
+    """
+    root = repo_root or Path(__file__).resolve().parents[2]
+    p = (root / "data" / "clean" / raw_path.parent.name /
+         f"{raw_path.stem}.channel_trust.json")
+    if not p.exists():
+        raise FileNotFoundError(
+            f"no channel_trust record at {p} for {raw_path.name}. The file was never "
+            f"cleaned (quarantined, or S1 has not run). Run S1, or pass "
+            f"TRUST_UNCHECKED if skipping the axis check is genuinely intended."
+        )
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def check_axis_trust(trust: dict | str, deg_axis: str) -> None:
+    """Refuse a file whose measured permutation breaks on the axis we are about to read.
+
+    Only L and R matter — those are the sides `raw_to_features` reads — and only
+    `deg_axis`, the one this revision treats as sagittal. A conflict on any other axis
+    is real but inert here (`Deg_Z` in particular is the yaw-like axis whose derivative
+    is often noise, §4.1b), and an abstaining axis is silent rather than dissenting, so
+    it never reaches `conflicts_with_documented` in the first place.
+
+    `trust` is the file's `channel_trust.json`, written beside its clean parquet.
+    """
+    if trust is TRUST_UNCHECKED:
+        return
+    if not isinstance(trust, dict):
+        raise TypeError(
+            f"trust must be a channel_trust record or TRUST_UNCHECKED, got {type(trust)}"
+        )
+    broken = {}
+    for side in ("L", "R"):
+        rec = trust.get("sides", {}).get(side)
+        if rec and deg_axis in rec.get("conflicts_with_documented", []):
+            broken[side] = rec.get("gyro_axis_by_deg_axis", {}).get(deg_axis)
+    if broken:
+        detail = ", ".join(f"{s}_Deg_{deg_axis} -> {s}_Gyro_{g}" for s, g in broken.items())
+        raise AxisConflictError(
+            f"this file's measured permutation breaks on the sagittal axis: {detail}, "
+            f"but the documented map says Deg_{deg_axis} -> "
+            f"Gyro_{DOCUMENTED_GYRO_PERMUTATION[deg_axis]}. Reading the documented "
+            f"column would feed the classifier a channel it was not trained on, and "
+            f"nothing downstream would notice. Resolve the file by hand (DOMAIN_NOTES "
+            f"§4.1b) — do not suppress this."
+        )
+
+
+def raw_to_features(df: pd.DataFrame, variant_id: str, *, trust: dict | str,
+                    dt_s: float | None = None,
                     time_col: str = "Time") -> pd.DataFrame:
     """Build the four rev2 features from a name-resolved raw device frame.
 
     `dt_s` defaults to the median interval; pass `matlab_dt(...)` to reproduce the
     training pipeline bit-for-bit on an un-resampled raw file.
+
+    `trust` is required, not optional: the variant lookup alone cannot tell whether THIS
+    file obeys the permutation, and the honest answer S1 already measured is worthless
+    if the read path defaults to ignoring it. Pass `TRUST_UNCHECKED` to skip the check
+    deliberately.
     """
     deg_axis, gyro_axis = resolve_axes(variant_id)
+    check_axis_trust(trust, deg_axis)
     if dt_s is None:
         dt_s = safe_dt(df[time_col].to_numpy(float))
 

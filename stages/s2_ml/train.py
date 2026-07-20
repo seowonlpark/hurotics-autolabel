@@ -30,6 +30,14 @@ from sklearn.model_selection import LeaveOneGroupOut
 from stages.s2_ml.dataset import load_dataset
 from stages.s2_ml.features import TRANSITION, WindowSpec, build_windows, feature_columns
 from stages.s2_ml.locoeval import evaluate, render, save, transition_report
+from stages.s2_ml.predict import DEFAULT_INFERENCE_STRIDE_S, dense_predict_trial
+from stages.s2_ml.taxonomy import (
+    ERROR_BUCKETS,
+    FLICKER_MAX_MS,
+    LAG_MAX_MS,
+    aggregate,
+    bucket_errors,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -46,6 +54,43 @@ def build_model() -> RandomForestClassifier:
 def trainable(df: pd.DataFrame, split: str = "train") -> pd.DataFrame:
     """Label-pure windows of one split. Transitions are excluded from targets (§5.2)."""
     return df[(df["split"] == split) & (df["label"] != TRANSITION)].reset_index(drop=True)
+
+
+def taxonomy_loro(trials, train_df: pd.DataFrame, feats: list[str], spec: WindowSpec,
+                  stride_s: float) -> dict:
+    """Leave-one-rev-out error taxonomy, scored at ROW level via dense inference.
+
+    Held to the same honesty as the macro-F1 CV: a rev's rows are only ever scored by a
+    model that never saw that rev. Dense inference is what makes the millisecond
+    thresholds meaningful (see predict.py).
+    """
+    per_run = []
+    for rev in sorted(train_df["rev"].unique()):
+        fit = train_df[train_df["rev"] != rev]
+        model = build_model()
+        model.fit(fit[feats].to_numpy(float), fit["label"].to_numpy(int))
+        for tr in trials:
+            if tr.split != "train" or tr.rev != rev:
+                continue
+            for gt, pred, t in dense_predict_trial(model, tr.frame, feats, spec, stride_s):
+                per_run.append(bucket_errors(gt, pred, t))
+    return aggregate(per_run)
+
+
+def render_taxonomy(agg: dict, stride_s: float) -> str:
+    lines = [
+        "## Error taxonomy (row-level, leave-one-rev-out)", "",
+        f"Ported from `hurotics-locotool/locoeval/diagnose.py`; thresholds unchanged "
+        f"(flicker < {FLICKER_MAX_MS:g} ms, lag < {LAG_MAX_MS:g} ms). Scored on dense "
+        f"inference at {stride_s * 1000:.0f} ms so the thresholds are resolvable.", "",
+        f"- row accuracy: **{agg['row_accuracy']:.4f}**  "
+        f"({agg['correct_rows']:,} correct / {agg['total_error_rows']:,} error rows)",
+        f"- dominant error bucket: **{agg['dominant']}**", "",
+        "| bucket | rows | share of errors |", "|---|---|---|",
+    ]
+    for b in ERROR_BUCKETS:
+        lines.append(f"| `{b}` | {agg['counts'][b]:,} | {agg['fractions'][b]:.3f} |")
+    return "\n".join(lines)
 
 
 def cross_validate(df: pd.DataFrame, feats: list[str]) -> tuple[np.ndarray, np.ndarray]:
@@ -67,13 +112,18 @@ def main() -> None:
     ap.add_argument("--out", default="runs/s2_ml")
     ap.add_argument("--window-s", type=float, default=None,
                     help="window length in seconds (§9 open tradeoff)")
+    ap.add_argument("--taxonomy", action="store_true",
+                    help="also run the row-level error taxonomy via dense inference (slow)")
+    ap.add_argument("--stride-s", type=float, default=DEFAULT_INFERENCE_STRIDE_S,
+                    help="dense inference stride in seconds")
     args = ap.parse_args()
 
     out_dir = (REPO_ROOT / args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     spec = WindowSpec(window_s=args.window_s, stride_s=args.window_s) if args.window_s else WindowSpec()
-    windows = build_windows(load_dataset(), spec)
+    trials = load_dataset()
+    windows = build_windows(trials, spec)
     feats = feature_columns(windows)
 
     train_df = trainable(windows, "train")
@@ -98,13 +148,26 @@ def main() -> None:
 
     importances = sorted(zip(feats, model.feature_importances_), key=lambda x: -x[1])
 
+    tax = None
+    if args.taxonomy:
+        print(f"[s2] dense inference @ {args.stride_s * 1000:.0f} ms for the row-level taxonomy...")
+        tax = taxonomy_loro(trials, train_df, feats, spec, args.stride_s)
+        print(f"[s2] row accuracy {tax['row_accuracy']:.4f}, dominant error: {tax['dominant']}")
+        for b in ERROR_BUCKETS:
+            if tax["counts"][b]:
+                print(f"[s2]   {b:<16} {tax['counts'][b]:>8,}  ({tax['fractions'][b]:.3f})")
+
     save(result, out_dir / "locoeval.json", trans)
+    body = render(result, trans, title="S2 champion — leave-one-rev-out CV")
+    if tax:
+        body += "\n\n" + render_taxonomy(tax, args.stride_s)
     (out_dir / "locoeval.md").write_text(
-        render(result, trans, title="S2 champion — leave-one-rev-out CV") + "\n\n"
-        + "## Feature importance (top 12)\n\n"
+        body + "\n\n## Feature importance (top 12)\n\n"
         + "\n".join(f"- `{n}`: {v:.4f}" for n, v in importances[:12]) + "\n",
         encoding="utf-8",
     )
+    if tax:
+        (out_dir / "taxonomy.json").write_text(json.dumps(tax, indent=2), encoding="utf-8")
     (out_dir / "model_meta.json").write_text(json.dumps({
         "model": "RandomForestClassifier",
         "params": MODEL_PARAMS,

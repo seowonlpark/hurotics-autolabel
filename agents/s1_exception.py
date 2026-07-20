@@ -19,34 +19,61 @@ import re
 from pathlib import Path
 
 from agents.base import MODEL_CHEAP, AgentSpec
+from stages.s2_ml.transform import SAGITTAL_DEG_AXIS_BY_VARIANT
 
 REVIEW_FILENAME = "exceptions_review.jsonl"
+
+# Deg axes any known hardware revision treats as sagittal — i.e. the only ones the
+# feature path can read. Derived from the consumer, not restated, so a new variant
+# mapping cannot make this stale (§6.2).
+_SAGITTAL_CANDIDATE_AXES = frozenset(SAGITTAL_DEG_AXIS_BY_VARIANT.values())
+
+# The raw->rev* feature path (`transform.py:raw_to_features`) loops L and R only.
+_DATA_PATH_SIDES = frozenset({"L", "R"})
 
 SYSTEM_PROMPT = (
     "You are the S1 exception triage agent for an IMU locomotion pipeline. The "
     "deterministic clean stage has already measured the data and flagged exceptions. "
     "Your job is to JUDGE them — not to recompute, not to open raw signals.\n\n"
-    "Give each queue item exactly one disposition, chosen by OUTCOME:\n"
-    "  - known_expected: explained by a DOMAIN NOTES finding AND already handled by "
-    "the pipeline, so NO human action is needed (e.g. a recorded gyro axis anomaly, a "
-    "per-file yaw-drift flag that feature code will honour). Cite the section.\n"
-    "  - needs_human: a person must act or decide before this data can be used — even "
-    "if the cause is documented. A quarantined file the pipeline cannot fix (e.g. a "
-    "broken clock that must be re-exported) is needs_human, NOT known_expected. Cite "
-    "the section if the cause is known.\n"
-    "  - novel: NOT explained by any DOMAIN NOTES finding — say what is unexplained. "
-    "This is the case we most want surfaced.\n\n"
+    "Answer TWO independent questions per item. They are orthogonal: do not let one "
+    "decide the other.\n\n"
+    "1. `explained` — does DOMAIN NOTES account for this evidence?\n"
+    "  - \"yes\": a finding covers it and the evidence agrees with that finding.\n"
+    "  - \"no\": no finding covers it. Say what is unexplained. This is the case we "
+    "most want surfaced.\n"
+    "  - \"contradicts\": a finding covers it and the evidence DISAGREES with the "
+    "finding. Name the section and the disagreement. This is also a find — the note "
+    "may be wrong — but never act on it.\n\n"
+    "2. `action` — is a person needed before this data can be used?\n"
+    "  - \"none\": the pipeline already handles it end to end.\n"
+    "  - \"human\": someone must act or decide (re-export, repair, amend a note).\n\n"
+    "Do NOT infer `action` from `explained`. A documented cause can still need a "
+    "person (a broken clock is §2.6-explained and still needs a re-export). An "
+    "unexplained anomaly can be inert. Judge them separately; deterministic code "
+    "collapses the pair into the final disposition.\n\n"
+    "`action` evidence — read `handled` on the queue item:\n"
+    "  Each item carries a machine-derived `handled` {value, why} computed from the "
+    "actual downstream consumers, not from prose. It is the authority on whether the "
+    "pipeline handles this item. DOMAIN NOTES states POLICY; `handled` states what the "
+    "code does. A note saying an anomaly is 'recorded' or that features 'must consult' "
+    "a flag is NOT evidence that anything consumes it. Where the two disagree, follow "
+    "`handled` and set explained=\"contradicts\".\n\n"
     "Rules:\n"
     "  - Judge ONLY from the provided evidence and the DOMAIN NOTES. Do NOT open raw "
     "CSVs to 'eyeball' signals — the notes warn repeatedly that the eyeball is not "
     "truth and whole-file statistics mislead.\n"
-    "  - If evidence contradicts a DOMAIN NOTES finding, do not act on it: mark "
-    "needs_human and say so.\n"
+    "  - `sections`: every DOMAIN NOTES section you relied on, e.g. [\"4.1b\"]. List "
+    "all that apply, not just one. Required non-empty when explained is \"yes\" or "
+    "\"contradicts\"; MUST be [] when explained is \"no\".\n"
+    "  - `confidence` is confidence in THESE TWO FIELDS, not in the underlying cause. "
+    "Being certain that something is unexplained is high confidence, however deep the "
+    "mystery.\n"
     "  - One sentence of rationale per item. Be terse.\n\n"
     "Output ONLY a JSON array, one object per queue item, each exactly: "
-    '{"ref": <the item ref>, "disposition": "known_expected"|"novel"|"needs_human", '
-    '"section": <DOMAIN NOTES section string or null>, "rationale": <one sentence>, '
-    '"confidence": <number 0.0-1.0>}. No text outside the JSON array.'
+    '{"ref": <the item ref>, "explained": "yes"|"no"|"contradicts", '
+    '"action": "none"|"human", "sections": [<DOMAIN NOTES section strings>], '
+    '"rationale": <one sentence>, "confidence": <number 0.0-1.0>}. '
+    "No text outside the JSON array."
 )
 
 S1_EXCEPTION_AGENT = AgentSpec(
@@ -56,6 +83,56 @@ S1_EXCEPTION_AGENT = AgentSpec(
     model=MODEL_CHEAP,
     max_turns=15,
 )
+
+
+def _handled(value: bool, why: str) -> dict:
+    return {"value": value, "why": why}
+
+
+def _handled_quarantine() -> dict:
+    """A quarantined file is EXCLUDED, which is not the same as repaired."""
+    return _handled(False,
+                    "the file is kept out of data/clean so downstream is safe, but the "
+                    "pipeline cannot repair it — recovery needs a person (§2.6)")
+
+
+def _handled_axis_anomaly(side: str, conflicts: list[str]) -> dict:
+    """Is this permutation conflict on a channel the feature path actually reads?
+
+    `transform.py` resolves the sagittal Deg axis per VARIANT, then checks it against
+    this file's own record (`check_axis_trust`). A conflict on a channel it reads is
+    now FATAL, not silent — but fatal is not handled: the file cannot be featurized
+    until a person resolves it. A conflict on a channel it never reads stays inert.
+    That distinction is code, not prose; the notes' "recorded, not reordered" says only
+    that S1 did not mutate, never that a consumer honours the record.
+    """
+    if side not in _DATA_PATH_SIDES:
+        return _handled(True,
+                        f"the raw->rev* feature path reads L/R only, never {side}; no "
+                        f"consumer reads this side's gyro axes")
+    reachable = sorted(set(conflicts) & _SAGITTAL_CANDIDATE_AXES)
+    if not reachable:
+        return _handled(True,
+                        f"conflict is on Deg {sorted(conflicts)}, which no known "
+                        f"variant treats as sagittal, so the feature path never reads it")
+    return _handled(False,
+                    f"conflict touches Deg {reachable}, which the feature path reads "
+                    f"as sagittal on some variant — transform.py's check_axis_trust "
+                    f"hard-fails this file rather than reading the documented column, "
+                    f"so nothing is corrupted, but nothing is featurized either until "
+                    f"someone resolves the axis")
+
+
+def _handled_drift(channel: str) -> dict:
+    """No code consumes `drift_contaminated`; §4.2's "must consult" is policy only."""
+    if channel.endswith("_Deg_Z"):
+        return _handled(True,
+                        "nothing in the pipeline reads the drift flag, but nothing "
+                        "reads Deg_Z either — the feature path uses the sagittal Deg "
+                        "axis and its gyro rate, so this flag is inert, not honoured")
+    return _handled(False,
+                    f"{channel} is not the yaw-like Deg_Z axis §4.2 predicts, and no "
+                    f"code consumes the drift flag, so nothing would exclude it")
 
 
 def build_queue(clean_run_dir: Path) -> tuple[list[dict], dict]:
@@ -75,6 +152,7 @@ def build_queue(clean_run_dir: Path) -> tuple[list[dict], dict]:
                 "type": "whole_file_quarantine",
                 "file": r["file"],
                 "reason": r["reason"],
+                "handled": _handled_quarantine(),
             })
 
     abstain_files = 0
@@ -92,8 +170,13 @@ def build_queue(clean_run_dir: Path) -> tuple[list[dict], dict]:
                     "type": "gyro_axis_anomaly",
                     "file": o["path"],
                     "side": side,
+                    # `conflicts_with_documented` is WHY this is an anomaly — without
+                    # it the agent is judging a permutation with no stated grievance.
                     "detail": {k: rec[k] for k in (
-                        "gyro_axis_by_deg_axis", "is_bijection", "unit", "r")},
+                        "gyro_axis_by_deg_axis", "conflicts_with_documented",
+                        "is_bijection", "unit", "r")},
+                    "handled": _handled_axis_anomaly(
+                        side, rec["conflicts_with_documented"]),
                 })
             for ch in o.get("drift_contaminated", []):
                 queue.append({
@@ -101,6 +184,7 @@ def build_queue(clean_run_dir: Path) -> tuple[list[dict], dict]:
                     "type": "yaw_drift",
                     "file": o["path"],
                     "channel": ch,
+                    "handled": _handled_drift(ch),
                 })
 
     summary = {
@@ -138,15 +222,47 @@ def parse_review(final_text: str) -> list[dict] | None:
     return data if isinstance(data, list) else None
 
 
-_REVIEW_KEYS = ("disposition", "section", "rationale", "confidence")
+_REVIEW_KEYS = ("explained", "action", "sections", "rationale", "confidence")
+
+
+def collapse(explained: str | None, action: str | None) -> tuple[str, str]:
+    """Collapse the agent's two orthogonal judgements into (disposition, action).
+
+    The agent answers two questions that live on different axes; this is the only place
+    the pipeline decides how they combine, so two runs cannot disposition the same item
+    differently. `explained` names the bucket, `action` rides along and is never lost:
+
+        explained    action        disposition
+        yes          none       -> known_expected
+        yes          human      -> needs_human
+        no           (kept)     -> novel
+        contradicts  -> human   -> novel
+
+    Unexplained wins the label because "surface it" is the point of the bucket, and it
+    costs nothing: `action` still carries whether the pipeline is blocked, so a novel
+    item that also needs a person is not demoted to a queue of routine repairs. A
+    contradicted note is a find too — but it is never acted on (§ DOMAIN_NOTES header),
+    so its action is forced, not read.
+    """
+    if explained == "contradicts":
+        return "novel", "human"
+    if explained == "no":
+        return "novel", action if action in ("none", "human") else "human"
+    if explained == "yes" and action in ("none", "human"):
+        return ("known_expected" if action == "none" else "needs_human"), action
+    # Unrecognized pair: judge nothing, escalate. Same conservatism as a parse failure.
+    return "needs_human", "human"
 
 
 def write_review(out_dir: Path, queue: list[dict], decisions: list[dict] | None,
                  final_text: str) -> Path:
     """Write one review row per queue item, agent verdict merged in.
 
-    A queue item with no parseable verdict is conservatively marked needs_human, so a
-    parsing failure never silently drops an exception. Raw text is kept for audit.
+    The agent's two judgements are recorded as given; `disposition` is DERIVED here by
+    `collapse`, never taken from the model — the taxonomy is the pipeline's, not a thing
+    each run re-decides. A queue item with no parseable verdict is conservatively marked
+    needs_human, so a parsing failure never silently drops an exception. Raw text is kept
+    for audit.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     by_ref = {d.get("ref"): d for d in decisions} if decisions else {}
@@ -156,12 +272,15 @@ def write_review(out_dir: Path, queue: list[dict], decisions: list[dict] | None,
             d = by_ref.get(item["ref"])
             if d is None:
                 review = {
-                    "disposition": "needs_human", "section": None,
+                    "explained": None, "action": "human", "sections": [],
+                    "disposition": "needs_human",
                     "rationale": "no parseable agent verdict for this item",
                     "confidence": 0.0, "unparsed": True,
                 }
             else:
                 review = {k: d.get(k) for k in _REVIEW_KEYS}
+                review["disposition"], review["action"] = collapse(
+                    review.get("explained"), review.get("action"))
             fh.write(json.dumps({**item, "review": review}, ensure_ascii=False) + "\n")
     if decisions is None:
         (out_dir / "exceptions_review_raw.txt").write_text(final_text, encoding="utf-8")
