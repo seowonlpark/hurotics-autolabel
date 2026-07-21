@@ -164,7 +164,40 @@ async def phase3(run_dir: Path) -> None:
     print(f"[s2] cost: experimenter ${ex.cost_usd:.4f} + critic ${cr.cost_usd:.4f}")
 
 
-PHASES = {2: phase2, 3: phase3}
+# S3 physics: deterministic core computes anchors + audit + plots, then the hypothesis agent
+# reads the figures and writes hypotheses. code enforces the provenance gate before recording
+# -- an agent's claim is kept only if it points at a real window (PLAN S3).
+async def phase4(run_dir: Path) -> None:
+    from stages.s3_physics.run import S3_OUT_DIR, run as run_s3_core
+    from agents import s3_physics
+
+    # 1. deterministic core -- regenerate the anchor table, audit and figures
+    audit = run_s3_core(S3_OUT_DIR)
+    verdicts = {a: v["verdict"] for a, v in audit["anchors"].items()}
+    print(f"[s3] rate-invariance verdicts: {verdicts}")
+
+    plots_dir = S3_OUT_DIR / "plots"
+    plot_paths = sorted(str(p.resolve()) for p in plots_dir.glob("*.png"))
+    disagreement = [{**d, "plot": str((S3_OUT_DIR / d["plot"]).resolve())}
+                    for d in audit["disagreement"]]
+
+    # 2. the agent reads the figures and proposes hypotheses (read-only)
+    prompt = s3_physics.build_prompt(audit, disagreement, plot_paths)
+    res = await run_agent(s3_physics.S3_HYPOTHESIS_AGENT, prompt, run_dir)
+
+    # 3. gate -- code keeps a hypothesis only if it carries window-level provenance
+    hyps = s3_physics.parse_hypotheses(res.final_text)
+    path, n_ok, n_flagged = s3_physics.write_hypotheses(run_dir, hyps, verdicts, res.final_text)
+
+    if hyps is None:
+        print("[s3] hypotheses did not parse — nothing recorded")
+    else:
+        print(f"[s3] {n_ok} hypotheses passed the provenance gate, {n_flagged} flagged "
+              f"-> {path.name}")
+    print(f"[s3] cost: ${res.cost_usd:.4f}, turns={res.num_turns}")
+
+
+PHASES = {2: phase2, 3: phase3, 4: phase4}
 
 
 def main() -> None:

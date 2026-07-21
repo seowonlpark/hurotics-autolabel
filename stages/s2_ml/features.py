@@ -113,13 +113,13 @@ def label_window(labels: np.ndarray) -> tuple[object, float, float]:
     return (winner if purity >= PURITY_MIN else TRANSITION), purity, unknown_frac
 
 
-# every window of one trial, never spanning a gap
-def windows_of_trial(trial: Trial, spec: WindowSpec) -> pd.DataFrame:
-    rows = []
+# every window of one trial as (metadata, raw slice), never spanning a gap. the single
+# source of the windowing rule -- S3 physics reuses this so the "no window across a gap"
+# and label-purity logic is defined exactly once (§9, rule 2).
+def iter_windows(trial: Trial, spec: WindowSpec):
     frame = trial.frame
     if frame.empty:
-        return pd.DataFrame()
-
+        return
     for seg_id, seg in frame.groupby("segment", sort=True):
         seg = seg.reset_index(drop=True)
         labels = seg[LABEL_COL].to_numpy()
@@ -129,12 +129,18 @@ def windows_of_trial(trial: Trial, spec: WindowSpec) -> pd.DataFrame:
             if label is None:
                 continue
             win = seg.iloc[start:stop]
-            rows.append({
+            meta = {
                 "rev": trial.rev, "trial": trial.trial, "split": trial.split,
                 "segment": int(seg_id), "t_start_ms": float(win[TIME_COL].iloc[0]),
                 "label": label, "purity": purity, "unknown_frac": unk,
-                **window_features(win, spec.fs_hz),
-            })
+            }
+            yield meta, win
+
+
+# every window of one trial, never spanning a gap
+def windows_of_trial(trial: Trial, spec: WindowSpec) -> pd.DataFrame:
+    rows = [{**meta, **window_features(win, spec.fs_hz)}
+            for meta, win in iter_windows(trial, spec)]
     return pd.DataFrame(rows)
 
 

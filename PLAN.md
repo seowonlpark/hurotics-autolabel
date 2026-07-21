@@ -149,10 +149,12 @@ second, drift-prone source of truth.
     very end; not a blocker to closing this gate.
 
 ### Phase 4 — S3 (1–2 days)
-- ☐ gk/anchor work ported into stage format
-- ☐ Rate-invariance audit completed for all five anchors; verdicts recorded
-- ☐ Hypotheses reference real windows with provenance
-- ☐ DOMAIN_NOTES updated
+- ☑ gk/anchor work ported into stage format — swap rule (§10) + `ileg_minhalf`/`interleg_offset` (§10.1) + five anchors in `stages/s3_physics/`; faithful to §10 on non-lockbox files
+- ☑ Rate-invariance audit completed for all five anchors; verdicts recorded (`rate_audit.json`) — periodicity/grav_stab/gait_hz **invariant**, antiphase + gyro_energy **rate_dependent** (gyro_energy re-derives id=69)
+- 🟡 Hypotheses reference real windows with provenance — gate **enforced in code** (`agents/s3_physics.validate_hypothesis`), not yet exercised on a live `--phase 4` run
+- ☑ DOMAIN_NOTES updated (§10.4)
+- ☐ **Stride-adaptive window** (product-critical, not polish) — fixed 2 s abstains on slow gait (§9/§10.4); the assistive/rehab population walks slowly, so this is a real lab→clinic generalization requirement. See tracker POSTDAY4 §2.
+- ☑ Lockbox sealed in the stage (train+val only) — S3 feeds an agent, so it must seal `rev8`/`rev13` too, not just the training path (tracker POSTDAY4 §3)
 
 ### Phase 5 — S4 (1 day)
 - ☐ Reporter runs on a full 1→3 run

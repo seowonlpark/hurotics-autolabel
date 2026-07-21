@@ -104,11 +104,25 @@ Trains on the labeled `rev*` trials, grouped and split by `rev` (one subject, on
 lockbox revs sealed from the start. `--taxonomy` scores at row level via dense inference — see
 `DOMAIN_NOTES` §7 for why a windowed classifier cannot be scored by the taxonomy directly.
 
+### S3 — physics anchors (deterministic core, no agent)
+
+```powershell
+python -m stages.s3_physics.run --out runs\s3_physics
+```
+
+Computes the physics anchors per window — the validated **swap rule** (`DOMAIN_NOTES` §10) plus the
+five audited anchors — and writes `anchors.csv`, the per-anchor rate-invariance verdicts to
+`rate_audit.json` (100→50 Hz decimation; `gyro_energy` and `antiphase` come back **rate_dependent**),
+a physics-vs-label disagreement ranking to `disagreement.json`, and one figure per trial under
+`plots/`. The **lockbox revs are sealed here too** — S3 runs on train+val only, because its plots
+feed an agent whose hypotheses reach `DOMAIN_NOTES`. See `DOMAIN_NOTES` §10.4.
+
 ### Agents
 
 ```powershell
 python orchestrator.py --phase 2      # S1 exception triage over the latest clean run
 python orchestrator.py --phase 3      # one S2 champion/challenger cycle
+python orchestrator.py --phase 4      # S3: physics core, then the hypothesis agent
 ```
 
 The S1 exception agent (`agents/s1_exception.py`) reads the clean stage's exception queue
@@ -123,6 +137,15 @@ Phase 3 runs one S2 cycle: `agents/s2_experimenter.py` proposes a single declara
 `experiment.decide()` gates promotion on the measured metric. **Neither agent can promote
 anything.** Every measured outcome appends to `experiments.jsonl`; proposals killed before training
 land in `proposals.jsonl`, so the next cycle can see that an idea was already raised and refused.
+
+Phase 4 runs S3: the deterministic core (`stages/s3_physics/run.py`) regenerates the anchor table,
+the rate-invariance verdicts and the figures, then `agents/s3_physics.py` reads the figures
+(multimodally) and proposes hypotheses as JSON. Code enforces the S3 gate before anything is
+recorded — a hypothesis is kept only if it carries **window-level provenance** (a real rev / trial /
+time window), and every anchor it leans on is annotated with its rate-invariance verdict, so a claim
+resting on a `rate_dependent` anchor cannot pass unflagged. Kept hypotheses land in
+`hypotheses.jsonl`. The agent is read-only and never labels windows — rule discovery, not fitting
+(`DOMAIN_NOTES` §11.3).
 
 Agent system prompts are written to `runs/<run>/system_prompt.txt` and passed to the SDK by path,
 not on the command line — `DOMAIN_NOTES` outgrew the Windows `CreateProcess` limit in a single day
@@ -200,7 +223,7 @@ change the champion outside the S2 promotion path.
 | 1 — S1 deterministic core | complete — schema/rate/gaps, gyro unit+axis trust, yaw-drift trust, degenerate-time-base rejection, quarantine ledger; gate passes (every raw file accounted) |
 | 2 — S1 exception agent | complete — `agents/s1_exception.py` triages the exception queue into known_expected / novel / needs_human with grounded rationale; verified on the real corpus and signed off (gate closed) |
 | 3 — S2 loop | running end to end — dataset/transform/features/train/locoeval/taxonomy built; champion `drop_offset_only` at LORO macro-F1 **0.8862**, promoted from an agent proposal (2 promotions, 5 rejections ledgered). Gate open: replay-reconstructibility unverified, the critic has never rejected a proposal, lockbox still sealed |
-| 4 — S3 physics | not started |
+| 4 — S3 physics | deterministic core built — swap rule + five anchors ported to `stages/s3_physics/`, rate-invariance audit recorded (`antiphase`/`gyro_energy` rate_dependent), per-trial plots + provenance-gated hypothesis agent wired as `--phase 4`; lockbox sealed in the stage. Agent not yet run live; **stride-adaptive window open (product-critical, `DOMAIN_NOTES` §10.4)** |
 | 5 — S4 report | not started |
 | 6 — hardening + handoff | not started |
 

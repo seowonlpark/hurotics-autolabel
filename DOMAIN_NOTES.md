@@ -858,6 +858,34 @@ offset +17°/−22° from baseline — stopped mid-stride, one leg leading); `ST
 In rev2_t1 the last **61.9 s** labeled WALKING is walking at a third the cadence, and the two
 STANDING bouts are **different postures**. The labels are coarser than the signal.
 
+### 10.4 Ported to S3 (2026-07-21) **[measured]**
+
+The swap rule and descriptors are now a pipeline stage (`stages/s3_physics/`), computed on the
+canonical 2 s windows the rest of the pipeline uses. Faithful to §10 on the non-lockbox files:
+rev2_t1 walk-recall **0.994**, rev2_t3 **0.931** (§10 reported 0.989 / 0.930). The **lockbox stays
+sealed** — S3 runs on train+val only. An agent reading a sealed rev's plots would spend its
+independence as surely as training on it would, so the seal is not only the training path (see
+tracker POSTDAY4 §3).
+
+**Five anchors, each with a rate-invariance verdict** (`rate_audit.json`; 100→50 Hz decimation
+through the S1 anti-aliasing filter, judged on walking windows so a silent standing window cannot
+manufacture noise — the §11.1 trap):
+
+| anchor | what | verdict |
+|---|---|---|
+| `gait_hz` | cadence — dominant gait-band frequency of the swing angle | **invariant** |
+| `grav_stab` | steadiness of the gravity-referenced tilt (→1 standing, §4.6) | **invariant** |
+| `periodicity` | rhythm strength (normalized-autocorrelation peak), amplitude-free | **invariant** |
+| `antiphase` | −corr(L_ang, R_ang) | **rate_dependent** — moves even in walking windows; the §6.2 "necessary but not sufficient" caution, now measured |
+| `gyro_energy` | summed `angvel²` over the window | **rate_dependent** — re-derives the id=69 failure from scratch; the sum scales with sample count, so it is a claim about the *grid*, not the body (defined the failing way on purpose) |
+
+**Window length is the product-critical open item.** At a fixed 2 s window the swap rule abstains on
+slow gait — one leg swing does not complete an alternation, so `swap_count` reads 0–1 (§9/§10's known
+weakness, now inherited by the stage). This is **not cosmetic**: the deployment population
+(assistive / rehab) walks slowly and variably, which is exactly where the fixed window fails, so a
+**stride-adaptive window** — length scaled to the detected stride period — is what carries the physics
+from lab cadence to clinic. Flagged, not built (tracker POSTDAY4 §2).
+
 ---
 
 ## 11. Methodology warnings **[measured — each was hit in practice]**
@@ -934,6 +962,7 @@ from.
 
 | Date | Phase | Added |
 |---|---|---|
+| 2026-07-21 | 4 | **S3 physics stage built — Phase 4 deterministic core (§10.4 NEW).** Ported the swap rule (§10) + `ileg_minhalf`/`interleg_offset` (§10.1) + five anchors into `stages/s3_physics/` on the canonical 2 s windows; faithful to §10 on non-lockbox files (rev2_t1 walk-rec 0.994, rev2_t3 0.931). **Rate-invariance audit** (`rate_audit.py`; 100→50 Hz, walking-gated; absolute delta for bounded anchors, relative for ratio-scale): `periodicity`/`grav_stab`/`gait_hz` **invariant**; `antiphase` and `gyro_energy` **rate_dependent** — `gyro_energy` re-derives id=69, defined as the summed-square that fails on purpose so the audit demonstrates itself. Per-trial plots + a physics-vs-label disagreement ranking feed the hypothesis agent (`agents/s3_physics.py`, Read/Grep); code enforces the provenance gate (no window-level evidence ⇒ rejected) and attaches every relied-on anchor's verdict. Wired as `orchestrator.py --phase 4`; `features.iter_windows` refactored out as the single-sourced window iterator. **Lockbox sealed in the stage** (`load_analysis_trials`, train+val only) after it was first — wrongly — computed over rev8/rev13; mistake + fix in tracker POSTDAY4 §3. **Stride-adaptive window** flagged product-critical (§10.4). Agent not yet run live. |
 | 2026-07-21 | 3 | **Per-file calibration MEASURED and SCRAPPED as an S2 lever (§7).** Built per-file posture (recentre `ang` on the at-rest opening, §10.2) + amplitude (rescale `angvel` by a robust per-file scale) calibration onto the corpus-global reference, gate-wired behind a default-off `ExperimentSpec.calibrate`. Against champion `drop_static_offset_family` (0.8977): **posture is a no-op** (+0.0000 — the champion already drops the five posture features; keep-and-calibrate 0.8904 loses to drop 0.8977) and **amplitude regresses** (−0.026) with no label-free scale rescuing it (MAD/p75/p90/p95/p99 monotonic toward but never past baseline, best −0.013). The leave-one-rev-out RandomForest already handles the per-file gain a fixed threshold couldn't, so §7's rev8 `0→1.000` is threshold-only and does not transfer. **Code reverted** — `stages/s2_ml/calibrate.py` removed, `experiment.py`/`replay.py` wiring backed out, the orphaned `calibrate_posture_amplitude` ledger entry dropped (kept `replay.py` exact-replay green); finding preserved in §7. Global-features version stands. |
 | 2026-07-21 | 3 | **Phase-3 gate: two blockers closed, one denominator reconciled.** (1) **Critic bites** — `agents/s2_critic_probe.py` fed the live critic 3 proposals it must not approve (a verbatim ledger repeat, a cosmetic `window_s=4` repeat, and a false `GAIT_BAND_HZ` premise); all 3 rejected, the critic verifying the premise against `features.py` and citing ledger entries by name ($0.23). (2) **Reconstructibility demonstrated** — `stages/s2_ml/replay.py --name drop_angvel_dom_hz` replays the at-HEAD champion **EXACT** (≤1e-9), so a same-sha ledger entry is a faithful revert unit. (3) **Incumbent reconciled** (§7): the naive `0.519`-vs-`0.888` `steady_confusion` gap was cross-recording (7/8 `loco` pairs are the sealed rev13 lockbox); on the one shared non-lockbox recording, same rows, ours is **LOWER** (0.016 vs 0.086) — directional, pending lockbox. Current champion `drop_angvel_dom_hz` macro-F1 0.8886. |
 | 2026-07-21 | 3 | **RETIRED header-variant tracking (code + docs), per Lu — it drove no decision.** Once S1 drops computed columns every header shape collapses into one canonical schema (§9) and columns are read by name (§1.3), so the variant fingerprints (`fb5ea2c2` etc.) were reporting-only — nothing branched on them. Removed `Variant`/`fingerprint`/`build_registry`/`stable_prefix` and the `variant_id` field from `census.py`; dropped `variants.json` and the variant tables from `run.py`'s `census.md` (now a name-based schema report: files, families, unregistered-column alarm); dropped `variant_id` from `manifest.py` and `verify_transform.py`. Reworded stale comments in `config.py`/`clean.py`/`channel_trust.py`/`transform.py`/`s1_exception.py` (one referenced the already-deleted `SAGITTAL_AXIS_BY_VARIANT`). Docs: §1.1 rewritten as "one canonical schema"; hash IDs and the per-variant tables in §2.1/§4.1b/§6.2 removed, load-bearing findings (resolve-by-name, 45-col contract, device-wide permutation, always-Y) kept. No data-path change: `verify_transform` still exact, S1 gate unchanged. |
