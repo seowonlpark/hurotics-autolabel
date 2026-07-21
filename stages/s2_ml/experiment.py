@@ -18,6 +18,8 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import LeaveOneGroupOut
 
+from stages.s2_ml.calibrate import MODES as CALIBRATION_MODES
+from stages.s2_ml.calibrate import CalibrationConfig, calibrate_trials, summarize
 from stages.s2_ml.dataset import load_dataset
 from stages.s2_ml.features import TRANSITION, WindowSpec, build_windows, feature_columns
 from stages.s2_ml.locoeval import evaluate
@@ -48,6 +50,9 @@ class ExperimentSpec:
     # "longer window" with "less data". None keeps the champion's stride
     stride_s: float | None = None
     model_params: dict = field(default_factory=dict) # overrides on BASE_MODEL_PARAMS
+    # per-file calibration mode (calibrate.MODES) or None. None reproduces the global-features
+    # champion exactly; a mode recentres/rescales each file onto the corpus-global reference
+    calibrate: str | None = None
 
     # base params with this spec's overrides applied
     def resolved_params(self) -> dict:
@@ -68,12 +73,15 @@ class ExperimentResult:
     n_features: int # features after drops
     n_train_windows: int # training windows used
     taxonomy: dict | None = None # row-level error taxonomy, if run
+    calibration: dict | None = None # per-file calibration summary, if spec.calibrate set
 
     def to_dict(self) -> dict:
         d = {"spec": self.spec.to_dict(), "macro_f1": self.macro_f1,
              "accuracy": self.accuracy, "balanced_accuracy": self.balanced_accuracy,
              "per_rev_macro_f1": self.per_rev_macro_f1,
              "n_features": self.n_features, "n_train_windows": self.n_train_windows}
+        if self.calibration:
+            d["calibration"] = self.calibration
         if self.taxonomy:
             d["taxonomy"] = {"row_accuracy": self.taxonomy["row_accuracy"],
                              "dominant": self.taxonomy["dominant"],
@@ -128,6 +136,9 @@ def validate_spec(spec: ExperimentSpec) -> None:
         if not (lo <= spec.window_s <= hi):
             raise ValueError(f"window_s={spec.window_s} outside [{lo}, {hi}] s")
 
+    if spec.calibrate is not None and spec.calibrate not in CALIBRATION_MODES:
+        raise ValueError(f"calibrate={spec.calibrate!r} not in {sorted(CALIBRATION_MODES)}")
+
 
 # feature set after drops; unknown names are an error, not a silent no-op (a typo'd drop
 # would otherwise 'pass' while changing nothing)
@@ -146,6 +157,13 @@ def run_experiment(spec: ExperimentSpec, trials=None, *, taxonomy: bool = False,
                    stride_s: float = DEFAULT_INFERENCE_STRIDE_S) -> ExperimentResult:
     validate_spec(spec)
     trials = trials if trials is not None else load_dataset()
+
+    cal_summary = None
+    if spec.calibrate:
+        cfg = CalibrationConfig(mode=spec.calibrate)
+        trials, gref, records = calibrate_trials(trials, cfg)
+        cal_summary = summarize(spec.calibrate, gref, records)
+
     default = WindowSpec()
     wspec = WindowSpec(
         window_s=spec.window_s if spec.window_s else default.window_s,
@@ -186,7 +204,7 @@ def run_experiment(spec: ExperimentSpec, trials=None, *, taxonomy: bool = False,
 
     return ExperimentResult(spec, result.macro_f1, result.accuracy,
                             result.balanced_accuracy, result.per_rev_macro_f1,
-                            len(feats), len(train_df), tax)
+                            len(feats), len(train_df), tax, cal_summary)
 
 
 # the current champion record, or None
