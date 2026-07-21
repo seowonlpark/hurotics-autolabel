@@ -1,13 +1,5 @@
-"""Eyeball a clean parquet without a parquet viewer.
-
-    python -m stages.s1_clean.peek data/clean/20260520/00220_100_2026_5_20_13_33_0.parquet
-    python -m stages.s1_clean.peek data/clean/**/*.parquet            # columns of every clean file
-    python -m stages.s1_clean.peek <file.parquet> --csv               # write a .peek.csv beside it
-
-Parquet is ~5-10x smaller and dtype-safe, but you can't open it in a text editor.
-This prints the kept columns (proof of what the clean stage pruned) + a head sample,
-and can dump a CSV twin for a spreadsheet. It never touches the parquet itself.
-"""
+# eyeball a clean parquet without a viewer: print kept columns + a head sample,
+# optionally dump a .peek.csv twin. read-only. see README for usage.
 
 from __future__ import annotations
 
@@ -18,6 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 
+# print columns + head for each matched parquet; optionally write a .peek.csv twin
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("paths", nargs="+", help="parquet path(s) or glob(s)")

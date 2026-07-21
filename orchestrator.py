@@ -1,9 +1,5 @@
-"""Stage orchestrator. Deliberately dumb: sequence, gate, log. No intelligence here.
-
-Usage:
-    python orchestrator.py --phase 2      # S1 exception triage
-    python orchestrator.py --phase 3      # S2 champion/challenger cycle
-"""
+# stage orchestrator -- deliberately dumb: sequence, gate, log; no intelligence here
+# --phase 2 = S1 exception triage, --phase 3 = S2 champion/challenger cycle. see README.
 
 from __future__ import annotations
 
@@ -29,12 +25,12 @@ from agents import s2_critic, s2_experimenter
 
 REPO_ROOT = Path(__file__).resolve().parent
 RUNS_DIR = REPO_ROOT / "runs"
-CLEAN_RUN_DIR = RUNS_DIR / "s1_clean"  # where `python -m stages.s1_clean.clean` writes its ledgers
-S2_RUN_DIR = RUNS_DIR / "s2_ml"        # champion.json + experiments.jsonl live here
+CLEAN_RUN_DIR = RUNS_DIR / "s1_clean" # where the clean stage writes its ledgers
+S2_RUN_DIR = RUNS_DIR / "s2_ml" # champion.json + experiments.jsonl live here
 
 
+# current HEAD short sha; runs/ is gitignored, so each run records its commit
 def git_sha() -> str:
-    """runs/ is gitignored, so each run records the commit that produced it."""
     try:
         return subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True
@@ -43,8 +39,8 @@ def git_sha() -> str:
         return "unknown"
 
 
+# runs/YYYY-MM-DD_runN -- never overwrite a previous run
 def new_run_dir() -> Path:
-    """runs/YYYY-MM-DD_runN — never overwrite a previous run."""
     today = date.today().isoformat()
     n = 1
     while (RUNS_DIR / f"{today}_run{n}").exists():
@@ -61,11 +57,8 @@ def new_run_dir() -> Path:
     return run_dir
 
 
+# S1 exception triage: code builds the queue and writes the review, the agent only judges
 async def phase2(run_dir: Path) -> None:
-    """S1 exception triage: the agent judges the clean stage's exception queue.
-
-    Deterministic code builds the queue and writes the review; the agent only judges.
-    """
     if not CLEAN_RUN_DIR.exists():
         raise FileNotFoundError(
             f"No clean run at {CLEAN_RUN_DIR}. Run `python -m stages.s1_clean.clean "
@@ -94,14 +87,9 @@ async def phase2(run_dir: Path) -> None:
         print("[s1-exc] WARNING: agent output did not parse — all items marked needs_human")
 
 
+# S2 champion/challenger: experimenter proposes, critic reviews before any training,
+# code decides. promotion is never an agent's call -- decide() gates on measured macro-F1
 async def phase3(run_dir: Path) -> None:
-    """S2 champion/challenger: experimenter proposes, critic reviews, code decides.
-
-    The order matters. The critic runs BEFORE training, so a repeat or an incoherent
-    proposal costs an API call rather than a full leave-one-rev-out sweep. And promotion
-    is never an agent's call — `decide()` applies the margin rule to the measured
-    macro-F1 after the run, whatever either agent believed.
-    """
     from stages.s2_ml.experiment import (
         ExperimentSpec, decide, ledger, load_champion, proposals,
         record, record_proposal, run_experiment,
@@ -122,7 +110,7 @@ async def phase3(run_dir: Path) -> None:
     trials = load_dataset()
     feats = feature_columns(build_windows(trials, WindowSpec()))
 
-    # 1. Propose.
+    # 1. propose
     ex_prompt = s2_experimenter.build_prompt(report_md, rows, champion, feats)
     if prior:
         ex_prompt += ("\nPROPOSALS ALREADY RAISED (some never ran — do not repeat "
@@ -137,7 +125,7 @@ async def phase3(run_dir: Path) -> None:
         return
     print(f"[s2-exp] proposed '{proposal.get('name')}': {proposal.get('rationale')}")
 
-    # 2. Critique, before spending a training run.
+    # 2. critique, before spending a training run
     cr_prompt = s2_critic.build_prompt(proposal, rows, report_md, champion)
     cr = await run_agent(s2_critic.S2_CRITIC_AGENT, cr_prompt, run_dir)
     review = s2_critic.parse_review(cr.final_text)
@@ -151,7 +139,7 @@ async def phase3(run_dir: Path) -> None:
         print(f"[s2] not run (critic: {verdict}); champion unchanged")
         return
 
-    # 3. Run it. Deterministic from here on.
+    # 3. run it -- deterministic from here on
     try:
         spec = ExperimentSpec(
             name=proposal["name"], rationale=proposal["rationale"],
@@ -166,7 +154,7 @@ async def phase3(run_dir: Path) -> None:
         print(f"[s2] spec rejected before training: {exc}")
         return
 
-    # 4. Gate. The metric decides, not the agents.
+    # 4. gate -- the metric decides, not the agents
     promote, why = decide(result, champion)
     record(S2_RUN_DIR, result, promote, why, critic=review)
     record_proposal(S2_RUN_DIR, proposal, review or {}, ran=True, note=why)
@@ -180,15 +168,13 @@ PHASES = {2: phase2, 3: phase3}
 
 
 def main() -> None:
-    # Agent text is prose: em-dashes, arrows, the odd Greek letter. The Windows console
-    # defaults to cp949 here and raises UnicodeEncodeError on the first one — which
-    # would crash the run AFTER the API call was paid for, purely on a print. Replace
-    # unencodable characters instead; garbled output beats a lost run.
+    # agent text carries em-dashes/arrows/Greek that the Windows cp949 console can't encode;
+    # replace unencodable chars so a stray print can't crash a run already paid for (§8)
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
 
-    load_dotenv(REPO_ROOT / ".env")  # SDK reads ANTHROPIC_API_KEY from the environment
+    load_dotenv(REPO_ROOT / ".env") # SDK reads ANTHROPIC_API_KEY from the environment
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--phase", type=int, required=True, choices=sorted(PHASES))

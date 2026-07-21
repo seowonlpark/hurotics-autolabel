@@ -1,22 +1,8 @@
-"""Profile the legacy rule-based algorithm (`loco`) through OUR error taxonomy.
-
-    python -m stages.s2_ml.profile_incumbent
-
-Why: the claim that the physics/rule-based algorithms fail differently from our
-classifier — few `steady_confusion`, many `swallowed` — is currently **[reported]**.
-If true it is a measured mandate for building S3 and fusing the two, because the two
-error profiles would be complementary. If false, it saves a phase. §11 is a list of
-claims that felt obvious and did not survive measurement, so measure it.
-
-This is cheap because the taxonomy is already ported: run `loco` as if it were a
-prediction, against the same ground truth, scored by the same buckets, on the 19
-recordings that exist in BOTH the raw family (which carries `loco`) and the labeled
-family (which carries `Label`).
-
-**This does not resurrect `loco`.** §4.5 severed it as ground truth and as a feature,
-on evidence that its "standing" class contains a decile as periodic as median walking.
-Measuring *how a predictor fails* is a different question from trusting what it says.
-"""
+# profile the legacy rule-based algorithm (`loco`) through OUR error taxonomy
+# tests the [reported] claim that the rule-based algo fails differently from our
+# classifier (few steady_confusion, many swallowed) -- if true, a mandate to build S3.
+# runs `loco` as a prediction against the same ground truth on the paired recordings.
+# does NOT resurrect loco (§4.5 severed it); measuring how it fails != trusting it. see README.
 
 from __future__ import annotations
 
@@ -37,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCO_COL = "loco"
 
 
+# read a raw csv only if it carries both `loco` and Time; else None
 def load_raw_with_loco(path: str) -> pd.DataFrame | None:
     names = [strip_prefix(c) for c in read_header(Path(path))]
     if LOCO_COL not in names or "Time" not in names:
@@ -50,8 +37,8 @@ def load_raw_with_loco(path: str) -> pd.DataFrame | None:
     return df
 
 
+# annotated trials whose raw source carries `loco`, matched on the time vector
 def find_pairs() -> list[tuple[Path, pd.DataFrame]]:
-    """Annotated trials whose raw source carries `loco`, matched on the time vector."""
     raws = {}
     for f in sorted(glob.glob(str(REPO_ROOT / "data/raw/**/*.csv"), recursive=True)):
         df = load_raw_with_loco(f)
@@ -70,14 +57,10 @@ def find_pairs() -> list[tuple[Path, pd.DataFrame]]:
     return pairs
 
 
+# learn loco-code -> {stand, walk} by maximising agreement with ground truth
+# the legacy encoding is undocumented, so it's measured; fitting to labels is deliberately
+# generous to the incumbent, so any weakness the taxonomy reports is a floor on its error
 def best_mapping(pairs: list[tuple[Path, pd.DataFrame]]) -> dict[int, int]:
-    """Learn loco-code -> {stand, walk} by maximising agreement with ground truth.
-
-    The legacy encoding is not documented anywhere in this repo, so it is measured, not
-    assumed. Fitting the mapping to the labels is deliberately GENEROUS to the incumbent:
-    it hands `loco` its best possible frame accuracy, so any weakness the taxonomy then
-    reports is a floor on its real error, never an artefact of a bad decode.
-    """
     codes: set[int] = set()
     for _p, raw in pairs:
         codes.update(int(v) for v in pd.unique(raw[LOCO_COL].dropna()))
@@ -103,6 +86,7 @@ def best_mapping(pairs: list[tuple[Path, pd.DataFrame]]) -> dict[int, int]:
     return best
 
 
+# pair recordings, learn the mapping, score `loco` through the taxonomy, write the json
 def main() -> None:
     pairs = find_pairs()
     if not pairs:

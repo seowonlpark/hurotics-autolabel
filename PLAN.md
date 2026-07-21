@@ -1,6 +1,6 @@
 # H-CARE Agent Pipeline — Structure & Progression Plan
 
-**Owner:** Lu · **Status:** Phases 0–2 complete · Phase 3 (S2 loop) starting · **Last updated:** 2026-07-20
+**Owner:** Lu · **Status:** Phases 0–2 complete · Phase 3 (S2 loop) **gate closed 2026-07-21** (replay + critic-bite verified) · **Last updated:** 2026-07-21
 
 Goal: a staged, agent-assisted pipeline for IMU locomotion data — cleaning, ML experimentation, physics-based analysis, and reporting — where deterministic code does the work, Claude agents handle judgment at defined points, and every decision is logged and reconstructible. Built on the Claude Agent SDK (Python).
 
@@ -56,10 +56,17 @@ The gate is what `orchestrator.py` checks before the next stage may run.
 
 | | |
 |---|---|
-| **Deterministic core** | Existing RF training pipeline + locoeval, wrapped as one command: train → evaluate → compare vs. champion |
-| **Agent role** | Experimenter proposes a change (feature, layer, hyperparameter) → read-only critic subagent reviews the proposal (grounded in locoeval reports + DOMAIN_NOTES) → run → promote/reject on macro-F1 + error taxonomy → log to `experiments.jsonl` → git commit. Champion = git tag; revert = checkout |
-| **Outputs** | Model artifacts · locoeval reports · `experiments.jsonl` |
+| **Deterministic core** | `dataset` (labeled rev\* trials onto the canonical 100 Hz grid, grouped/split by rev, lockbox sealed) · `transform` (raw→rev2 bridge, exact, with a standing `verify_transform` guard) · `features` (windowing; feature selection lives here) · `train` (leave-one-rev-out) · `locoeval` (blind metrics) · `taxonomy` (7-bucket MECE port) · `predict` (dense 100 ms stride, centre-assigned) · `experiment` (spec → run → `decide()` → ledger) |
+| **Agent role** | Experimenter proposes ONE declarative `ExperimentSpec` per cycle (features to drop, `window_s`, `stride_s`, whitelisted hyperparameters — never code, never data access, never training) → read-only critic reviews it **before** training, seeing the ledger as well as the proposal → run → `experiment.decide()` gates on the measured metric. **Neither agent can promote anything.** |
+| **Outputs** | `champion.json` · `experiments.jsonl` (measured) · `proposals.jsonl` (raised, incl. those killed pre-training) · locoeval + taxonomy reports |
 | **Gate** | ☐ Champion only ever changes via a logged, metric-justified promotion |
+
+Promotion rule (`experiment.decide()`, the only path to champion): macro-F1 must clear
+`PROMOTION_MARGIN = 0.005`; on a statistical tie, a `steady_confusion` drop of ≥ `0.02` promotes —
+at equal accuracy, prefer the model that fails passively (DOMAIN_NOTES §7). Champion state is
+`champion.json` + the ledger's `git_sha`, **not** a git tag as originally planned: a re-run of a
+logged spec reproduces the model exactly, so the spec is the revert unit and a tag would add a
+second, drift-prone source of truth.
 
 ### S3 — Physics
 
@@ -114,11 +121,32 @@ The gate is what `orchestrator.py` checks before the next stage may run.
 - ☑ DOMAIN_NOTES updated
 
 ### Phase 3 — S2 loop (2–3 days)
-- ☐ Train + locoeval wrapped as single command; initial champion established and git-tagged
-- ☐ Experimenter + critic run 3–5 proposal cycles
-- ☐ ≥1 promotion and ≥1 rejection have occurred
-- ☐ Both fully reconstructible from `experiments.jsonl` + git history alone
-- ☐ DOMAIN_NOTES updated
+- ☑ Train + locoeval wrapped as one command; initial champion established (`baseline_v1`, LORO
+      macro-F1 **0.8730**, 23 features) and recorded in `champion.json` + ledger `git_sha`
+      (git tag deliberately dropped — see the S2 contract above)
+- ☑ Experimenter + critic run 3–5 proposal cycles (4 agent cycles live, ~$0.21 each; 7 ledger
+      entries including the manually specified ones)
+- ☑ ≥1 promotion and ≥1 rejection have occurred — **2 promotions, 5 rejections.** Current champion
+      `drop_offset_only` at **0.8862** (+0.0132), the first champion proposed by an agent rather
+      than seeded by hand
+- ☑ Both fully reconstructible from `experiments.jsonl` + git history alone — **verified 2026-07-21**
+      by `stages/s2_ml/replay.py`: reconstruct each spec from its ledger entry and re-run it. All 7
+      entries replayed **exactly** (worst metric Δ ≤ 1e-9 across macro-F1, per-rev, and taxonomy
+      fractions), so the spec + `git_sha` is a faithful revert unit — the champion is truly its
+      `champion.json`, not a model blob. (Same-sha entries must be exact by determinism; older-sha
+      ones also matched, meaning the deterministic core has not drifted since `d5a15b3`.)
+- ☑ DOMAIN_NOTES updated
+- ☑ **Gate blockers closed (2026-07-21):**
+  - the critic **demonstrably bites** — `agents/s2_critic_probe.py` feeds it three proposals it must
+    not approve (a verbatim ledger repeat, the same change renamed, and a false-premise claim about
+    `GAIT_BAND_HZ`); it `reject`ed all three, citing the ledger entry by name on the repeats and
+    Grepping `features.py` to disprove the false premise. The filter is proven, not asserted. (It also
+    caught that the recorded `drop_bad_band_frac` rationale carries that same false band premise —
+    a rationale defect the metric gate could never have flagged, cf. §11.4.)
+  - the lockbox: **`rev8` stays sealed** as the final test. **`rev13` was spent** (2026-07-21) proving
+    the always-Y axis decision — it scored the X-vs-Y comparison (DOMAIN_NOTES §6.3), so it can no
+    longer serve as an unbiased final rev. `rev8` (a clean Y-plane rev) opens **once**, at the
+    very end; not a blocker to closing this gate.
 
 ### Phase 4 — S3 (1–2 days)
 - ☐ gk/anchor work ported into stage format

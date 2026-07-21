@@ -1,20 +1,7 @@
-"""S2 train: fit a model, score it honestly, write the artifacts.
-
-    python -m stages.s2_ml.train --out runs/s2_ml
-
-Deterministic core of the champion/challenger loop (PLAN S2). The agent layer proposes
-changes; this module runs them and reports numbers. It never decides what is "best".
-
-Two guarantees it enforces in code, not in comments:
-
-  1. **The lockbox is never touched.** Whole revs are sealed (§7). Training asserts it,
-     so a future refactor that quietly widens the split fails loudly instead of
-     producing an optimistic final number nobody can trust again.
-  2. **Validation is leave-one-rev-out.** A rev is one subject on one day, so holding a
-     whole rev out is the closest honest stand-in for "a new person on a new day" —
-     the deployment question. Random k-fold would split one subject's trials across
-     train and test and report a flattering, meaningless score.
-"""
+# S2 train: fit a model, score it honestly, write the artifacts
+# deterministic core of the champion/challenger loop (PLAN S2); reports numbers, never
+# decides "best". enforces in code: the lockbox is never touched, and validation is
+# leave-one-rev-out (one subject/day held out = the deployment question). see README.
 
 from __future__ import annotations
 
@@ -41,29 +28,25 @@ from stages.s2_ml.taxonomy import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Random Forest is the documented starting model (§9). Depth is left unbounded; the
-# windowed feature count is small and the champion/challenger loop is where tuning
-# belongs, not a hand-picked constant here.
+# Random Forest is the documented starting model (§9); depth unbounded, tuning belongs in
+# the champion/challenger loop, not a hand-picked constant
 MODEL_PARAMS = dict(n_estimators=300, random_state=0, n_jobs=-1, class_weight="balanced")
 
 
+# fresh model at the fixed params
 def build_model() -> RandomForestClassifier:
     return RandomForestClassifier(**MODEL_PARAMS)
 
 
+# label-pure windows of one split; transitions excluded from targets (§5.2)
 def trainable(df: pd.DataFrame, split: str = "train") -> pd.DataFrame:
-    """Label-pure windows of one split. Transitions are excluded from targets (§5.2)."""
     return df[(df["split"] == split) & (df["label"] != TRANSITION)].reset_index(drop=True)
 
 
+# leave-one-rev-out error taxonomy, scored at row level via dense inference; a rev's rows
+# are only ever scored by a model that never saw that rev
 def taxonomy_loro(trials, train_df: pd.DataFrame, feats: list[str], spec: WindowSpec,
                   stride_s: float) -> dict:
-    """Leave-one-rev-out error taxonomy, scored at ROW level via dense inference.
-
-    Held to the same honesty as the macro-F1 CV: a rev's rows are only ever scored by a
-    model that never saw that rev. Dense inference is what makes the millisecond
-    thresholds meaningful (see predict.py).
-    """
     per_run = []
     for rev in sorted(train_df["rev"].unique()):
         fit = train_df[train_df["rev"] != rev]
@@ -77,6 +60,7 @@ def taxonomy_loro(trials, train_df: pd.DataFrame, feats: list[str], spec: Window
     return aggregate(per_run)
 
 
+# render the row-level taxonomy section as markdown
 def render_taxonomy(agg: dict, stride_s: float) -> str:
     lines = [
         "## Error taxonomy (row-level, leave-one-rev-out)", "",
@@ -93,8 +77,8 @@ def render_taxonomy(agg: dict, stride_s: float) -> str:
     return "\n".join(lines)
 
 
+# leave-one-rev-out out-of-fold predictions; returns (y_true, y_pred)
 def cross_validate(df: pd.DataFrame, feats: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    """Leave-one-rev-out out-of-fold predictions. Returns (y_true, y_pred)."""
     X = df[feats].to_numpy(float)
     y = df["label"].to_numpy(int)
     groups = df["rev"].to_numpy()
@@ -107,6 +91,7 @@ def cross_validate(df: pd.DataFrame, feats: list[str]) -> tuple[np.ndarray, np.n
     return y, oof
 
 
+# train + LORO-score at the given window, optionally the taxonomy, write all artifacts
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="runs/s2_ml")
@@ -142,7 +127,7 @@ def main() -> None:
     for rev, f1 in sorted(result.per_rev_macro_f1.items()):
         print(f"[s2]   held-out {rev}: macro-F1 {f1:.4f}")
 
-    # Final model: refit on every training rev. The lockbox stays sealed.
+    # final model: refit on every training rev; the lockbox stays sealed
     model = build_model()
     model.fit(train_df[feats].to_numpy(float), train_df["label"].to_numpy(int))
 
@@ -182,7 +167,7 @@ def main() -> None:
     try:
         import joblib
         joblib.dump(model, out_dir / "champion.joblib")
-    except Exception as exc:  # model artifact is optional; metrics are not
+    except Exception as exc: # model artifact is optional; metrics are not
         print(f"[s2] WARNING: could not persist model ({exc})")
 
     print(f"[s2] artifacts -> {out_dir}")

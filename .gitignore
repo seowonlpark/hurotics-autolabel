@@ -8,3 +8,5 @@ tracker/
 
 runs/
 !runs/.gitkeep
+
+validation/

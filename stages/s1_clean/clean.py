@@ -1,16 +1,6 @@
-"""S1 clean: resample every raw file onto the canonical grid.
-
-    python -m stages.s1_clean.clean --raw data/raw --out runs/<run>/s1_clean
-
-Outputs, per source file:
-    data/clean/<session>/<name>.parquet             canonical-grid data, gyro normalized
-    data/clean/<session>/<name>.channel_trust.json  resolved gyro unit + sagittal axis
-And for the run:
-    segments.jsonl     every segment: rows, duration, source rate, method, usable
-    observations.jsonl per-file channel-trust facts (the exception agent's input)
-    quarantine.jsonl   ledger of whole-file rejects (the raw file stays put)
-    clean_report.md    what happened to the corpus
-"""
+# S1 clean: resample every raw file onto the canonical grid, gyro normalized to deg/s
+# writes per-file parquet + channel_trust.json, and per-run segments/observations/
+# quarantine jsonl + clean_report.md. see README for the layout.
 
 from __future__ import annotations
 
@@ -40,14 +30,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CLEAN_DIR = REPO_ROOT / "data" / "clean"
 
 
+# ledger entry for a whole-file reject; the raw file is never touched (it stays source
+# of truth). category is the reason's leading phrase so like failures fold together
 def quarantine_record(path: Path, reason: str, evidence: dict) -> dict:
-    """Build a ledger entry for a whole-file reject. The raw file is never touched.
-
-    Raw is source-of-truth and stays where it is; the quarantine is a ledger
-    (quarantine.jsonl), not a copy of the data. The category slug is the reason's
-    leading phrase, so like failures fold together. needs_human is always set: a
-    whole-file reject is exactly the "AI can't proceed" case.
-    """
     category = re.sub(r"[^a-z0-9]+", "_", reason.split(":")[0].lower()).strip("_")[:40]
     return {
         "file": str(path.relative_to(REPO_ROOT)),
@@ -59,17 +44,17 @@ def quarantine_record(path: Path, reason: str, evidence: dict) -> dict:
     }
 
 
+# measured channels + documented exceptions + labels if present
+# returns (kept, missing); missing is a fact about this file's header, not an error
 def select_columns(present: list[str]) -> tuple[list[str], list[str]]:
-    """Measured channels + documented exceptions + labels if present.
-
-    Returns (kept, missing). Missing is a fact about this variant, not an error.
-    """
     wanted = list(KEEP_MEASURED) + list(KEEP_EXCEPTIONS) + list(KEEP_IF_PRESENT)
     kept = [c for c in wanted if c in present]
     missing = [c for c in KEEP_MEASURED if c not in present]
     return kept, missing
 
 
+# clean one raw file: resolve, prune to measured, resample, normalize gyro, write parquet
+# returns (dest_or_None, segment_rows, error_or_None, trust_or_None)
 def clean_one(path: Path) -> tuple[Path | None, list[dict], str | None, dict | None]:
     res = resolve(read_header(path))
     if "Time" not in res.index_by_name:
@@ -77,17 +62,15 @@ def clean_one(path: Path) -> tuple[Path | None, list[dict], str | None, dict | N
 
     df = pd.read_csv(path, encoding="utf-8-sig")
     df = df.loc[:, [c for c in df.columns if not c.startswith("Unnamed")]]
-    df.columns = list(res.index_by_name)  # resolved names, prefix stripped
+    df.columns = list(res.index_by_name) # resolved names, prefix stripped
 
     kept, missing = select_columns(list(df.columns))
     if missing:
         return None, [], f"missing measured channels: {missing}", None
     df = df[kept]
 
-    # Time base must define a forward cadence. A batch of 2026-05 files logs
-    # duplicated and backward-running timestamps (median dt <= 0) — non-monotonic
-    # time that np.interp would silently corrupt. Reject the whole file rather than
-    # resample a broken clock; it lands in the quarantine ledger for a human.
+    # time base must define a forward cadence; median dt <= 0 is a broken clock
+    # (a 2026-05 batch logs duplicate/backward timestamps) -- reject, don't resample it
     t = df["Time"].to_numpy(float)
     if t.size < 2 or float(np.median(np.diff(t))) <= 0.0:
         return None, [], "degenerate time base: median dt <= 0 (duplicate/backward timestamps)", None
@@ -97,8 +80,7 @@ def clean_one(path: Path) -> tuple[Path | None, list[dict], str | None, dict | N
     if out.empty:
         return None, rows, "no usable segments", None
 
-    # Gyro is now on the canonical grid (uniform dt, gap-free segments): resolve its
-    # unit + sagittal axis from the data and normalize every gyro channel to deg/s.
+    # gyro is now on the canonical grid: resolve unit + axis map, normalize to deg/s
     out, trust = detect_and_normalize(out)
 
     dest = CLEAN_DIR / session_of(path)["session_dir"] / f"{path.stem}.{CLEAN_FORMAT}"
@@ -111,6 +93,7 @@ def clean_one(path: Path) -> tuple[Path | None, list[dict], str | None, dict | N
     return dest, rows, None, trust
 
 
+# clean every raw csv, write the run artifacts, assert the partition gate
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--raw", default="data/raw")
@@ -154,7 +137,7 @@ def main() -> None:
         for q in quarantined:
             fh.write(json.dumps(q, ensure_ascii=False) + "\n")
 
-    # The gate: every raw file is accounted for exactly once. Assert it, don't hope.
+    # the gate: every raw file accounted for exactly once. assert it, don't hope
     accounted = written + len(quarantined)
     assert accounted == len(paths), f"partition broken: {accounted} accounted != {len(paths)} raw files"
 
@@ -164,7 +147,7 @@ def main() -> None:
     for r in usable:
         methods[r["method"]] = methods.get(r["method"], 0) + 1
 
-    # Gyro trust rollup across the written files.
+    # gyro trust rollup across the written files
     norm_sides = [(o["path"], s) for o in observations for s, r in o["channel_trust"]["sides"].items()
                   if r["scale_to_degps"] != 1.0]
     abstained = [(o["path"], s) for o in observations for s in o["channel_trust"]["abstained"]]
@@ -184,8 +167,8 @@ def main() -> None:
         f"- columns kept: **{len(KEEP_MEASURED)} measured + {len(KEEP_EXCEPTIONS)} documented exceptions**",
         f"- format: **{CLEAN_FORMAT}**",
         "",
-        "Measured-only: every column that churns position between variants is a *computed* one,",
-        "so this collapses every schema variant into a single canonical shape.",
+        "Measured-only: every column that churns position between header shapes is a *computed*",
+        "one, so dropping them leaves a single canonical shape read entirely by name.",
         "",
         "## Gyro trust / normalization",
         "",
@@ -194,9 +177,9 @@ def main() -> None:
         "is normalized to deg/s. The r-floor is per axis, so an axis with no signal abstains",
         "rather than contributing a noise argmax (Deg_Z drifts, so it often has none).",
         "",
-        "This resolves which gyro axis measures which angle axis. It does NOT resolve which axis",
-        "is SAGITTAL — that has no in-file signature (DOMAIN_NOTES 6.2) and is a variant lookup",
-        "in stages/s2_ml/transform.py.",
+        "This resolves which gyro axis measures which angle axis. It does NOT pick the SAGITTAL",
+        "axis — that has no in-file signature (DOMAIN_NOTES 6.2); stages/s2_ml/transform.py fixes",
+        "it to the Y plane for every file (6.3), flagging rather than guessing anomalies.",
         "",
         f"- side-channels normalized rad/s -> deg/s: **{len(norm_sides)}**",
         f"- sides that abstained (too static; fell back to documented convention): **{len(abstained)}**",

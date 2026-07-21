@@ -1,18 +1,6 @@
-"""S2 critic: review a proposed challenger BEFORE it runs.
-
-Read-only, and deliberately cheap relative to what it guards: a training run costs
-minutes, and — more importantly — a proposal that is really a repeat of a rejected idea
-costs a cycle of everyone's attention and teaches nothing.
-
-The critic sees the ledger for exactly that reason. The single most valuable thing it can
-say is "this was already tried and rejected, here is the entry." A critic reviewing only
-the proposal text cannot catch that, because a re-proposal always sounds as reasonable as
-it did the first time.
-
-It does NOT decide promotion. `experiment.decide()` does, on the metric, after the run.
-The critic decides only whether the run is worth spending — judgement about the
-*proposal*, never about the *result*.
-"""
+# S2 critic: review a proposed challenger before it runs (read-only)
+# sees the ledger so it can catch repeats of rejected ideas; does not decide promotion
+# -- experiment.decide() does that on the metric afterwards. see README.
 
 from __future__ import annotations
 
@@ -75,6 +63,7 @@ S2_CRITIC_AGENT = AgentSpec(
 )
 
 
+# assemble the review prompt: proposal, current champion, and the full ledger
 def build_prompt(proposal: dict, ledger_rows: list[dict], report_md: str,
                  champion: dict | None) -> str:
     history = [
@@ -96,6 +85,7 @@ def build_prompt(proposal: dict, ledger_rows: list[dict], report_md: str,
     )
 
 
+# pull the verdict JSON out of the agent's final text; None if absent or malformed
 def parse_review(final_text: str) -> dict | None:
     if not final_text:
         return None
@@ -109,9 +99,8 @@ def parse_review(final_text: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+# persist the review; an unparseable review becomes a revise, never an approve
 def write_review(out_dir: Path, review: dict | None, final_text: str) -> Path:
-    """Persist the review. An unparseable review becomes a `revise`, never an approve:
-    a run must never proceed because the guard failed silently."""
     out_dir.mkdir(parents=True, exist_ok=True)
     payload = review if review else {
         "verdict": "revise",

@@ -1,24 +1,8 @@
-"""locoeval: the blind measure layer.
-
-DOMAIN_NOTES §7: this layer emits objective numbers and NO opinion. Every judgement —
-"is this good", "should this be promoted" — belongs to the agent/gate above it. Keeping
-that separation is what stops a model from being promoted because a narrative sounded
-convincing.
-
-Headline metric is **macro-F1** (§5.4): the corpus is ~83% walking, so a
-"predict walk always" model scores >0.8 accuracy while being useless. Macro-F1 refuses
-to reward that.
-
-`-1` (human-unknown) never enters training and is excluded from the metrics consistently
-(§7), but its share is reported so a future confidence signal can be scored against it.
-
-SCOPE NOTE: §7 also specifies a precedence-ordered MECE error taxonomy
-(correct -> omission -> flicker -> late -> early -> steady_confusion -> remainder).
-Its per-category operational semantics are not written down anywhere in this repo, so
-this module implements the parts that are unambiguous — per-class rates, the confusion
-matrix, and transition timing (which underpins late/early/flicker) — and deliberately
-does NOT invent the full partition. See `transition_report`.
-"""
+# locoeval: the blind measure layer -- emits objective numbers, NO opinion (§7).
+# headline metric is macro-F1 (§5.4): the corpus is ~83% walk, so accuracy flatters a
+# "predict walk always" model. -1 (human-unknown) is excluded from metrics, share reported.
+# does NOT invent the full §7 taxonomy (its precedence semantics are unspecified here) --
+# only the unambiguous parts: per-class rates, confusion, transition timing. see README.
 
 from __future__ import annotations
 
@@ -34,6 +18,7 @@ from stages.s2_ml.dataset import STAND, WALK
 CLASS_NAMES = {STAND: "stand", WALK: "walk"}
 
 
+# precision, recall, f1 from tp/fp/fn; 0 on empty denominators
 def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
     p = tp / (tp + fp) if tp + fp else 0.0
     r = tp / (tp + fn) if tp + fn else 0.0
@@ -41,26 +26,26 @@ def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
     return p, r, f
 
 
+# per-class precision/recall/f1 with support
 @dataclass
 class ClassMetrics:
-    label: str
-    support: int
+    label: str # class name
+    support: int # true rows of this class
     precision: float
     recall: float
     f1: float
 
 
+# numbers only -- no verdict, no recommendation
 @dataclass
 class EvalResult:
-    """Numbers only. No verdict, no recommendation."""
-
-    n: int
-    macro_f1: float
+    n: int # windows scored
+    macro_f1: float # headline metric (§5.4)
     accuracy: float
     balanced_accuracy: float
     per_class: list[ClassMetrics]
-    confusion: dict[str, dict[str, int]]
-    unknown_frac_mean: float
+    confusion: dict[str, dict[str, int]] # rows = truth
+    unknown_frac_mean: float # mean -1 share
     per_rev_macro_f1: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -69,10 +54,10 @@ class EvalResult:
         return d
 
 
+# macro-F1 and friends over {stand, walk}; blind -- computes, never judges
 def evaluate(y_true: np.ndarray, y_pred: np.ndarray,
              groups: np.ndarray | None = None,
              unknown_frac: np.ndarray | None = None) -> EvalResult:
-    """Macro-F1 and friends over {stand, walk}. Blind: computes, never judges."""
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
     classes = [STAND, WALK]
@@ -112,18 +97,10 @@ def evaluate(y_true: np.ndarray, y_pred: np.ndarray,
     )
 
 
+# timing behaviour around true state changes -- the substrate for late/early/flicker.
+# raw counts, not the §7 taxonomy (its precedence rules are unspecified here). flicker_rate
+# = spurious switches per steady window; boundary_error = signed window offset (neg=early)
 def transition_report(df: pd.DataFrame, y_pred: np.ndarray) -> dict:
-    """Timing behaviour around true state changes — the substrate for late/early/flicker.
-
-    Reported as raw counts, not as the §7 taxonomy: the taxonomy's precedence rules are
-    not specified in this repo, and guessing them would produce numbers that look
-    official while meaning something nobody agreed to.
-
-    - `flicker_rate`: predicted switches per window inside label-steady runs. A steady
-      truth run should produce zero switches; every switch is spurious.
-    - `boundary_error_windows`: signed offset (in windows) between each true transition
-      and the nearest predicted transition. Negative = early, positive = late.
-    """
     d = df.reset_index(drop=True).copy()
     d["pred"] = y_pred
     flick_switch = flick_windows = 0
@@ -140,7 +117,7 @@ def transition_report(df: pd.DataFrame, y_pred: np.ndarray) -> dict:
         p_switch = np.flatnonzero(pred[1:] != pred[:-1]) + 1
 
         steady = np.ones(truth.size - 1, dtype=bool)
-        for s in t_switch:                      # exclude the true boundary neighbourhood
+        for s in t_switch: # exclude the true boundary neighbourhood
             steady[max(0, s - 2):min(steady.size, s + 1)] = False
         flick_switch += int(np.sum((pred[1:] != pred[:-1]) & steady))
         flick_windows += int(steady.sum())
@@ -164,6 +141,7 @@ def transition_report(df: pd.DataFrame, y_pred: np.ndarray) -> dict:
     }
 
 
+# render an eval result (+ optional transitions) as the locoeval.md report
 def render(result: EvalResult, transitions: dict | None = None, title: str = "locoeval") -> str:
     lines = [
         f"# {title}",
@@ -201,6 +179,7 @@ def render(result: EvalResult, transitions: dict | None = None, title: str = "lo
     return "\n".join(lines)
 
 
+# write the eval result (+ optional transitions) as locoeval.json
 def save(result: EvalResult, path: Path, transitions: dict | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = result.to_dict()

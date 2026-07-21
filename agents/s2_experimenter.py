@@ -1,15 +1,6 @@
-"""S2 experimenter: propose ONE challenger, as a declarative spec.
-
-The agent reads the champion's locoeval report and the full experiment ledger, then
-proposes a single change. It never writes code, never touches data, never trains —
-`stages/s2_ml/experiment.py` runs the spec and the promotion gate decides. (PLAN
-principle 1: code does the work, agents judge it.)
-
-The ledger is in the prompt for one reason above all: **so the agent cannot re-propose
-something already tried.** The first challenger run by hand was a well-argued hypothesis
-that the numbers refuted; without the ledger, the same idea would come back forever,
-each time sounding just as reasonable.
-"""
+# S2 experimenter: propose one challenger, as a declarative spec (read-only)
+# reads the champion report + full ledger, proposes one change; never writes code or
+# trains -- experiment.py runs the spec, the metric gate decides. see README.
 
 from __future__ import annotations
 
@@ -67,6 +58,7 @@ S2_EXPERIMENTER_AGENT = AgentSpec(
 )
 
 
+# assemble the prompt: champion report, available features, and the full ledger
 def build_prompt(report_md: str, ledger_rows: list[dict], champion: dict | None,
                  features: list[str]) -> str:
     history = [
@@ -90,8 +82,8 @@ def build_prompt(report_md: str, ledger_rows: list[dict], champion: dict | None,
     )
 
 
+# pull the JSON object out of the agent's reply; tolerant of fences and prose
 def parse_proposal(final_text: str) -> dict | None:
-    """Extract the JSON object from the agent's reply; tolerant of fences and prose."""
     if not final_text:
         return None
     m = re.search(r"\{.*\}", final_text, re.DOTALL)
@@ -104,8 +96,8 @@ def parse_proposal(final_text: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+# persist the proposal (or the raw text when it did not parse) for audit
 def write_proposal(out_dir: Path, proposal: dict | None, final_text: str) -> Path:
-    """Persist the proposal (or the raw text when it did not parse) for audit."""
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / PROPOSAL_FILENAME
     path.write_text(json.dumps(proposal if proposal else {"unparsed": final_text},
