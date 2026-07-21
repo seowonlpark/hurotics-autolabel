@@ -9,5 +9,4 @@ tracker/
 runs/
 !runs/.gitkeep
 
-validation/
 CODE_STYLE.md
