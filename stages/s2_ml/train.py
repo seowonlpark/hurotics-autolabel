@@ -28,7 +28,7 @@ from stages.s2_ml.taxonomy import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Random Forest is the documented starting model (§9); depth unbounded, tuning belongs in
+# Random Forest is the documented starting model (Section 9); depth unbounded, tuning belongs in
 # the champion/challenger loop, not a hand-picked constant
 MODEL_PARAMS = dict(n_estimators=300, random_state=0, n_jobs=-1, class_weight="balanced")
 
@@ -38,7 +38,7 @@ def build_model() -> RandomForestClassifier:
     return RandomForestClassifier(**MODEL_PARAMS)
 
 
-# label-pure windows of one split; transitions excluded from targets (§5.2)
+# label-pure windows of one split; transitions excluded from targets (Section 5.2)
 def trainable(df: pd.DataFrame, split: str = "train") -> pd.DataFrame:
     return df[(df["split"] == split) & (df["label"] != TRANSITION)].reset_index(drop=True)
 
@@ -96,7 +96,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="runs/s2_ml")
     ap.add_argument("--window-s", type=float, default=None,
-                    help="window length in seconds (§9 open tradeoff)")
+                    help="window length in seconds (Section 9 open tradeoff)")
     ap.add_argument("--taxonomy", action="store_true",
                     help="also run the row-level error taxonomy via dense inference (slow)")
     ap.add_argument("--stride-s", type=float, default=DEFAULT_INFERENCE_STRIDE_S,
@@ -143,7 +143,7 @@ def main() -> None:
                 print(f"[s2]   {b:<16} {tax['counts'][b]:>8,}  ({tax['fractions'][b]:.3f})")
 
     save(result, out_dir / "locoeval.json", trans)
-    body = render(result, trans, title="S2 champion — leave-one-rev-out CV")
+    body = render(result, trans, title="S2 champion - leave-one-rev-out CV")
     if tax:
         body += "\n\n" + render_taxonomy(tax, args.stride_s)
     (out_dir / "locoeval.md").write_text(

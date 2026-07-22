@@ -3,7 +3,7 @@
 # before Claude reads a single figure. the outputs (anchors.csv, rate_audit.json, plots/) are
 # the interface: the hypothesis agent reads them and writes hypotheses.jsonl, and the PLAN S3
 # gate ("no anchor without a rate-invariance verdict") is satisfied by rate_audit.json here.
-# see README / PLAN S3 / DOMAIN_NOTES §10.
+# see README / PLAN S3 / DOMAIN_NOTES Section 10.
 
 from __future__ import annotations
 
@@ -37,11 +37,11 @@ def build_anchor_table(trials: list[Trial], spec: WindowSpec | None = None) -> p
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-# the physics CAUSE of one window's disagreement with its human label (§10.7, §11) -- turns the
+# the physics CAUSE of one window's disagreement with its human label (Section 10.7, Section 11) -- turns the
 # label_audit flag from a boolean into something the reviewer can triage. a WALK-labeled window
 # the swap rule does not call walking is one of three very different things: legs moving IN PHASE
 # (antiphase<=0, not gait at all -- physics is right, the label is the suspect), a single committed
-# hump the §10.7 grow still could not alternate twice (`single_hump` -- a genuinely brief/edge
+# hump the Section 10.7 grow still could not alternate twice (`single_hump` -- a genuinely brief/edge
 # stride), or an antiphase swing that never commits both bands (`sub_threshold`). a STAND-labeled
 # window the rule DOES call walking is the label-audit direction (a ramp/mislabel, the S4
 # precedent). None when verdict and label agree. driven by columns the row already carries, so it
@@ -51,21 +51,21 @@ def disagree_reason(label: object, verdict: str, antiphase: float, swap_count: i
         if antiphase <= 0:
             return "in_phase_not_gait" # legs together -- physics right, likely a real label issue
         if swap_count <= 1:
-            return "single_hump"       # alternates but <2 crossings even after the §10.7 grow
-        return "sub_threshold"         # antiphase swing that never commits both ±delta bands
+            return "single_hump"       # alternates but <2 crossings even after the Section 10.7 grow
+        return "sub_threshold"         # antiphase swing that never commits both +/-delta bands
     if label == STAND and verdict == WALKING:
         return "stand_reads_walking"   # label-audit: a standing stretch the physics reads as gait
     return None
 
 
-# per-trial physics-vs-label disagreement, ranked. two directions the swap rule (§10) and
+# per-trial physics-vs-label disagreement, ranked. two directions the swap rule (Section 10) and
 # the human label can part ways: a WALK-labeled window the physics does NOT call walking
-# (slow-cadence tail, §10.3), and a STAND-labeled window it DOES (a mislabeled ramp, the S4
-# label-audit precedent). ranked on the STRIDE-ADAPTIVE verdict (§10.6): the fixed-window
+# (slow-cadence tail, Section 10.3), and a STAND-labeled window it DOES (a mislabeled ramp, the S4
+# label-audit precedent). ranked on the STRIDE-ADAPTIVE verdict (Section 10.6): the fixed-window
 # verdict flags slow-gait windows the rule simply can't resolve, drowning real label issues in
 # window artifacts -- the adaptive call resolves those, so what remains ranked is more likely a
 # genuine label problem. this is where the agent should look first, so code ranks it rather
-# than making the agent read all 44 figures blind. each row carries a `reasons` histogram (§10.7)
+# than making the agent read all 44 figures blind. each row carries a `reasons` histogram (Section 10.7)
 # so the reviewer sees WHY a trial ranks, not just that it does.
 def label_disagreement(table: pd.DataFrame) -> list[dict]:
     rows = []
@@ -87,10 +87,10 @@ def label_disagreement(table: pd.DataFrame) -> list[dict]:
 
 
 # load the trials S3 is allowed to see: train + val only. the lockbox (rev8, rev13) stays
-# SEALED (§7) -- S3 is physics enrichment, but its plots feed an agent whose hypotheses reach
+# SEALED (Section 7) -- S3 is physics enrichment, but its plots feed an agent whose hypotheses reach
 # DOMAIN_NOTES and the human's understanding, so letting it read the lockbox would spend that
 # independence just as surely as training on it would. the swap rule was validated against a
-# held-out rev8 once (§10) and that verdict is recorded; the ongoing stage does not re-open it.
+# held-out rev8 once (Section 10) and that verdict is recorded; the ongoing stage does not re-open it.
 def load_analysis_trials() -> list[Trial]:
     return [t for t in load_dataset() if t.split != "lockbox"]
 
@@ -99,7 +99,7 @@ def load_analysis_trials() -> list[Trial]:
 def run(out_dir: Path = S3_OUT_DIR, spec: WindowSpec | None = None) -> dict:
     spec = spec or WindowSpec()
     out_dir.mkdir(parents=True, exist_ok=True)
-    trials = load_analysis_trials() # lockbox sealed (§7)
+    trials = load_analysis_trials() # lockbox sealed (Section 7)
 
     # purge stale figures so a previous run's outputs (e.g. lockbox trials) cannot leak to
     # the agent, which reads every plots/*.png
@@ -109,7 +109,7 @@ def run(out_dir: Path = S3_OUT_DIR, spec: WindowSpec | None = None) -> dict:
             png.unlink()
 
     table = build_anchor_table(trials, spec)
-    if not table.empty: # §10.7: annotate each window's disagreement cause for the reviewer/agent
+    if not table.empty: # Section 10.7: annotate each window's disagreement cause for the reviewer/agent
         table["disagree_reason"] = [
             disagree_reason(lab, v, ap, sc) for lab, v, ap, sc in zip(
                 table["label"], table["swap_verdict_adaptive"],
@@ -156,7 +156,7 @@ def main() -> None:
     for a in ANCHOR_NAMES:
         r = audit["anchors"][a]
         flag = "ok " if r["verdict"] == "invariant" else "!! "
-        print(f"    {flag}{a:14} {r['metric']} Δ={r['median_delta']:.4f}  {r['verdict']}")
+        print(f"    {flag}{a:14} {r['metric']} delta={r['median_delta']:.4f}  {r['verdict']}")
     print(f"[s3] plots -> {args.out / PLOTS_SUBDIR}")
 
 

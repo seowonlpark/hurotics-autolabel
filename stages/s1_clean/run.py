@@ -62,10 +62,10 @@ def write_census_md(rows, out: Path) -> None:
     lines += ["", "## Missing measured columns", ""]
     if missing:
         lines += [f"A canonical measured column absent from some files (of {len(KEEP_MEASURED)} "
-                  "in `config.KEEP_MEASURED`) — the schema may have changed:", ""]
+                  "in `config.KEEP_MEASURED`) - the schema may have changed:", ""]
         lines += [f"- `{c}` (missing in {n} files)" for c, n in sorted(missing.items())]
     else:
-        lines += [f"None — every file carries the full {len(KEEP_MEASURED)}-column measured set.", ""]
+        lines += [f"None - every file carries the full {len(KEEP_MEASURED)}-column measured set.", ""]
 
     out.write_text("\n".join(lines), encoding="utf-8")
 

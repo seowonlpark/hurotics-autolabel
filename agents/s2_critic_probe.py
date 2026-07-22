@@ -42,7 +42,7 @@ PROBES = [
         "id": "cosmetic_repeat",
         "proposal": {
             "name": "longer_window_for_slow_gait",
-            "rationale": "This population runs to 0.13 Hz (DOMAIN NOTES §9); a 2 s window "
+            "rationale": "This population runs to 0.13 Hz (DOMAIN NOTES Section 9); a 2 s window "
                          "cannot resolve a stride that slow, so widening to 4 s should let "
                          "the frequency features see the fundamental and lift rev14.",
             "drop_features": [],
@@ -50,7 +50,7 @@ PROBES = [
             "model_params": {},
         },
         "must_be_in": {"reject"},
-        "why": "window_s=4.0 again under a new name — a repeat of wider_window_4s by spec",
+        "why": "window_s=4.0 again under a new name - a repeat of wider_window_4s by spec",
     },
     {
         "id": "false_premise",
@@ -65,7 +65,7 @@ PROBES = [
             "model_params": {},
         },
         "must_be_in": {"reject", "revise"},
-        "why": "premise is false — GAIT_BAND_HZ is (0.13, 3.0), not (0.5, 3.0)",
+        "why": "premise is false - GAIT_BAND_HZ is (0.13, 3.0), not (0.5, 3.0)",
     },
 ]
 
@@ -124,13 +124,13 @@ async def main_async(args) -> None:
     if missed:
         raise SystemExit(
             f"CRITIC DID NOT BITE on: {missed}. It approved a proposal it should have "
-            f"stopped — the filter is not doing its job and the prompt needs work.")
+            f"stopped - the filter is not doing its job and the prompt needs work.")
     print("CRITIC BITES: every adversarial proposal was rejected or sent back to revise. "
           "The filter is demonstrated, not merely asserted.")
 
 
 def main() -> None:
-    # console guard (cp949 can't encode em-dash/§, DOMAIN NOTES §8) + load the API key
+    # console guard (cp949 can't encode em-dash/sec , DOMAIN NOTES Section 8) + load the API key
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")

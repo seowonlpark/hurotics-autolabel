@@ -34,7 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TOLERANCE = 1e-9
 
 
-# raw device CSV with columns resolved BY NAME (never by position, §1.3)
+# raw device CSV with columns resolved BY NAME (never by position, Section 1.3)
 def load_raw_by_name(path: str) -> pd.DataFrame:
     names = [strip_prefix(c) for c in read_header(Path(path))]
     df = pd.read_csv(path, encoding="utf-8-sig")
@@ -86,7 +86,7 @@ def _axis_error(raw: pd.DataFrame, ann: pd.DataFrame, dt: float, deg_axis: str) 
 def main() -> None:
     pairs = find_pairs(index_raw_files())
     if not pairs:
-        raise SystemExit("no paired recordings found — cannot verify the bridge")
+        raise SystemExit("no paired recordings found - cannot verify the bridge")
 
     worst, verified, overrides, broken = 0.0, [], [], []
     for ann_path, _raw_path, raw in pairs:
@@ -103,7 +103,7 @@ def main() -> None:
             worst = max(worst, err_y)
             continue
         # Y doesn't reproduce: if some other single axis does, it's an accepted OVERRIDE
-        # (labeled on that axis, we read Y by policy §6.3); matching no axis is a real break
+        # (labeled on that axis, we read Y by policy Section 6.3); matching no axis is a real break
         others = {ax: _axis_error(raw, ann, dt, ax)
                   for ax in "XYZ" if ax != SAGITTAL_DEG_AXIS}
         best = min(others, key=others.get)

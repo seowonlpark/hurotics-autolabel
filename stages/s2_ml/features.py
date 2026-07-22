@@ -1,8 +1,8 @@
 # S2 windowing + feature extraction: the model-agnostic boundary
-# feature selection lives HERE, not in the clean layer (§9); this is the surface the S2
+# feature selection lives HERE, not in the clean layer (Section 9); this is the surface the S2
 # experimenter proposes changes to. rules: never window across a gap, a mixed window is
 # `transition` (excluded from training, not forced), window length is an open tradeoff
-# (§9 -- slow gait runs to 0.13 Hz). see README / DOMAIN_NOTES.
+# (Section 9 -- slow gait runs to 0.13 Hz). see README / DOMAIN_NOTES.
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ DEFAULT_STRIDE_S = 2.0
 # a training window must be label-pure; anything less is a transition (rule 2)
 PURITY_MIN = 1.0
 
-# the band a stride can plausibly occupy for this population (§9): cadence 16-102
+# the band a stride can plausibly occupy for this population (Section 9): cadence 16-102
 # steps/min. deliberately NOT the healthy-adult (0.5, 3.0) Hz band
 GAIT_BAND_HZ = (0.13, 3.0)
 
@@ -55,7 +55,7 @@ class WindowSpec:
 
 
 # (dominant frequency in the gait band, fraction of power inside the band); resolution is
-# 1/window_s, so at 2 s the low edge is unresolvable -- the §9 tradeoff made visible
+# 1/window_s, so at 2 s the low edge is unresolvable -- the Section 9 tradeoff made visible
 def _spectral(x: np.ndarray, fs: float) -> tuple[float, float]:
     x = x - x.mean()
     if x.size < 4 or not np.any(x):
@@ -85,7 +85,7 @@ def window_features(win: pd.DataFrame, fs: float) -> dict[str, float]:
     for name, v in arrays.items():
         feats[f"{name}_mean"] = float(v.mean())
         feats[f"{name}_std"] = float(v.std())
-        feats[f"{name}_ptp"] = float(np.ptp(v)) # np.ptp: ndarray.ptp() gone in NumPy 2 (§8)
+        feats[f"{name}_ptp"] = float(np.ptp(v)) # np.ptp: ndarray.ptp() gone in NumPy 2 (Section 8)
         feats[f"{name}_absmean"] = float(np.abs(v).mean())
 
     feats["ang_LR_corr"] = _corr(arrays["L_ang_LPF"], arrays["R_ang_LPF"])
@@ -100,7 +100,7 @@ def window_features(win: pd.DataFrame, fs: float) -> dict[str, float]:
     return feats
 
 
-# (label, purity, unknown_fraction) for a window; -1 excluded before voting (§5.2) but its
+# (label, purity, unknown_fraction) for a window; -1 excluded before voting (Section 5.2) but its
 # share reported. not pure over {stand, walk} => TRANSITION, never a coin-flip vote
 def label_window(labels: np.ndarray) -> tuple[object, float, float]:
     unknown_frac = float(np.mean(labels == HUMAN_UNKNOWN))
@@ -115,7 +115,7 @@ def label_window(labels: np.ndarray) -> tuple[object, float, float]:
 
 # every window of one trial as (metadata, raw slice), never spanning a gap. the single
 # source of the windowing rule -- S3 physics reuses this so the "no window across a gap"
-# and label-purity logic is defined exactly once (§9, rule 2).
+# and label-purity logic is defined exactly once (Section 9, rule 2).
 def iter_windows(trial: Trial, spec: WindowSpec):
     frame = trial.frame
     if frame.empty:

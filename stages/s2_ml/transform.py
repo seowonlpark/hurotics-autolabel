@@ -1,15 +1,13 @@
 # the raw -> rev2 feature bridge: reproduce the labeled columns from a raw CSV
-# reproduces HUROTICS' MATLAB (LPF.m / csv2mat.m) exactly, verified to ~1e-13 (§6.2);
+# reproduces HUROTICS' MATLAB (LPF.m / csv2mat.m) exactly, verified to ~1e-13 (Section 6.2);
 # drift from the training features is silent train/serve skew, so verify_transform.py
 # regression-tests it. two traps: the filter is CAUSAL (filtfilt would be wrong), and the
-# path always reads the sagittal/Y plane, flagging anomalies rather than guessing (§6.3).
-# permutation (measured per file) is separate from the axis choice (§4.1b/§6.3). see README.
+# path always reads the sagittal/Y plane, flagging anomalies rather than guessing (Section 6.3).
+# permutation (measured per file) is separate from the axis choice (Section 4.1b/Section 6.3). see README.
 
 from __future__ import annotations
 
-import json
 import math
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -24,7 +22,7 @@ FC_ANGVEL_HZ = 1.0
 
 # policy (2026-07-21): the raw->features path ALWAYS reads the sagittal/Y plane (Deg_Y +
 # its rate Gyro_Z). every export is sagittal; the apparent per-header "convention" was a
-# raw-axis naming inconsistency, not recoverable from any in-file signal (§6.3). anomalies
+# raw-axis naming inconsistency, not recoverable from any in-file signal (Section 6.3). anomalies
 # are flagged (check_axis_trust / drift), never guessed. see README / DOMAIN_NOTES.
 SAGITTAL_DEG_AXIS = "Y"
 SAGITTAL_GYRO_AXIS = DOCUMENTED_GYRO_PERMUTATION[SAGITTAL_DEG_AXIS] # "Z", via X->X,Y->Z,Z->Y
@@ -33,7 +31,7 @@ FEATURE_COLUMNS = ("L_ang_LPF", "R_ang_LPF", "L_angvel_LPF", "R_angvel_LPF")
 
 
 # raised when a file's measured permutation breaks on the sagittal Deg_Y axis this path
-# reads -- refuse rather than read a channel that isn't the rate it claims to be (§4.1b)
+# reads -- refuse rather than read a channel that isn't the rate it claims to be (Section 4.1b)
 class AxisConflictError(Exception):
     pass
 
@@ -60,7 +58,7 @@ def lpf(x: np.ndarray, dt_s: float, fc_hz: float) -> np.ndarray:
     return y
 
 
-# the dt their pipeline actually uses: the LAST inter-sample interval, in seconds (§6.2)
+# the dt their pipeline actually uses: the LAST inter-sample interval, in seconds (Section 6.2)
 # reproduced to match the training features; see safe_dt for the honest version
 def matlab_dt(time_ms: np.ndarray) -> float:
     t = np.asarray(time_ms, dtype=float)
@@ -71,21 +69,6 @@ def matlab_dt(time_ms: np.ndarray) -> float:
 def safe_dt(time_ms: np.ndarray) -> float:
     t = np.asarray(time_ms, dtype=float)
     return float(np.median(np.diff(t))) / 1000.0
-
-
-# the channel_trust.json S1 wrote beside a raw file's clean parquet; missing is an error
-# (the file was never cleaned), not a permissive empty default
-def load_trust(raw_path: Path, repo_root: Path | None = None) -> dict:
-    root = repo_root or Path(__file__).resolve().parents[2]
-    p = (root / "data" / "clean" / raw_path.parent.name /
-         f"{raw_path.stem}.channel_trust.json")
-    if not p.exists():
-        raise FileNotFoundError(
-            f"no channel_trust record at {p} for {raw_path.name}. The file was never "
-            f"cleaned (quarantined, or S1 has not run). Run S1, or pass "
-            f"TRUST_UNCHECKED if skipping the axis check is genuinely intended."
-        )
-    return json.loads(p.read_text(encoding="utf-8"))
 
 
 # refuse a file whose measured permutation breaks on the sagittal Deg_Y axis; only L/R
@@ -108,13 +91,13 @@ def check_axis_trust(trust: dict | str) -> None:
             f"this file's measured permutation breaks on the sagittal axis: {detail}, but "
             f"the documented map says Deg_{SAGITTAL_DEG_AXIS} -> Gyro_{SAGITTAL_GYRO_AXIS}. "
             f"Reading it would feed the classifier a channel it was not trained on, and "
-            f"nothing downstream would notice. Resolve by hand (DOMAIN_NOTES §4.1b) — do "
+            f"nothing downstream would notice. Resolve by hand (DOMAIN_NOTES Section 4.1b) - do "
             f"not suppress this."
         )
 
 
 # build the four rev2 features from a name-resolved raw frame, always from the sagittal
-# Deg_Y plane + its rate Gyro_Z (§6.3). dt_s defaults to the median; pass matlab_dt() to
+# Deg_Y plane + its rate Gyro_Z (Section 6.3). dt_s defaults to the median; pass matlab_dt() to
 # reproduce the training pipeline bit-for-bit. trust is required (TRUST_UNCHECKED to skip)
 def raw_to_features(df: pd.DataFrame, *, trust: dict | str,
                     dt_s: float | None = None,

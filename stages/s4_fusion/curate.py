@@ -1,10 +1,10 @@
 # S4 curation: turn the confidence signal into a data-collection director.
 # the pipeline's most honest remaining lever is not more macro-F1 in code -- it is better
-# GROUND TRUTH (§12). this ranks the windows worth a human's attention into a worklist, and
+# GROUND TRUTH (Section 12). this ranks the windows worth a human's attention into a worklist, and
 # routes each: relabel it (physics contradicts the label), characterise it as a possible new
-# class (structure the 2-class taxonomy misses -- governed, §11.2), or collect more of the
+# class (structure the 2-class taxonomy misses -- governed, Section 11.2), or collect more of the
 # condition (a systematically hard regime). reads artifacts only (fused table + S3 anchors);
-# it directs the data effort, it never changes a label. see DOMAIN_NOTES §12.
+# it directs the data effort, it never changes a label. see DOMAIN_NOTES Section 12.
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from stages.s3_physics.run import ANCHORS_CSV, S3_OUT_DIR
 from stages.s4_fusion.run import FUSED_CSV, S4_OUT_DIR, JOIN_KEYS
 
 # grav_stab below this in a STAND-labeled window = the posture is moving, not quiet stance --
-# the motion-contaminated "standing" that caps steady_confusion (§12). not fitted; grav_stab is
+# the motion-contaminated "standing" that caps steady_confusion (Section 12). not fitted; grav_stab is
 # a [0,1] steadiness score and 0.5 is its natural midpoint between still and sweeping.
 GRAV_MOVING = 0.5
 
@@ -33,11 +33,11 @@ COLLECT = "collect_more" # a systematically hard condition -> collect more of it
 # the route for one window, or None if it needs no attention. label is the human ground truth,
 # s2 the learned prediction, s3 the physics verdict, conf the fusion confidence, grav steadiness.
 # RELABEL requires BOTH independent models to contradict the label -- one model disagreeing is
-# usually that model's own error (physics over-calling slow gait, §10.6), not a mislabel; two
+# usually that model's own error (physics over-calling slow gait, Section 10.6), not a mislabel; two
 # independent methods rarely share a failure, so their agreement against the label is the
 # strongest signal available. still only a *candidate*: a human confirms, code never edits a
 # label (non-negotiable #1; the "error_rate 1.00" against the label is disagreement by
-# construction, not proof of wrongness -- §12.2).
+# construction, not proof of wrongness -- Section 12.2).
 def route_window(label: int, s2: int, s3: str, conf: str, grav: float) -> str | None:
     if label == STAND and s2 == WALK and s3 == WALKING:
         return RELABEL # both models say WALK, human says STAND -> strong mislabel candidate
@@ -107,23 +107,23 @@ def build_queue(s4_dir: Path = S4_OUT_DIR, s3_dir: Path = S3_OUT_DIR) -> list[di
 
 # render the worklist as markdown, grouped by route
 def render(queue: list[dict]) -> str:
-    L = ["# S4 curation queue — where data investment pays off", "",
-         "The confidence signal as a data-collection director (DOMAIN_NOTES §12). Each span is "
+    L = ["# S4 curation queue - where data investment pays off", "",
+         "The confidence signal as a data-collection director (DOMAIN_NOTES Section 12). Each span is "
          "routed; `error_rate` is on the labeled corpus, showing the queue targets real errors.", ""]
-    labels = {RELABEL: "Relabel candidates — physics contradicts the human label",
-              NEW_CLASS: "New-class candidates — structure the stand/walk taxonomy misses (governed, §11.2)",
-              COLLECT: "Collect-more — systematically hard conditions"}
+    labels = {RELABEL: "Relabel candidates - physics contradicts the human label",
+              NEW_CLASS: "New-class candidates - structure the stand/walk taxonomy misses (governed, Section 11.2)",
+              COLLECT: "Collect-more - systematically hard conditions"}
     for route in (RELABEL, NEW_CLASS, COLLECT):
         rows = [q for q in queue if q["route"] == route]
         if not rows:
             continue
         n_win = sum(r["n_windows"] for r in rows)
         L += [f"## {labels[route]}  ({len(rows)} spans, {n_win} windows)", "",
-              "| priority | rev/trial | t_start–t_end (s) | label | grav_stab | error_rate | windows |",
+              "| priority | rev/trial | t_start-t_end (s) | label | grav_stab | error_rate | windows |",
               "|---|---|---|---|---|---|---|"]
         for q in rows[:12]:
             L.append(f"| {q['priority']} | {q['rev']}_t{q['trial']} | "
-                     f"{q['t_start_s']}–{q['t_end_s']} | {q['human_label']} | "
+                     f"{q['t_start_s']}-{q['t_end_s']} | {q['human_label']} | "
                      f"{q['grav_stab_mean']} | {q['error_rate']} | {q['n_windows']} |")
         L.append("")
     return "\n".join(L)

@@ -1,5 +1,5 @@
 # S2 dataset: load the labeled rev* trials onto the canonical grid, split by rev
-# the rev2 view: 4 rotational features (L/R_ang_LPF, L/R_angvel_LPF) + Label (§5.7).
+# the rev2 view: 4 rotational features (L/R_ang_LPF, L/R_angvel_LPF) + Label (Section 5.7).
 # reuses S1's resampler (canonical 100 Hz grid) and groups by rev (one subject/day),
 # lockbox holds out whole revs so nothing leaks. does NOT window or train. see README.
 
@@ -21,17 +21,17 @@ FEATURES = ("L_ang_LPF", "R_ang_LPF", "L_angvel_LPF", "R_angvel_LPF")
 LABEL_COL = "Label"
 TIME_COL = "Time"
 
-# label codes (§5.1/§5.2); -1 excluded from training targets, kept for eval
+# label codes (Section 5.1/Section 5.2); -1 excluded from training targets, kept for eval
 STAND, WALK, HUMAN_UNKNOWN = 0, 10, -1
 TRAIN_CLASSES = (STAND, WALK)
 
-# lockbox: whole revs sealed until the very end (§7); rev8 balanced, rev13 walk-heavy
+# lockbox: whole revs sealed until the very end (Section 7); rev8 balanced, rev13 walk-heavy
 DEFAULT_LOCKBOX_REVS = ("rev8", "rev13")
 
 _REV = re.compile(r"(rev\d+)")
 _TRIAL = re.compile(r"trial_(\d+)")
 
-# revs excluded entirely; rev14 confirmed anomalous 2026-07-21 (§6.4) -- low-amplitude
+# revs excluded entirely; rev14 confirmed anomalous 2026-07-21 (Section 6.4) -- low-amplitude
 # gait, no raw source to audit, dragged LORO macro-F1. not deleted from disk
 EXCLUDED_REVS = ("rev14",)
 
@@ -63,7 +63,7 @@ class Trial:
     split: str # "train" | "val" | "lockbox"
     frame: pd.DataFrame # Time, segment, FEATURES..., Label -- usable segments only
     n_source_rows: int # rows in the raw trial, before normalization
-    dropped_rows: int # raw rows in segments too short / off-grid to keep (§3.2 burst)
+    dropped_rows: int # raw rows in segments too short / off-grid to keep (Section 3.2 burst)
 
 
 # read a trial, strip header whitespace, keep Time + 4 features + Label by name

@@ -130,7 +130,7 @@ def render(fused: dict, s2: dict, cal: dict, act: dict, n: int, unmatched: int,
           rev_rows: list[dict]) -> str:
     L = [
         "# S4 fusion report", "",
-        f"Joined **{n:,}** windows (S2 out-of-fold ∩ S3 verdicts); {unmatched} S2 windows "
+        f"Joined **{n:,}** windows (S2 out-of-fold intersect S3 verdicts); {unmatched} S2 windows "
         "unmatched to S3. Non-lockbox (train+val); the lockbox opens once, at the end.", "",
         "## Fused vs S2 alone (full coverage)", "",
         "| model | macro-F1 | accuracy | stand-recall | walk-recall |",
@@ -148,7 +148,7 @@ def render(fused: dict, s2: dict, cal: dict, act: dict, n: int, unmatched: int,
         "", "## Acting on confidence (abstain on LOW = disagreement)", "",
         f"A controller that acts on HIGH+MED and holds on LOW covers **{act['coverage']}** of "
         f"windows at accuracy **{act['accuracy']}** (stand-recall {act['stand_recall']}, "
-        f"walk-recall {act['walk_recall']}) — vs S2's {s2['accuracy']} at full coverage. The "
+        f"walk-recall {act['walk_recall']}) - vs S2's {s2['accuracy']} at full coverage. The "
         "abstained windows are the disagreement cases the agent reviews.",
         "", render_per_rev(rev_rows),
     ]

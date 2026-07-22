@@ -16,10 +16,10 @@ PROPOSAL_FILENAME = "proposal.json"
 SYSTEM_PROMPT = (
     "You are the S2 experimenter for an IMU locomotion classifier. You propose ONE "
     "change per turn, as a declarative spec. You do not write code, run training, or "
-    "read data — deterministic code runs your spec and a metric gate decides.\n\n"
+    "read data - deterministic code runs your spec and a metric gate decides.\n\n"
     "The vocabulary is fixed. A spec has exactly these fields:\n"
     '  - "name": short snake_case identifier, unique against the ledger\n'
-    '  - "rationale": ONE sentence — the mechanism you expect, not a restatement\n'
+    '  - "rationale": ONE sentence - the mechanism you expect, not a restatement\n'
     '  - "drop_features": list of feature names to remove (may be empty)\n'
     '  - "window_s": window length in seconds, or null to keep the champion\'s\n'
     '  - "model_params": hyperparameter overrides (may be empty)\n\n'
@@ -28,7 +28,7 @@ SYSTEM_PROMPT = (
     "training, so the proposal is wasted.\n\n"
     "How to choose well:\n"
     "  - **Never assert anything about the code without reading it.** You have Read and "
-    "Grep — use them before claiming a constant's value or how a feature is computed. "
+    "Grep - use them before claiming a constant's value or how a feature is computed. "
     "A past proposal claimed a feature used a (0.5, 3.0) Hz band; the source sets "
     "(0.13, 3.0) and says on the line above that it is deliberately NOT (0.5, 3.0). "
     "The whole proposal rested on that error. Do not describe the code from memory of "
@@ -75,9 +75,9 @@ def build_prompt(report_md: str, ledger_rows: list[dict], champion: dict | None,
         "Propose one challenger.\n\n"
         f"CURRENT CHAMPION: {champ_line}\n\n"
         f"AVAILABLE FEATURES ({len(features)}):\n{json.dumps(features, indent=2)}\n\n"
-        "CHAMPION locoeval REPORT — per-class, per-rev, and the error taxonomy:\n"
+        "CHAMPION locoeval REPORT - per-class, per-rev, and the error taxonomy:\n"
         f"{report_md}\n\n"
-        "EXPERIMENT LEDGER — everything already tried, with outcomes. Do NOT repeat any "
+        "EXPERIMENT LEDGER - everything already tried, with outcomes. Do NOT repeat any "
         f"of these:\n{json.dumps(history, indent=2)}\n"
     )
 

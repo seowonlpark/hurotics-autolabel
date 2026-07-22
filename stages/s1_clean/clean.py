@@ -178,7 +178,7 @@ def main() -> None:
         "rather than contributing a noise argmax (Deg_Z drifts, so it often has none).",
         "",
         "This resolves which gyro axis measures which angle axis. It does NOT pick the SAGITTAL",
-        "axis — that has no in-file signature (DOMAIN_NOTES 6.2); stages/s2_ml/transform.py fixes",
+        "axis - that has no in-file signature (DOMAIN_NOTES 6.2); stages/s2_ml/transform.py fixes",
         "it to the Y plane for every file (6.3), flagging rather than guessing anomalies.",
         "",
         f"- side-channels normalized rad/s -> deg/s: **{len(norm_sides)}**",
@@ -193,7 +193,7 @@ def main() -> None:
         "## Yaw / drift trust",
         "",
         "A Deg channel whose value tracks session time is measuring integration drift, not",
-        "orientation (§4.2). Flagged per channel, not dropped — the raw superset is kept.",
+        "orientation (Section 4.2). Flagged per channel, not dropped - the raw superset is kept.",
         "",
         f"- Deg channels flagged drift-contaminated (|corr(Deg,Time)| >= 0.9): **{len(drift_flagged)}** "
         f"across **{len({p for p, _ in drift_flagged})}** files",

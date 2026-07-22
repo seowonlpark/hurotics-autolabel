@@ -23,7 +23,7 @@ DEFAULT_MAX_TURNS = 25 # hard ceiling on turns; a stuck agent fails fast, doesn'
 # stream-json carries tool results inline, base64 images included. one S3 turn can batch
 # several ~0.5 MB figures (parallel Read) into a single message, past the SDK transport's
 # 1 MB default line buffer -- a fatal decode mid-run (the third stdio trap after CreateProcess
-# length and cp949, DOMAIN_NOTES §8). raise the cap so image-reading agents survive a big turn.
+# length and cp949, DOMAIN_NOTES Section 8). raise the cap so image-reading agents survive a big turn.
 MAX_BUFFER_SIZE = 32 * 1024 * 1024 # 32 MB
 
 TOOL_LOG_FILENAME = "run_log.jsonl" # per-run tool-call log
@@ -72,7 +72,7 @@ def _load_domain_notes() -> str:
 def _build_system_prompt(spec: AgentSpec) -> str:
     return (
         f"{spec.system_prompt}\n\n"
-        "--- BEGIN DOMAIN NOTES (established findings — do not re-derive, "
+        "--- BEGIN DOMAIN NOTES (established findings - do not re-derive, "
         "do not silently contradict) ---\n"
         f"{_load_domain_notes()}\n"
         "--- END DOMAIN NOTES ---\n"
@@ -123,7 +123,7 @@ async def run_agent(spec: AgentSpec, prompt: str, run_dir: Path) -> AgentResult:
     log_path = run_dir / TOOL_LOG_FILENAME
 
     # system prompt goes to the CLI as a FILE, not an argv string -- DOMAIN_NOTES
-    # outgrew the Windows CreateProcess limit (see README / DOMAIN_NOTES §8)
+    # outgrew the Windows CreateProcess limit (see README / DOMAIN_NOTES Section 8)
     prompt_path = run_dir / SYSTEM_PROMPT_FILENAME
     prompt_path.write_text(_build_system_prompt(spec), encoding="utf-8")
 

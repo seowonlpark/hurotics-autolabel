@@ -1,7 +1,7 @@
-# locoeval: the blind measure layer -- emits objective numbers, NO opinion (§7).
-# headline metric is macro-F1 (§5.4): the corpus is ~83% walk, so accuracy flatters a
+# locoeval: the blind measure layer -- emits objective numbers, NO opinion (Section 7).
+# headline metric is macro-F1 (Section 5.4): the corpus is ~83% walk, so accuracy flatters a
 # "predict walk always" model. -1 (human-unknown) is excluded from metrics, share reported.
-# does NOT invent the full §7 taxonomy (its precedence semantics are unspecified here) --
+# does NOT invent the full Section 7 taxonomy (its precedence semantics are unspecified here) --
 # only the unambiguous parts: per-class rates, confusion, transition timing. see README.
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class ClassMetrics:
 @dataclass
 class EvalResult:
     n: int # windows scored
-    macro_f1: float # headline metric (§5.4)
+    macro_f1: float # headline metric (Section 5.4)
     accuracy: float
     balanced_accuracy: float
     per_class: list[ClassMetrics]
@@ -98,7 +98,7 @@ def evaluate(y_true: np.ndarray, y_pred: np.ndarray,
 
 
 # timing behaviour around true state changes -- the substrate for late/early/flicker.
-# raw counts, not the §7 taxonomy (its precedence rules are unspecified here). flicker_rate
+# raw counts, not the Section 7 taxonomy (its precedence rules are unspecified here). flicker_rate
 # = spurious switches per steady window; boundary_error = signed window offset (neg=early)
 def transition_report(df: pd.DataFrame, y_pred: np.ndarray) -> dict:
     d = df.reset_index(drop=True).copy()
@@ -147,8 +147,8 @@ def render(result: EvalResult, transitions: dict | None = None, title: str = "lo
         f"# {title}",
         "",
         f"- windows: **{result.n:,}**",
-        f"- **macro-F1: {result.macro_f1:.4f}**  (headline, §5.4)",
-        f"- accuracy: {result.accuracy:.4f}  ·  balanced accuracy: {result.balanced_accuracy:.4f}",
+        f"- **macro-F1: {result.macro_f1:.4f}**  (headline, Section 5.4)",
+        f"- accuracy: {result.accuracy:.4f}  -  balanced accuracy: {result.balanced_accuracy:.4f}",
         "",
         "| class | support | precision | recall | F1 |",
         "|---|---|---|---|---|",
@@ -161,7 +161,7 @@ def render(result: EvalResult, transitions: dict | None = None, title: str = "lo
         lines.append(f"| **{t}** | {row['stand']:,} | {row['walk']:,} |")
 
     if result.per_rev_macro_f1:
-        lines += ["", "per-rev macro-F1 (each rev = one subject/day, §7):", ""]
+        lines += ["", "per-rev macro-F1 (each rev = one subject/day, Section 7):", ""]
         for rev, f1 in sorted(result.per_rev_macro_f1.items()):
             lines.append(f"- `{rev}`: {f1:.4f}")
 
@@ -172,9 +172,9 @@ def render(result: EvalResult, transitions: dict | None = None, title: str = "lo
             f"- true transitions: **{transitions['true_transitions']}**",
             f"- flicker rate (spurious switches per steady window): **{transitions['flicker_rate']:.4f}**",
             f"- boundary error (windows): median {b['median']:+.1f}, mean|err| {b['mean_abs']:.2f}",
-            f"- early {b['early']} · on-time {b['on_time']} · late {b['late']}",
+            f"- early {b['early']} - on-time {b['on_time']} - late {b['late']}",
             "",
-            "*Not the §7 taxonomy — its precedence semantics are unspecified in this repo.*",
+            "*Not the Section 7 taxonomy - its precedence semantics are unspecified in this repo.*",
         ]
     return "\n".join(lines)
 

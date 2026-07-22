@@ -49,7 +49,7 @@ def dense_predict_segment(model, seg: pd.DataFrame, feats: list[str], spec: Wind
 
 
 # split into contiguous runs where ground truth is a trainable class; -1 (human-unknown)
-# is excluded from scoring (§5.2/§7). splitting preserves contiguity so -1 reads as a boundary
+# is excluded from scoring (Section 5.2/Section 7). splitting preserves contiguity so -1 reads as a boundary
 def labeled_runs(gt: np.ndarray, pred: np.ndarray, t: np.ndarray):
     ok = np.isin(gt, TRAIN_CLASSES)
     if not ok.any():

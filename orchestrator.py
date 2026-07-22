@@ -70,7 +70,7 @@ async def phase2(run_dir: Path) -> None:
 
     if not queue:
         write_review(run_dir, queue, [], "")
-        print("[s1-exc] empty queue — nothing to triage")
+        print("[s1-exc] empty queue - nothing to triage")
         return
 
     result = await run_agent(S1_EXCEPTION_AGENT, build_prompt(queue, summary), run_dir)
@@ -84,7 +84,7 @@ async def phase2(run_dir: Path) -> None:
     print(f"[s1-exc] {len(queue)} triaged -> {out.name}: {tally}; "
           f"turns={result.num_turns} cost=${result.cost_usd:.4f}")
     if decisions is None:
-        print("[s1-exc] WARNING: agent output did not parse — all items marked needs_human")
+        print("[s1-exc] WARNING: agent output did not parse - all items marked needs_human")
 
 
 # S2 champion/challenger: experimenter proposes, critic reviews before any training,
@@ -113,13 +113,13 @@ async def phase3(run_dir: Path) -> None:
     # 1. propose
     ex_prompt = s2_experimenter.build_prompt(report_md, rows, champion, feats)
     if prior:
-        ex_prompt += ("\nPROPOSALS ALREADY RAISED (some never ran — do not repeat "
+        ex_prompt += ("\nPROPOSALS ALREADY RAISED (some never ran - do not repeat "
                       f"these either):\n{json.dumps([p['proposal'] for p in prior], indent=2)}\n")
     ex = await run_agent(s2_experimenter.S2_EXPERIMENTER_AGENT, ex_prompt, run_dir)
     proposal = s2_experimenter.parse_proposal(ex.final_text)
     s2_experimenter.write_proposal(run_dir, proposal, ex.final_text)
     if proposal is None:
-        print("[s2-exp] proposal did not parse — nothing run")
+        print("[s2-exp] proposal did not parse - nothing run")
         record_proposal(S2_RUN_DIR, {"unparsed": ex.final_text[:500]},
                         {"verdict": "revise"}, ran=False, note="proposal did not parse")
         return
@@ -190,7 +190,7 @@ async def phase4(run_dir: Path) -> None:
     path, n_ok, n_flagged = s3_physics.write_hypotheses(run_dir, hyps, verdicts, res.final_text)
 
     if hyps is None:
-        print("[s3] hypotheses did not parse — nothing recorded")
+        print("[s3] hypotheses did not parse - nothing recorded")
     else:
         print(f"[s3] {n_ok} hypotheses passed the provenance gate, {n_flagged} flagged "
               f"-> {path.name}")
@@ -220,19 +220,61 @@ async def phase5(run_dir: Path) -> None:
     findings = s4_fusion.parse_review(res.final_text)
     path, n_ok, n_flagged = s4_fusion.write_review(run_dir, findings, res.final_text)
     if findings is None:
-        print("[s4] review did not parse — nothing recorded")
+        print("[s4] review did not parse - nothing recorded")
     else:
         print(f"[s4] {n_ok} findings passed the provenance gate, {n_flagged} flagged "
               f"-> {path.name}")
     print(f"[s4] cost: ${res.cost_usd:.4f}, turns={res.num_turns}")
 
 
-PHASES = {2: phase2, 3: phase3, 4: phase4, 5: phase5}
+# S4 new-class discovery: the deterministic core assembles the evidence bundle (the NEW_CLASS
+# curation spans + their physics profiles), then the agent PROPOSES classes the {stand, walk}
+# taxonomy misses. governed (DOMAIN_NOTES Section 11.2): code validates cluster mass + provenance and
+# routes every proposal to needs_human -- it never adds a class, never touches the model, the
+# swap rule, the fuser, or a label. read-only, orthogonal to the deployed algorithm.
+async def phase6(run_dir: Path) -> None:
+    from stages.s4_fusion.newclass import CANDIDATES_JSON, build_bundle
+    from stages.s4_fusion.run import FUSED_CSV, S4_OUT_DIR
+    from stages.s3_physics.run import S3_OUT_DIR
+    from agents import s4_newclass
+
+    if not (S4_OUT_DIR / FUSED_CSV).exists():
+        raise FileNotFoundError(
+            f"No fused table at {S4_OUT_DIR / FUSED_CSV}. Run `python -m stages.s4_fusion.run` "
+            f"(or --phase 5) first - new-class discovery reads the fusion's curation spans.")
+
+    # 1. deterministic core -- assemble the candidate evidence bundle
+    bundle = build_bundle(S4_OUT_DIR, S3_OUT_DIR)
+    sig = bundle["corpus_signature"]
+    print(f"[s4-nc] {sig['n_spans']} candidate spans / {sig['n_windows']} windows across "
+          f"{sig['n_revs']} revs -> {S4_OUT_DIR / CANDIDATES_JSON}")
+    if not bundle["spans"]:
+        s4_newclass.write_proposals(run_dir, [], bundle["spans"], "")
+        print("[s4-nc] no candidate spans - nothing to propose")
+        return
+
+    # 2. the agent proposes classes (read-only; physics figures are S3's, lockbox-sealed)
+    prompt = s4_newclass.build_prompt(bundle, S3_OUT_DIR / "plots")
+    res = await run_agent(s4_newclass.S4_NEWCLASS_AGENT, prompt, run_dir)
+
+    # 3. gate -- code keeps cluster mass + provenance; every proposal is needs_human either way
+    proposals = s4_newclass.parse_proposals(res.final_text)
+    path, n_ok, n_weak = s4_newclass.write_proposals(run_dir, proposals, bundle["spans"],
+                                                     res.final_text)
+    if proposals is None:
+        print("[s4-nc] proposals did not parse - nothing recorded")
+    else:
+        print(f"[s4-nc] {n_ok} proposals supported (cluster mass met), {n_weak} insufficient "
+              f"-> {path.name}; all routed to needs_human")
+    print(f"[s4-nc] cost: ${res.cost_usd:.4f}, turns={res.num_turns}")
+
+
+PHASES = {2: phase2, 3: phase3, 4: phase4, 5: phase5, 6: phase6}
 
 
 def main() -> None:
     # agent text carries em-dashes/arrows/Greek that the Windows cp949 console can't encode;
-    # replace unencodable chars so a stray print can't crash a run already paid for (§8)
+    # replace unencodable chars so a stray print can't crash a run already paid for (Section 8)
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")

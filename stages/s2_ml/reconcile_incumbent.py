@@ -3,7 +3,7 @@
 # on almost-disjoint recordings (7/8 loco pairs are the sealed rev13 lockbox), so the full
 # comparison is deferred to lockbox-open. what's scorable now: both predictors on the one
 # shared non-lockbox recording, same canonical rows, rate over a common denominator --
-# directional only, NOT a finding. see README / POSTDAY2 §5.3.
+# directional only, NOT a finding. see README / POSTDAY2 Section 5.3.
 
 from __future__ import annotations
 
@@ -103,17 +103,17 @@ def main() -> None:
     print("=" * 72)
     print("INCUMBENT RECONCILIATION")
     print("=" * 72)
-    print(f"loco-paired recordings: {len(pairs)} total — "
+    print(f"loco-paired recordings: {len(pairs)} total - "
           f"{len(train_pairs)} train-rev, {len(lock_pairs)} LOCKBOX-rev "
           f"({sorted({rev_of(p) for p, _ in lock_pairs})}).")
     print("The published loco profile is dominated by LOCKBOX recordings; our champion is\n"
-          "scored on train revs. They are NOT the same recordings — the naive\n"
+          "scored on train revs. They are NOT the same recordings - the naive\n"
           "0.888-vs-0.519 comparison is cross-recording. A like-for-like number on rev13\n"
           "requires scoring our model on the lockbox, which opens exactly once at the end.\n"
           f"Shared, scorable-now recordings: {[p.name for p, _ in train_pairs]}\n")
 
     if not train_pairs:
-        raise SystemExit("no shared non-lockbox recording — full reconciliation is "
+        raise SystemExit("no shared non-lockbox recording - full reconciliation is "
                          "deferred to lockbox-open. Nothing to score now.")
 
     # generous loco decode, fit on the shared recordings only (best case for the incumbent)
@@ -167,11 +167,11 @@ def main() -> None:
 
     sc_ours, sc_loco = ours_rate["steady_confusion"], loco_rate["steady_confusion"]
     print("\n" + "-" * 72)
-    print("steady_confusion as a fraction of ALL scored rows (the hazardous bucket, §7):")
+    print("steady_confusion as a fraction of ALL scored rows (the hazardous bucket, Section 7):")
     print(f"  ours {sc_ours:.4f}   loco {sc_loco:.4f}   "
           f"(ours {'higher' if sc_ours > sc_loco else 'lower'} by "
           f"{abs(sc_ours - sc_loco):.4f})")
-    print("\nDIRECTIONAL ONLY — one shared non-lockbox recording. NOT a finding. The\n"
+    print("\nDIRECTIONAL ONLY - one shared non-lockbox recording. NOT a finding. The\n"
           "share-of-errors framing (0.888 vs 0.519) compared different recordings on\n"
           "different denominators; on the same rows the number to watch is the rate\n"
           "above. Full comparison waits for lockbox-open (rev13, where 7/8 loco pairs live).")

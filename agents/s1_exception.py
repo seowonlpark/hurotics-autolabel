@@ -13,7 +13,7 @@ from stages.s2_ml.transform import SAGITTAL_DEG_AXIS
 
 REVIEW_FILENAME = "exceptions_review.jsonl"
 
-# the only Deg axis the feature path reads (sagittal/Y, §6.3); derived from the consumer
+# the only Deg axis the feature path reads (sagittal/Y, Section 6.3); derived from the consumer
 # so it can't go stale -- a conflict on any other axis never reaches the feature path
 _SAGITTAL_CANDIDATE_AXES = frozenset({SAGITTAL_DEG_AXIS})
 
@@ -23,19 +23,19 @@ _DATA_PATH_SIDES = frozenset({"L", "R"})
 SYSTEM_PROMPT = (
     "You are the S1 exception triage agent for an IMU locomotion pipeline. The "
     "deterministic clean stage has already measured the data and flagged exceptions. "
-    "JUDGE them — do not recompute or open raw CSVs to 'eyeball' signals; the notes "
+    "JUDGE them - do not recompute or open raw CSVs to 'eyeball' signals; the notes "
     "warn the eyeball is not truth and whole-file statistics mislead.\n\n"
     "Answer TWO orthogonal questions per item. Judge them separately; do not infer one "
     "from the other. Deterministic code collapses the pair into the final disposition."
     "\n\n"
-    "1. `explained` — does DOMAIN NOTES account for this evidence?\n"
+    "1. `explained` - does DOMAIN NOTES account for this evidence?\n"
     "  - \"yes\": a finding covers it and the evidence agrees.\n"
-    "  - \"no\": no finding covers it — say what is unexplained. The case we most want "
+    "  - \"no\": no finding covers it - say what is unexplained. The case we most want "
     "surfaced.\n"
     "  - \"contradicts\": a finding covers it but the MEASURED EVIDENCE disagrees with "
     "what that finding says the signal should look like. Name the section and the "
-    "disagreement — the note may be wrong. Never act on it.\n\n"
-    "2. `action` — is a person needed before this data can be used?\n"
+    "disagreement - the note may be wrong. Never act on it.\n\n"
+    "2. `action` - is a person needed before this data can be used?\n"
     "  - \"none\": the pipeline already handles it end to end.\n"
     "  - \"human\": someone must act or decide (re-export, repair, amend a note).\n"
     "  A documented cause can still need a person (a broken clock is explained and "
@@ -44,15 +44,15 @@ SYSTEM_PROMPT = (
     "why}, computed from actual downstream consumers. DOMAIN NOTES states POLICY; "
     "`handled` states what the code does. A note that an anomaly is 'recorded' or that "
     "features 'must consult' a flag is NOT evidence anything consumes it. On "
-    "disagreement, `handled` wins — but it settles `action` ONLY. A stale claim about "
+    "disagreement, `handled` wins - but it settles `action` ONLY. A stale claim about "
     "handling does not make the finding's account of the signal wrong, so it is not "
     "\"contradicts\"; say so in the rationale and leave `explained` on the evidence."
     "\n\n"
     "Fields:\n"
-    "  - `sections`: every DOMAIN NOTES section relied on, e.g. [\"4.1b\"] — all that "
+    "  - `sections`: every DOMAIN NOTES section relied on, e.g. [\"4.1b\"] - all that "
     "apply, not just one. Non-empty when explained is \"yes\"/\"contradicts\"; [] when "
     "\"no\".\n"
-    "  - `confidence`: confidence in these two fields, NOT the underlying cause — "
+    "  - `confidence`: confidence in these two fields, NOT the underlying cause - "
     "certainty that something is unexplained is high confidence.\n"
     "  - One terse sentence of rationale.\n\n"
     "Output ONLY a JSON array, one object per item, each exactly: "
@@ -79,7 +79,7 @@ def _handled(value: bool, why: str) -> dict:
 def _handled_quarantine() -> dict:
     return _handled(False,
                     "the file is kept out of data/clean so downstream is safe, but the "
-                    "pipeline cannot repair it — recovery needs a person (§2.6)")
+                    "pipeline cannot repair it - recovery needs a person (Section 2.6)")
 
 
 # handled helper: is this axis conflict on a channel the feature path actually reads?
@@ -93,23 +93,23 @@ def _handled_axis_anomaly(side: str, conflicts: list[str]) -> dict:
     if not reachable:
         return _handled(True,
                         f"conflict is on Deg {sorted(conflicts)}, not the sagittal Y "
-                        f"plane the feature path reads (§6.3), so no consumer reads it")
+                        f"plane the feature path reads (Section 6.3), so no consumer reads it")
     return _handled(False,
                     f"conflict touches Deg {reachable}, the sagittal Y plane the feature "
-                    f"path reads — transform.py's check_axis_trust hard-fails this file "
+                    f"path reads - transform.py's check_axis_trust hard-fails this file "
                     f"rather than reading a corrupted axis, so nothing is corrupted, but "
                     f"nothing is featurized either until someone resolves the axis")
 
 
-# handled helper: no code consumes drift_contaminated; §4.2's "must consult" is policy only
+# handled helper: no code consumes drift_contaminated; Section 4.2's "must consult" is policy only
 def _handled_drift(channel: str) -> dict:
     if channel.endswith("_Deg_Z"):
         return _handled(True,
                         "nothing in the pipeline reads the drift flag, but nothing "
-                        "reads Deg_Z either — the feature path uses the sagittal Deg "
+                        "reads Deg_Z either - the feature path uses the sagittal Deg "
                         "axis and its gyro rate, so this flag is inert, not honoured")
     return _handled(False,
-                    f"{channel} is not the yaw-like Deg_Z axis §4.2 predicts, and no "
+                    f"{channel} is not the yaw-like Deg_Z axis Section 4.2 predicts, and no "
                     f"code consumes the drift flag, so nothing would exclude it")
 
 
@@ -178,7 +178,7 @@ def build_prompt(queue: list[dict], summary: dict) -> str:
         "files with routine gyro-abstentions (static files falling back to the "
         "documented convention). These are designed-normal and are NOT in the queue; "
         "flag only if that COUNT itself looks anomalous for this corpus.\n\n"
-        "QUEUE — return exactly one verdict per item, matched by `ref`:\n"
+        "QUEUE - return exactly one verdict per item, matched by `ref`:\n"
         f"{json.dumps(queue, indent=2, ensure_ascii=False)}\n"
     )
 

@@ -2,7 +2,7 @@
 # tests the [reported] claim that the rule-based algo fails differently from our
 # classifier (few steady_confusion, many swallowed) -- if true, a mandate to build S3.
 # runs `loco` as a prediction against the same ground truth on the paired recordings.
-# does NOT resurrect loco (§4.5 severed it); measuring how it fails != trusting it. see README.
+# does NOT resurrect loco (Section 4.5 severed it); measuring how it fails != trusting it. see README.
 
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ def best_mapping(pairs: list[tuple[Path, pd.DataFrame]]) -> dict[int, int]:
 def main() -> None:
     pairs = find_pairs()
     if not pairs:
-        raise SystemExit("no paired recordings carrying `loco` — cannot profile")
+        raise SystemExit("no paired recordings carrying `loco` - cannot profile")
     print(f"[loco] {len(pairs)} paired recordings carry both `loco` and ground truth")
 
     mapping = best_mapping(pairs)

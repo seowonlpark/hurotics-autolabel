@@ -2,7 +2,7 @@
 # this is the deployable artifact -- and the confidence signal the incumbent lacks (the reason
 # the project exists). deterministic, no data access: the whole policy is reviewable here.
 #
-# every rule is measured, not assumed (DOMAIN_NOTES §12, the S2xS3 contingency):
+# every rule is measured, not assumed (DOMAIN_NOTES Section 12, the S2xS3 contingency):
 #   - AGREEMENT is 98% correct -> HIGH; DISAGREEMENT is ~coin-flip for either model's own
 #     label -> LOW (abstain). agreement beats S2's own probability at matched coverage, so S3
 #     carries independent information, not a rehash of S2's confidence.

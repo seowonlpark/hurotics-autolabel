@@ -4,7 +4,7 @@
 # every row lands in one bucket by precedence:
 #   correct > omission/swallowed/edge_omission > flicker > late > early > steady_confusion
 # feed it row-level predictions from dense inference (predict.py), not window labels --
-# the thresholds are ms-scale. runs per segment (§3.1). see README / DOMAIN_NOTES §7.
+# the thresholds are ms-scale. runs per segment (Section 3.1). see README / DOMAIN_NOTES Section 7.
 
 from __future__ import annotations
 

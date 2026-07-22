@@ -144,14 +144,14 @@ def main() -> None:
             for field, r, g, d in v["diffs"]:
                 if d > args.tol:
                     print(f"         {field:24} recorded={r:.6f} replayed={g:.6f} "
-                          f"Δ={d:.2e}")
+                          f"delta={d:.2e}")
 
     print()
     if all_ok:
         print("RECONSTRUCTIBLE: every same-HEAD entry replayed exactly from its spec. "
               "Older-sha entries need `git checkout <sha>` for a strict replay (expected).")
     else:
-        raise SystemExit("NON-REPRODUCIBLE: a same-sha entry did not replay — the ledger "
+        raise SystemExit("NON-REPRODUCIBLE: a same-sha entry did not replay - the ledger "
                          "is not a faithful revert unit. See the DIFF rows above.")
 
 

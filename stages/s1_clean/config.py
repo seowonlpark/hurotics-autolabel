@@ -9,9 +9,9 @@ COLUMN_PREFIX_PATTERN = r"^\d{2,}_"
 # name -> role; absence is a fact, not an error (presence is per-file, not per-corpus)
 ROLE_BY_NAME = {
     "Time": "time",
-    # thigh/trunk IMUs (L/R/B) -- the trusted angle source (§4/6.2)
+    # thigh/trunk IMUs (L/R/B) -- the trusted angle source (Section 4/6.2)
     **{f"{s}_Deg_{a}": "imu_deg" for s in ("L", "R", "B") for a in "XYZ"},
-    # gyro = angular velocity, reliable (Gyro == d(Deg)/dt, §4.1); units/axes differ
+    # gyro = angular velocity, reliable (Gyro == d(Deg)/dt, Section 4.1); units/axes differ
     # per file, normalized in the clean layer (see "gyro trust" below)
     **{f"{s}_Gyro_{a}": "imu_gyro" for s in ("L", "R", "B") for a in "XYZ"},
     # accelerometer = gravity reference, needed for axis/calibration checks
@@ -61,14 +61,14 @@ CANONICAL_HZ = 100.0
 CANONICAL_DT_MS = 1000.0 / CANONICAL_HZ
 
 # measured rates grouped into families within this tolerance; the ~100 Hz family spans
-# 99.38-100.0 because the clock quantizes dt to 10 + 2^-k ms -- same device (§2.5)
+# 99.38-100.0 because the clock quantizes dt to 10 + 2^-k ms -- same device (Section 2.5)
 RATE_TOLERANCE = 0.05
 
 # gaps fall anywhere, so the segment (a gap-free run) is the unit, not the file;
 # nothing is ever resampled across a gap
 MIN_SEGMENT_SAMPLES = 100 # 1 s at canonical rate; shorter runs recorded, not used
 
-# anti-aliasing is not optional: naive [::5] folds >50 Hz into the gait band (§2.5)
+# anti-aliasing is not optional: naive [::5] folds >50 Hz into the gait band (Section 2.5)
 DECIMATE_FILTER = "fir"
 
 # interpolation by role; only Label reaches the resampler (computed cols are pruned first),
@@ -76,7 +76,7 @@ DECIMATE_FILTER = "fir"
 NEAREST_ROLES = ("label",)
 
 # gyro trust / normalization
-# gyro is reliable but its units/axes are inconsistent within a file (§4.1b): B is
+# gyro is reliable but its units/axes are inconsistent within a file (Section 4.1b): B is
 # rad/s, L/R is deg/s, and d(Deg_Y)/dt tracks Gyro_Z not Gyro_Y. detected per file
 # in channel_trust.py, never asserted from the tables below. see DOMAIN_NOTES.
 SIDES = ("L", "R", "B")
@@ -86,21 +86,21 @@ RAD2DEG = 57.29577951308232
 CANONICAL_GYRO_UNIT = "deg/s" # angle channels are degrees, so deg/s keeps slope~1
 UNIT_TO_DEGPS_SCALE = {"deg/s": 1.0, "rad/s": RAD2DEG}
 
-# the Deg->Gyro axis map is a fixed device permutation (Y<->Z, X to itself, §4.1b).
+# the Deg->Gyro axis map is a fixed device permutation (Y<->Z, X to itself, Section 4.1b).
 # NOT sagittality -- which axis is sagittal has no in-file signature; transform.py fixes
-# it to the Y plane for every file (§6.3). used only as the abstention fallback.
+# it to the Y plane for every file (Section 6.3). used only as the abstention fallback.
 DOCUMENTED_GYRO_PERMUTATION = {"X": "X", "Y": "Z", "Z": "Y"}
 
-# below this |r| the axis is too static to read; it abstains (§11.1). applied per Deg
-# axis, not once per side -- Deg_Z drifts and its derivative is often noise (§4.2)
+# below this |r| the axis is too static to read; it abstains (Section 11.1). applied per Deg
+# axis, not once per side -- Deg_Z drifts and its derivative is often noise (Section 4.2)
 TRUST_R_FLOOR = 0.9
 
-# documented convention, used only as the abstention fallback, never the first answer (§4.1b)
+# documented convention, used only as the abstention fallback, never the first answer (Section 4.1b)
 DOCUMENTED_GYRO_UNIT = {"L": "deg/s", "R": "deg/s", "B": "rad/s"}
 
 # yaw / drift trust
 # a Deg channel whose value tracks session time is measuring integration drift, not
-# orientation (§4.2); flagged per channel per file, never dropped -- the raw superset stays
+# orientation (Section 4.2); flagged per channel per file, never dropped -- the raw superset stays
 YAW_DRIFT_R_FLOOR = 0.9 # |corr(Deg, Time)| at/above this => drift-contaminated
 DRIFT_MIN_SEGMENT_S = 5.0 # a segment must span this long for its drift to mean anything
 
@@ -108,7 +108,7 @@ DRIFT_MIN_SEGMENT_S = 5.0 # a segment must span this long for its drift to mean 
 # the line is MEASURED vs COMPUTED. the device measures IMU + load cells; it computes
 # Cadence, GCP, admittance, PID state etc -- firmware opinion, same bucket as `loco`.
 # dropping computed cols also collapses every header shape into one canonical form and strips
-# the firmware-era confound (every position-churning column is a computed one). see §9.
+# the firmware-era confound (every position-churning column is a computed one). see Section 9.
 KEEP_MEASURED = (
     "Time",
     *[f"{s}_{k}_{a}" for s in ("L", "R", "B") for k in ("Deg", "Gyro", "Acc") for a in "XYZ"],
@@ -117,8 +117,8 @@ KEEP_MEASURED = (
 )
 
 # documented exceptions to the measured-only rule; currently EMPTY, and that's the
-# finding, not an oversight (§9). Hip_Deg_L/R was cut 2026-07-20 -- 0.991 redundant with
-# Deg_Y, its residual only the firmware's zeroing convention. see README / DOMAIN_NOTES §9.
+# finding, not an oversight (Section 9). Hip_Deg_L/R was cut 2026-07-20 -- 0.991 redundant with
+# Deg_Y, its residual only the firmware's zeroing convention. see README / DOMAIN_NOTES Section 9.
 KEEP_EXCEPTIONS: dict[str, str] = {}
 
 # kept when present: human ground truth travels with the data
