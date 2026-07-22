@@ -10,3 +10,9 @@ runs/
 results/
 
 !runs/.gitkeep
+
+archive/
+
+BUILDLOG.md
+PIPELINE.md
+docs.md

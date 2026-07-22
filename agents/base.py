@@ -1,5 +1,4 @@
 # shared agent machinery: prompt assembly, audit logging, cost tracking
-# every stage agent goes through run_agent() -- nothing else talks to the SDK directly
 
 from __future__ import annotations
 
@@ -117,13 +116,12 @@ def _record_cost(run_dir: Path, result: AgentResult) -> None:
     cost_path.write_text(json.dumps(ledger, indent=2), encoding="utf-8")
 
 
-# run one agent to completion; logs every tool call and the run's cost
+# every stage agent goes through run_agent(); nothing else talks to the SDK directly
 async def run_agent(spec: AgentSpec, prompt: str, run_dir: Path) -> AgentResult:
     run_dir.mkdir(parents=True, exist_ok=True)
     log_path = run_dir / TOOL_LOG_FILENAME
 
-    # system prompt goes to the CLI as a FILE, not an argv string -- DOMAIN_NOTES
-    # outgrew the Windows CreateProcess limit (see README / DOMAIN_NOTES Section 8)
+    # system prompt goes to the CLI as a FILE, not an argv string
     prompt_path = run_dir / SYSTEM_PROMPT_FILENAME
     prompt_path.write_text(_build_system_prompt(spec), encoding="utf-8")
 
@@ -132,9 +130,8 @@ async def run_agent(spec: AgentSpec, prompt: str, run_dir: Path) -> AgentResult:
         allowed_tools=spec.allowed_tools,
         model=spec.model,
         max_turns=spec.max_turns,
-        max_buffer_size=MAX_BUFFER_SIZE, # images ride inline in stream-json; 1 MB default is too small
+        max_buffer_size=MAX_BUFFER_SIZE,
         cwd=str(REPO_ROOT),
-        # matcher=None fires for every tool call
         hooks={"PostToolUse": [HookMatcher(matcher=None, hooks=[_make_audit_hook(log_path, spec.name)])]},
     )
 

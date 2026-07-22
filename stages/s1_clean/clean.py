@@ -22,6 +22,7 @@ from stages.s1_clean.config import (
     KEEP_EXCEPTIONS,
     KEEP_IF_PRESENT,
     KEEP_MEASURED,
+    LABELED_ROOT,
 )
 from stages.s1_clean.manifest import session_of
 from stages.s1_clean.resample import resample_file
@@ -44,10 +45,13 @@ def quarantine_record(path: Path, reason: str, evidence: dict) -> dict:
     }
 
 
-# measured channels + documented exceptions + labels if present
+# measured channels + documented exceptions + (labels only for labeled-source files)
+# a Label in a raw device log is not trusted ground truth, so allow_labels gates it by provenance
 # returns (kept, missing); missing is a fact about this file's header, not an error
-def select_columns(present: list[str]) -> tuple[list[str], list[str]]:
-    wanted = list(KEEP_MEASURED) + list(KEEP_EXCEPTIONS) + list(KEEP_IF_PRESENT)
+def select_columns(present: list[str], allow_labels: bool) -> tuple[list[str], list[str]]:
+    wanted = list(KEEP_MEASURED) + list(KEEP_EXCEPTIONS)
+    if allow_labels:
+        wanted += list(KEEP_IF_PRESENT)
     kept = [c for c in wanted if c in present]
     missing = [c for c in KEEP_MEASURED if c not in present]
     return kept, missing
@@ -64,7 +68,9 @@ def clean_one(path: Path) -> tuple[Path | None, list[dict], str | None, dict | N
     df = df.loc[:, [c for c in df.columns if not c.startswith("Unnamed")]]
     df.columns = list(res.index_by_name) # resolved names, prefix stripped
 
-    kept, missing = select_columns(list(df.columns))
+    # labels are trusted only from data/labeled; a raw Label column is dropped, not kept
+    allow_labels = LABELED_ROOT in path.relative_to(REPO_ROOT).parts
+    kept, missing = select_columns(list(df.columns), allow_labels)
     if missing:
         return None, [], f"missing measured channels: {missing}", None
     df = df[kept]

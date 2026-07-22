@@ -121,8 +121,13 @@ KEEP_MEASURED = (
 # Deg_Y, its residual only the firmware's zeroing convention. see README / DOMAIN_NOTES Section 9.
 KEEP_EXCEPTIONS: dict[str, str] = {}
 
-# kept when present: human ground truth travels with the data
+# kept when present, but ONLY for files under data/labeled: human ground truth travels with
+# the data. a Label column in a raw device log is not trusted ground truth -- it is dropped
+# there. keeping is by provenance, not by presence (the raw corpus carries no Label today).
 KEEP_IF_PRESENT = ("Label",)
+
+# path segment that marks a labeled-source file; KEEP_IF_PRESENT is honored only under it
+LABELED_ROOT = "labeled"
 
 # `loco` and `L/R_Ref_Force` (commanded, not measured) are deliberately excluded,
 # recoverable by name from data/raw if ever needed.
