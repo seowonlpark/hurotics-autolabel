@@ -127,7 +127,16 @@ train+val only, because its plots feed an agent whose hypotheses reach `DOMAIN_N
 python orchestrator.py --phase 2      # S1 exception triage over the latest clean run
 python orchestrator.py --phase 3      # one S2 champion/challenger cycle
 python orchestrator.py --phase 4      # S3: physics core, then the hypothesis agent
+python orchestrator.py --phase 5      # S4: fuse S2+S3 into a call + confidence, then the judgement agent
 ```
+
+S4 fusion combines the S2 learned label and the S3 physics verdict into one call **plus a
+confidence** — the signal the incumbent lacks. The deterministic core (`stages/s4_fusion/run.py`,
+run standalone with `python -m stages.s4_fusion.run`) joins S2's out-of-fold predictions
+(`stages/s2_ml/oof.py`) with S3's `anchors.csv`, applies the fuser, and scores fused-vs-S2 with
+per-tier calibration. The policy is read off the measured S2×S3 contingency (`DOMAIN_NOTES` §12), not
+assumed: agreement → HIGH confidence (98% correct), disagreement → LOW (abstain — a machine `-1`).
+The agent then characterises the disagreement cases; it judges, it never arbitrates.
 
 The S1 exception agent (`agents/s1_exception.py`) reads the clean stage's exception queue
 (`quarantine.jsonl` + `observations.jsonl`) and answers two orthogonal questions per item —
@@ -201,7 +210,7 @@ no message queues. `orchestrator.py` is a dumb sequencer; all intelligence lives
 | **S1 clean** | schema census, rate normalization, gap segmentation, channel trust | exception queue only |
 | **S2 ml** | train + locoeval, champion/challenger | propose → critic reviews → metric-gated promotion |
 | **S3 physics** | anchor features, plots | read plots, write hypotheses with provenance |
-| **S4 report** | — (Read/Grep only) | cross-reference, label audit, flag anomalies |
+| **S4 fusion** | fuse S2+S3 → call + confidence | judge the disagreement cases, flag label problems |
 
 Non-negotiables:
 
@@ -228,12 +237,13 @@ change the champion outside the S2 promotion path.
 | 2 — S1 exception agent | complete — `agents/s1_exception.py` triages the exception queue into known_expected / novel / needs_human with grounded rationale; verified on the real corpus and signed off (gate closed) |
 | 3 — S2 loop | complete, gate closed 2026-07-21 — dataset/transform/features/train/locoeval/taxonomy built; champion `drop_static_offset_family` at LORO macro-F1 **0.8977** (18 features), 4 promotions / 8 non-promotions across 12 ledger entries. Replay reconstructs each spec exactly (≤1e-9), the critic bites 3/3 on the adversarial probe; lockbox (`rev8`/`rev13`) stays sealed as the final test |
 | 4 — S3 physics | complete — swap rule + five anchors in `stages/s3_physics/`, rate-invariance audit recorded (`antiphase`/`gyro_energy` rate_dependent), per-trial plots + provenance-gated hypothesis agent run live 2026-07-22 (4/4 hypotheses passed the gate). The agent surfaced two swap-rule defects, both measured and fixed: rest-anchor centering (§10.5) and the stride-adaptive window (§10.6, walk-recall 0.691→0.855 at no stand cost). Lockbox sealed in the stage |
-| 5 — S4 report | not started |
+| 5 — S4 fusion | deterministic fuser built — combines S2 + S3 into a call + calibrated confidence (fused macro-F1 0.921; act-on-confidence 0.969 acc at 94% coverage, stand-recall 0.897 vs S2 0.865); `DOMAIN_NOTES` §12. Judgement agent wired (`--phase 5`), not yet run live |
 | 6 — hardening + handoff | not started |
 
 Current corpus counts (files, clean vs quarantined, usable segments/minutes, subjects) live in the
-latest `runs/*/clean_report.md` and `census.md`, regenerated every run. A 2026-05 batch is
-quarantined for a broken time base (`DOMAIN_NOTES` §2.6).
+latest `runs/*/clean_report.md` and `census.md`, regenerated every run — currently **91 raw → 90
+clean + 1 quarantined**. That one quarantine is `20260515`, a broken time base (`DOMAIN_NOTES` §2.6);
+the earlier 2026-05-19 batch was removed from the corpus, not re-exported.
 
 See `PLAN.md` for each phase's gate. Sacrifice order if time runs short: Phase 4 first, then
 Phase 5. Never Phases 1–3 — they are the handoff-critical spine.

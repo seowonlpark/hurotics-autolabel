@@ -1,6 +1,6 @@
 # H-CARE Agent Pipeline — Structure & Progression Plan
 
-**Owner:** Lu · **Status:** Phases 0–3 complete · Phase 4 (S3 physics) **complete** — core + gate exercised live, swap rule hardened (rest-anchor centering §10.5, stride-adaptive window §10.6); S4 remains · **Last updated:** 2026-07-22
+**Owner:** Lu · **Status:** Phases 0–4 complete · Phase 5 (S4 **fusion**, restructured from "report") — deterministic fuser built + calibrated confidence signal (fused macro-F1 0.921; act-on-confidence 0.969 acc at 94% coverage, DOMAIN_NOTES §12); judgement agent wired, live run pending · **Last updated:** 2026-07-22
 
 Goal: a staged, agent-assisted pipeline for IMU locomotion data — cleaning, ML experimentation, physics-based analysis, and reporting — where deterministic code does the work, Claude agents handle judgment at defined points, and every decision is logged and reconstructible. Built on the Claude Agent SDK (Python).
 
@@ -79,14 +79,19 @@ second, drift-prone source of truth.
 
 † gyro_energy already failed rate-invariance (rate experiment id=69); carried only until formally cleared or removed.
 
-### S4 — Report
+### S4 — Fusion
+
+Restructured from a read-only *report* to a **fusion** stage (2026-07-22): the S2 learned label and
+the S3 physics verdict are combined into one call **plus a confidence** — the signal the incumbent
+lacks. The label-audit role is subsumed (the agent classifies disagreements, which surfaces label
+problems). Fusion is deterministic; the agent judges the disagreement cases, it does not arbitrate.
 
 | | |
 |---|---|
-| **Deterministic core** | None — agent-only stage, tools restricted to Read/Grep |
-| **Agent role** | Cross-references S1 observations, S2 experiment log, S3 hypotheses · flags ML-vs-physics disagreements · **label audit:** elevated late/early/flicker errors → hypothesis space must include "label definition is wrong" → human-review flag (precedent: labeled STANDING included accel/decel ramps vs. plateau-only ground truth) |
-| **Outputs** | `report.md` (human-readable) · `anomalies.jsonl` (append-only ledger) |
-| **Gate** | ☐ Every anomaly entry names its source stage, file, and window range |
+| **Deterministic core** | `fuse` (per window → `(label, confidence)` from S2 pred+proba and S3 verdict; policy read off the measured S2×S3 contingency, DOMAIN_NOTES §12) · S2 `oof` (champion out-of-fold predictions as an artifact, so fusion joins a file) · `run` (join S2 OOF ∩ S3 anchors, score fused-vs-S2, calibrate tiers, rank disagreements) |
+| **Agent role** | Judges the fuser: characterises each LOW-confidence (disagreement) case — `label_problem` / `s2_error_physics_caught` / `s3_error` / `genuine_ambiguity` — with window-level provenance, and flags label problems for human review. Read-only; never re-labels, never changes the fusion. |
+| **Outputs** | `fused_windows.csv` (per-window call + confidence) · `fusion_report.md` · `fusion.json` (metrics + tier calibration) · `disagreements.json` · `fusion_review.jsonl` (agent) |
+| **Gate** | ☑ Fused output carries a calibrated confidence (HIGH 0.98 / MED 0.88 / LOW 0.79 accuracy, monotonic) · ☐ every agent finding names a real window (enforced in `validate_finding`) |
 
 ---
 
@@ -116,8 +121,10 @@ second, drift-prone source of truth.
 - ☑ Every decision has written rationale grounded in a DOMAIN_NOTES section; `needs_human` fires
       (the degenerate-time-base quarantines → re-export) while pipeline-handled anomalies/drift →
       `known_expected`. Read-only agent; deterministic wrapper writes `exceptions_review.jsonl`
-- ☑ Human review: Lu signed off on every logged decision (7 needs_human = the §2.6 broken-clock
-      batch → re-export; 16 known_expected = documented gyro-axis anomalies + yaw-drift flags; 0 novel)
+- ☑ Human review: Lu signed off on every logged decision (at sign-off: 7 needs_human = the §2.6
+      broken-clock files → re-export; 16 known_expected = documented gyro-axis anomalies + yaw-drift
+      flags; 0 novel). **The 2026-05-19 subject-100 subset was since removed from the corpus (not
+      re-exported), so a current clean run shows 1 needs_human — `20260515` alone (§2.6).**
 - ☑ DOMAIN_NOTES updated
 
 ### Phase 3 — S2 loop (2–3 days)
@@ -160,10 +167,19 @@ second, drift-prone source of truth.
 - ☑ **Stride-adaptive window** (product-critical, not polish) — fixed 2 s abstains on slow gait (§9/§10.4); the assistive/rehab population walks slowly, so this is a real lab→clinic generalization requirement. **Built + measured 2026-07-22 (§10.6):** per-cell window sized to ~2 detected strides (autocorr period, first peak past the lag-0 shoulder), capped 6 s, standing kept short. Recovers walk-recall 0.691→0.855 for stand-recall 0.927→0.915 — most of a long window's gain, little of its cost. Added as `swap_verdict_adaptive`; disagreement ranking now built on it. Validated on the lab corpus; live-cadence sizing on streaming clinic data remains to confirm.
 - ☑ Lockbox sealed in the stage (train+val only) — S3 feeds an agent, so it must seal `rev8`/`rev13` too, not just the training path (tracker POSTDAY4 §3)
 
-### Phase 5 — S4 (1 day)
-- ☐ Reporter runs on a full 1→3 run
-- ☐ Report surfaces ≥1 real ML-vs-physics disagreement or label-audit flag (bland agreement = prompt failure, iterate)
-- ☐ DOMAIN_NOTES updated
+### Phase 5 — S4 fusion
+- ☑ **Deterministic fuser built** (`stages/s4_fusion/`, `stages/s2_ml/oof.py`) — policy grounded in the measured S2×S3 contingency, not assumed: fused macro-F1 **0.921** (S2 alone 0.898); acting on HIGH+MED confidence covers **94%** at accuracy **0.969**, stand-recall **0.897** (S2 0.865 at full coverage). Two intuitive rules measured and rejected (physics-overrides-standing, higher-confidence-wins) — DOMAIN_NOTES §12
+- ☑ Confidence signal is calibrated + monotonic (HIGH 0.98 / MED 0.88 / LOW 0.79); LOW/abstain = a machine `-1` mirroring the human `-1` (§5.2) — the signal the incumbent lacks
+- ☑ Agent judges the disagreement cases (`agents/s4_fusion.py`, provenance gate enforced in code) — **run live 2026-07-22** (`runs/2026-07-22_run3`, 6/6 findings passed the gate, $1.41): validated the fuser (rev2_t5 — physics catches a 70 s S2 stand-error), flagged a label problem, and surfaced a brief-stop weakness
+- ☑ Surfaces ≥1 real label-audit flag (rev2_t6, motion-contaminated "standing", `abstain_correct`)
+- ☑ DOMAIN_NOTES updated (§12 + §12.1 — including the agent's *refuted* mechanism: brief-stop errors are a window-resolution floor, not adaptive-window bridging; verified before recording, §11.4)
+- ☑ **Row-level safety payoff** (§12.2): fusion cuts `steady_confusion` 0.823 → 0.785, row-acc → 0.942 — helps the hazardous bucket, does not solve it (still 78% of errors); the residual is label contamination
+- ☑ **Data-collection director built** (`stages/s4_fusion/curate.py`) — the confidence signal routes flagged windows to `relabel_candidate` (error_rate **1.00**, a precise mislabel detector) / `new_class_candidate` / `collect_more`. The highest-leverage pipeline-side move: the model directs the data effort
+- Evaluated **train+val only**; the lockbox (rev8) opens once, at the very end — now the honest test of the *fused* model, not S2 alone
+- ☐ **Open (recorded, not fixed):** brief (< 2 s) stops sit below the window resolution floor (§10.6/§12.1); confidence quarantines these (all 64 LOW → abstained)
+- ☐ **Governed new-class discovery** (proposed, §12.2): taxonomy is too coarse (18% non-quiet standing) but a static "sit" is absent — an agent proposes from `new_class_candidate` spans → deterministic cluster-mass validation → `needs_human`; not built
+
+**The honest bottom line (§12.2):** the dominant remaining lever is **data** — better labels on the motion-contaminated "standing" and more subjects (n=5, rev69 dominant) — not more macro-F1 in code. The pipeline's job now is to *direct* that data effort, which the curation queue does.
 
 ### Phase 6 — Hardening + handoff (remaining time)
 - ☐ `max_turns` caps verified on every agent

@@ -61,9 +61,15 @@ def plot_trial(trial: Trial, out_dir: Path, spec: WindowSpec | None = None) -> P
     anchors = trial_anchors(trial, spec)
     wt = (anchors["t_start_ms"] - t0_ms) / 1000.0 if not anchors.empty else np.array([])
 
+    # flag a poisoned rest zero: on the ~2/28 files that do not begin at rest the swap calls
+    # rest on a fallback span (§10.5), so the agent should discount this file's verdicts
+    rest_note = ("  ⚠ rest zero untrusted (file does not begin at rest)"
+                 if not anchors.empty and not bool(anchors["rest_offset_trusted"].iloc[0])
+                 else "")
+
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(13, 8.5), sharex=True)
     fig.suptitle(f"{trial.rev} trial {trial.trial} ({trial.split}) — physics anchors vs "
-                 f"human label", fontsize=12)
+                 f"human label{rest_note}", fontsize=12)
 
     for _seg, seg in frame.groupby("segment", sort=True):
         t_s = (seg[TIME_COL].to_numpy(float) - t0_ms) / 1000.0

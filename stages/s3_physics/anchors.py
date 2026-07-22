@@ -37,6 +37,20 @@ REST_ANCHOR_S = 3.0
 MAX_SWAP_WINDOW_S = 6.0
 ADAPTIVE_PERIODICITY_FLOOR = 0.35 # autocorr peak height to accept a cell as periodic (else standing)
 
+# span-grow fallback (§10.7). the §10.6 detector under-fires: on slow/large strides stride_period
+# returns None, the window stays at 2 s, holds one hump, and swap_count reads 1 -- 94% of the
+# missed WALK windows are stuck at the base span, swinging a median 40° they never get to alternate
+# twice inside. the fix: when the base verdict is NOT walking, re-count over the full max span and
+# accept WALKING only if that span GENUINELY alternates -- two committed crossings, both halves
+# swinging past GROW_MIN_PTP_DEG, and the legs anti-correlated past GROW_MIN_ANTIPHASE. the last
+# gate is the §10.2/§11 discriminator: two stray standing weight-shifts also give swap_count 2 over
+# 6 s, but their legs are not antiphase, so requiring leg anti-correlation keeps this from merging
+# them into a false WALK. NOT a period detector -- it sidesteps the thing that failed. measured to
+# recover walk-recall 0.86→0.92 (0.69→0.88 on files that do not begin at rest) for +27 STAND windows
+# corpus-wide (~10:1), all routed through the disagreement audit (§10.7).
+GROW_MIN_PTP_DEG = 8.0     # both window-halves must swing this far: a real both-sides stride, not jitter
+GROW_MIN_ANTIPHASE = 0.5   # -corr(L,R) over the span: real alternation, not two isolated weight-shifts
+
 # the five anchors PLAN.md S3 requires a rate-invariance verdict for. the swap rule and the
 # §10.1 descriptors are reported alongside but are not in this set -- they are already
 # validated body descriptors, not candidate anchors under audit.
@@ -95,18 +109,44 @@ def stride_period(x: np.ndarray, fs: float, floor: float = ADAPTIVE_PERIODICITY_
     return start + k if ac[start + k] >= floor else None
 
 
+# does the full max span genuinely alternate? (§10.7 grow-fallback gate). the rescue for a
+# slow/large stride the period detector could not extend for: two committed crossings over the
+# max span, both halves swinging past GROW_MIN_PTP_DEG, and the legs anti-correlated past
+# GROW_MIN_ANTIPHASE. l/r are the RAW leg angles over the same span (antiphase is offset-free).
+def _grows_to_walking(d: np.ndarray, l: np.ndarray, r: np.ndarray, a: int, b: int) -> bool:
+    seg = d[a:b]
+    if seg.size < 8:
+        return False
+    h = seg.size // 2
+    if min(float(np.ptp(seg[:h])), float(np.ptp(seg[h:]))) < GROW_MIN_PTP_DEG:
+        return False # not a real both-sides swing -- jitter or a one-sided excursion
+    if -_corr(l[a:b], r[a:b]) < GROW_MIN_ANTIPHASE:
+        return False # legs not antiphase -- two isolated weight-shifts, not a stride
+    return swap_count(seg, SWAP_DELTA_DEG) >= 2
+
+
 # swap verdict at one cell over a span sized to ~2 detected strides (§10.6). d is the WHOLE
-# segment's centered interleg signal, c the cell centre. periodic -> 2×stride span (capped at
-# MAX_SWAP_WINDOW_S, floored at the base window); non-periodic (standing) -> base window.
-# returns (verdict, span_seconds).
-def adaptive_swap_at(d: np.ndarray, c: int, spec: WindowSpec) -> tuple[str, float]:
+# segment's centered interleg signal, c the cell centre, l/r the RAW leg angles for the §10.7
+# grow gate. periodic -> 2×stride span (capped at MAX_SWAP_WINDOW_S, floored at the base window);
+# non-periodic (standing) -> base window. when that call is NOT walking but the full max span
+# genuinely alternates, grow to it (§10.7) -- this is what recovers the slow/large gait the
+# period detector missed. l/r default None (the grow gate is skipped) so any caller passing only
+# d keeps the old §10.6 behaviour. returns (verdict, span_seconds).
+def adaptive_swap_at(d: np.ndarray, c: int, spec: WindowSpec,
+                     l: np.ndarray | None = None, r: np.ndarray | None = None) -> tuple[str, float]:
     base_half = spec.n // 2
     max_half = int(round(MAX_SWAP_WINDOW_S * spec.fs_hz / 2))
     boot = d[max(0, c - max_half):min(d.size, c + max_half)] # bootstrap span for period detection
     period = stride_period(boot, spec.fs_hz)
     half = base_half if period is None else int(np.clip(period, base_half, max_half))
     a, b = max(0, c - half), min(d.size, c + half)
-    return swap_verdict(swap_count(d[a:b], SWAP_DELTA_DEG)), 2 * half / spec.fs_hz
+    verdict = swap_verdict(swap_count(d[a:b], SWAP_DELTA_DEG))
+
+    if verdict != WALKING and l is not None and r is not None: # §10.7 grow-fallback
+        ga, gb = max(0, c - max_half), min(d.size, c + max_half)
+        if _grows_to_walking(d, l, r, ga, gb):
+            return WALKING, (gb - ga) / spec.fs_hz # report the grown span
+    return verdict, 2 * half / spec.fs_hz
 
 
 # pearson r; 0 when either series is constant or too short (matches S2 _corr)
@@ -205,19 +245,65 @@ def window_anchors(win: pd.DataFrame, fs: float = CANONICAL_HZ,
     }
 
 
-# the per-file interleg zero: median(L_ang - R_ang) over the recording's opening rest
-# (REST_ANCHOR_S, §10.2). this is the per-subject mounting/zeroing offset (§4.6) -- the same
-# static bias the S2 champion drops as non-gait. median is robust to whether the opening is
-# truly still or already early gait (gait oscillates symmetrically about the offset), so it
-# degrades gracefully on the ~2/28 files that do not begin at rest.
-def rest_offset(trial: Trial, fs: float = CANONICAL_HZ) -> float:
+# the interleg signal L_ang - R_ang for a frame (or slice), as an array
+def _interleg(frame: pd.DataFrame) -> np.ndarray:
+    return frame[FEATURES[0]].to_numpy(float) - frame[FEATURES[1]].to_numpy(float)
+
+
+# is a candidate rest span ACTUALLY at rest? the swap rule's own STANDING verdict, read on the
+# locally centered span: 0 leg alternations (§10). reusing the validated rule instead of a new
+# stillness threshold keeps this parameter-free and consistent with how "not walking" is defined
+# everywhere else -- a span the rule would call STANDING is a clean zero; one it would call
+# WALKING is early gait masquerading as the opening rest, and its median is a poisoned offset.
+def _is_rest(d: np.ndarray) -> bool:
+    return d.size > 0 and swap_count(d - float(np.median(d)), SWAP_DELTA_DEG) == 0
+
+
+# the stillest true-rest span anywhere in the recording: scan every segment in REST_ANCHOR_S
+# hops, keep the median of the 0-swap span with the smallest interleg range (ptp is offset-free,
+# so it ranks stillness, not posture). within a segment only, so a span never straddles a gap
+# (the iter_windows rule). None when the recording never rests. this is the fallback zero for the
+# ~2/28 files that do NOT begin at rest (§10.2): the offset we want is the per-subject mounting/
+# zeroing bias (§4.6), constant across the file, so any genuinely still span estimates it -- we
+# just need one the swap rule agrees is still, not the opening one taken on faith.
+def _stillest_rest_span(frame: pd.DataFrame, span: int) -> float | None:
+    best_ptp, best_med = np.inf, None
+    for _seg_id, seg in frame.groupby("segment", sort=True):
+        d = _interleg(seg)
+        for a in range(0, d.size - span + 1, span):
+            s = d[a:a + span]
+            if _is_rest(s) and (p := float(np.ptp(s))) < best_ptp:
+                best_ptp, best_med = p, float(np.median(s))
+    return best_med
+
+
+# the per-file interleg zero + whether it was measured on a span that is actually at rest.
+# median(L_ang - R_ang) over the recording's opening rest (REST_ANCHOR_S, §10.2) is the
+# per-subject mounting/zeroing offset (§4.6) -- the same static bias the S2 champion drops as
+# non-gait. but the "begins at rest" assumption fails on ~2/28 files, and there the opening
+# median is taken over early gait, poisoning the zero SILENTLY. so verify it: TRUST the opening
+# span only if the swap rule calls it STANDING; else fall back to the stillest true-rest span
+# anywhere in the recording; else (the recording never rests) the whole-file median, returned
+# UNTRUSTED so a downstream reader knows this zero is the graceful-degradation path, not a
+# measured rest. label-free throughout -- reads only the signal, so it is lockbox-safe (§10.4).
+def rest_anchor(trial: Trial, fs: float = CANONICAL_HZ) -> tuple[float, bool]:
     frame = trial.frame
     if frame.empty:
-        return 0.0
+        return 0.0, False
+    span = int(round(REST_ANCHOR_S * fs))
     seg0 = frame[frame["segment"] == frame["segment"].min()] # the recording's first segment
-    head = seg0.iloc[:int(round(REST_ANCHOR_S * fs))]
-    d = head[FEATURES[0]].to_numpy(float) - head[FEATURES[1]].to_numpy(float)
-    return float(np.median(d)) if d.size else 0.0
+    d_open = _interleg(seg0.iloc[:span])
+    if _is_rest(d_open): # recordings begin at rest (§10.2) -- the common case
+        return float(np.median(d_open)), True
+    fallback = _stillest_rest_span(frame, span) # opening isn't rest: find rest elsewhere
+    if fallback is not None:
+        return fallback, True
+    return float(np.median(_interleg(frame))), False # never rests: robust but untrusted
+
+
+# backward-compatible scalar zero (the rate audit needs only the number, §10.4)
+def rest_offset(trial: Trial, fs: float = CANONICAL_HZ) -> float:
+    return rest_anchor(trial, fs)[0]
 
 
 # stride-adaptive swap verdict + span for every candidate cell, keyed by the natural
@@ -229,10 +315,13 @@ def _adaptive_swaps(trial: Trial, spec: WindowSpec, center: float) -> dict:
     out: dict[tuple[int, float], tuple[str, float]] = {}
     for seg_id, seg in trial.frame.groupby("segment", sort=True):
         seg = seg.reset_index(drop=True)
-        d = (seg[FEATURES[0]].to_numpy(float) - seg[FEATURES[1]].to_numpy(float)) - center
+        l = seg[FEATURES[0]].to_numpy(float)
+        r = seg[FEATURES[1]].to_numpy(float)
+        d = (l - r) - center
         times = seg[TIME_COL].to_numpy(float)
         for start in range(0, len(seg) - spec.n + 1, spec.step):
-            out[(int(seg_id), float(times[start]))] = adaptive_swap_at(d, start + spec.n // 2, spec)
+            out[(int(seg_id), float(times[start]))] = adaptive_swap_at(
+                d, start + spec.n // 2, spec, l, r) # l/r enable the §10.7 grow gate
     return out
 
 
@@ -240,14 +329,17 @@ def _adaptive_swaps(trial: Trial, spec: WindowSpec, center: float) -> dict:
 # human label) joined to every anchor + descriptor. reuses the S2 window iterator so the
 # "never window across a gap" rule stays single-sourced. the per-file rest zero is measured
 # once and subtracted from every window's swap count (§10.4); the stride-adaptive verdict
-# (§10.6) is joined in alongside the fixed-window one, never replacing it.
+# (§10.6) is joined in alongside the fixed-window one, never replacing it. rest_offset_trusted
+# rides along on every row (constant per trial): False means the zero fell back off the opening
+# rest (§10.2), so a reader can discount that file's swap calls rather than trust them blind.
 def trial_anchors(trial: Trial, spec: WindowSpec | None = None) -> pd.DataFrame:
     spec = spec or WindowSpec()
-    center = rest_offset(trial, spec.fs_hz)
+    center, rest_trusted = rest_anchor(trial, spec.fs_hz)
     adaptive = _adaptive_swaps(trial, spec, center)
     rows = []
     for meta, win in iter_windows(trial, spec):
         verdict, span_s = adaptive[(meta["segment"], meta["t_start_ms"])]
         rows.append({**meta, **window_anchors(win, spec.fs_hz, center),
-                     "swap_verdict_adaptive": verdict, "swap_window_s": span_s})
+                     "swap_verdict_adaptive": verdict, "swap_window_s": span_s,
+                     "rest_offset_trusted": rest_trusted})
     return pd.DataFrame(rows)

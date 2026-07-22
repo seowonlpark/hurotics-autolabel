@@ -147,6 +147,11 @@ S1 catches this up front (`clean_one` guards `median(dt) > 0`; `measure_hz` retu
 than dividing by zero) and routes it to the `quarantine.jsonl` ledger with reason
 `degenerate time base`. The raw file is left in place, never moved.
 
+**Update (2026-07-22): the 2026-05-19 subject-`100` files were removed from the corpus (Lu — pulled,
+not re-exported), so a current clean run quarantines just one file, `20260515` (subject `70`). That
+file remains `needs_human`; re-export from source is still its only honest fix. The finding stands —
+removal disposed of the batch, it did not fix the timestamps.**
+
 ---
 
 ## 3. Gaps and segments
@@ -808,6 +813,17 @@ rev14's header was never measured. Retracted.)
   Recoverable by name from `data/raw/` if that dataset ever arrives — the same standing as `loco`
   and `L/R_Ref_Force`. **The exception mechanism stays in place; it just holds nothing.** An empty
   `KEEP_EXCEPTIONS` is a stronger invariant than a populated one: canonical == measured, no caveat.
+- **The 30-column clean parquet and the modelling track are disjoint — kept that way on purpose
+  [confirmed, 2026-07-22].** `data/clean/**.parquet` (30 measured cols) is read only by S1 itself
+  (`clean.py`, `peek.py`, the S1 exception agent); **S2/S3/S4 never open it.** They read the separate
+  rev2 view (`data/labeled/`, `Time` + 4 rotational features + `Label`), which shares only `Time`
+  with the raw family (`FAMILY_MARKERS`). So end to end the model consumes exactly **4 channels** —
+  L/R sagittal angle + angular velocity — while the clean layer deliberately keeps the full measured
+  superset (all 3 IMUs, every Acc axis, both load cells). This is the §9 principle in force, not
+  waste: **the clean layer is model-agnostic so a future feature (Acc for a gravity anchor, `B` for
+  trunk lean, load cells for stance) isn't foreclosed by today's 4-feature model.** Narrowing the
+  parquet toward what's modelled was considered and declined — it would bake the current feature
+  choice into the cleaning layer, which is exactly the coupling this boundary exists to prevent.
 - `L_Ref_Force` / `R_Ref_Force` are excluded as controller setpoints (commanded, not measured).
   **[open]** — not yet confirmed with the firmware side.
 - Storage cost is a file-format problem, not a column-count problem: clean output is **parquet**.
@@ -848,7 +864,7 @@ Known weakness: slow walking (0.22 Hz stride) yields ~0.9 swaps per 2 s window a
 | `ileg_minhalf` — min of `ptp(L−R)` over the window's two halves | AUC 0.967 / 0.972 on two independent trials; medians 0.2–0.5 (standing) vs 39–41 (walking). **Needs per-file calibration.** |
 | `interleg_offset` — median of `L−R` | **Posture only** (AUC 0.50 for walk/stand). Separates feet-together from split-stance: baseline −3.3°, splits at **+17°** and **−22°** — opposite legs leading. |
 
-### 10.2 Recordings begin at rest **[measured — nearly all files]**
+### 10.2 Recordings begin at rest **[measured — most files, NOT universal]**
 
 An **external** label — it comes from how sessions are run, not from any algorithm. It gives every
 file a standing reference measured on the same person, sensor and mounting minutes earlier. **This
@@ -857,6 +873,13 @@ calibration-as-data-harvest insight arriving from the physics side.
 
 **[open]** many files also open with a segment of exactly 10 rows (§3.2). Possibly the same files —
 worth checking.
+
+**[open — protocol] rev5 breaks the assumption.** 6 of 8 rev5 files open *mid-gait* (a 36–44° interleg
+swing, 4–5 swaps), not at rest — unique among all revs (§10.5.1). The rest-quality guard now detects
+this and falls back to the whole-file median, flagged `rest_offset_trusted=False`, so no S3 number is
+affected. But it means the "begins at rest" label is a per-session property that does **not** hold for
+rev5 — worth raising with whoever owns the acquisition protocol (different operator/session?). Not an
+algorithm bug; a data-provenance fact to confirm.
 
 ### 10.3 States richer than the human labels **[measured]**
 
@@ -936,6 +959,51 @@ Rate-invariance verdicts are unchanged — centering does not touch the five anc
 windows the audit gates in as walking (2,674 → 2,943). This did **not** open the lockbox: measured on
 train+val only, per §10.4.
 
+### 10.5.1 The rest zero was trusted on faith — a rest-quality guard verifies it **[measured, 2026-07-22]**
+
+`rest_offset()` took the median of the opening `REST_ANCHOR_S = 3 s` and *assumed* that span was rest
+(§10.2). The "degrades gracefully on ~2/28 files" caveat was never checked. It is wrong: **6 files
+(all of rev5) open mid-gait**, not at rest — rev5_t2/t6/t8 open with a **36–44° interleg swing and
+4–5 swaps**, unambiguously walking. On those the opening median is taken over gait, and a *single* 3 s
+swing window is a poisoned zero: per-window medians wander **±4–5°** within a file (max−min spread up
+to **20°**), because a 3 s slice catches an asymmetric chunk of a stride. rev5_t2's mid-file window
+reads **8.6°** against its true-ish **0.65°** — off by 8×`delta`.
+
+**The whole-file median, by contrast, is stable** — averaged over many strides the per-stride
+asymmetries cancel and it recovers the constant mounting bias (rev5_t2 **0.65**, rev5_t6 **0.70**).
+So the §10.5 "gait oscillates symmetrically about the offset" claim holds **at the whole-file scale,
+not the single-window scale**: you *can* get the offset from a file that opens with a swing, but only
+from the full recording, never from one opening window.
+
+**Guard: verify the opening span is actually rest before trusting it.** `anchors.rest_anchor()`
+returns `(offset, trusted)`:
+1. **Trust the opening 3 s** only if the swap rule's own STANDING verdict holds on it (0 swaps on the
+   locally centered span) — reusing the validated rule (§10), not a new stillness threshold, keeps it
+   parameter-free. This is the common case (25/31 files).
+2. Else **fall back to the stillest true-rest span anywhere** in the recording (smallest-`ptp` 0-swap
+   3 s span, scanned within-segment so it never straddles a gap).
+3. Else (the recording never rests — the 6 rev5 files) **whole-file median, returned `trusted=False`**
+   — the best available estimator, flagged so the reader knows it rests on the symmetry assumption,
+   not a measured rest.
+
+The `trusted` flag rides every row as `rest_offset_trusted` (constant per trial) and annotates the
+per-trial plot (`⚠ rest zero untrusted`), so the S3 hypothesis agent discounts those files' swap
+verdicts rather than trusting them blind. Label-free throughout (reads only the signal), so it is
+lockbox-safe and does **not** open the seal (§10.4).
+
+**This is a correctness fix with a measured-null metric impact.** Guarded vs the old unconditional
+opening median: corpus walk-recall **0.691 → 0.692**, stand-recall **0.927 → 0.925**; on rev5 alone
+the two are **bit-identical** (0.786 / 0.893). The poisoned rev5 zeros were never actually
+misclassifying, because the offset trap only bites when the DC offset is *comparable to the swing
+amplitude* (rev2_t6/t7: +11° offset vs a swing barely reaching zero) — rev5's **36–44°** swings commit
+past ±`delta` regardless of a few degrees of center error. So the guard's value is **latent
+insurance** (a future file with both a mid-gait opening *and* a small swing would be silently
+misclassified by the old code) plus the honesty of the flag, **not** a recall gain on this corpus.
+
+The substantive finding is about the **data, not the rule**: 6 of 8 rev5 files open mid-gait, unique
+among all revs, so the "recordings begin at rest" external label (§10.2) is **not universal** — rev5
+breaks it. Worth raising with whoever owns the acquisition protocol; it does not change any S3 number.
+
 ### 10.6 Stride-adaptive window — one fixed window cannot call slow gait and standing both **[measured, 2026-07-22]**
 
 The swap rule counts interleg alternations in a window, and `gait_hz`/`periodicity` resolve to
@@ -975,6 +1043,49 @@ actuation, not a null.
 
 Built and measured, not merely flagged — but **not** retired as deployment-solved: validated on the
 labeled lab corpus, and the same live-cadence sizing must still hold on streaming clinic data.
+
+### 10.7 Span-grow fallback — the §10.6 detector still under-fires on slow/large gait **[measured, 2026-07-22]**
+
+§10.6 sizes the window from `stride_period()`, but that detector *itself* fails on exactly the gait it
+was meant to rescue. Auditing the residual walk-miss under the adaptive verdict: of the WALK windows
+still not called WALKING, **94% are stuck at the base 2 s span** (the period detector returned `None`,
+so no extension happened) and **69% score `swap_count == 1`** — one hump seen. These are not
+low-amplitude: the missed windows swing a **median 40° peak-to-peak** interleg (97% ≥ 4°), and **77%
+are antiphase-positive** — real alternation the window was simply too short to count *twice*. The miss
+is a span-detection failure, not a body-signal absence. (Ruled out first, each with a measurement:
+per-file center is near-optimal — global-median and robust-midrange re-centering and a local
+moving-median detrend all failed to recover recall and most *hurt* stand-recall; and the fixed ±1° δ
+is not the constraint, since the swing is 40° not <2°.)
+
+**Fix: when the adaptive verdict is not WALKING, re-count over the full max span and upgrade only if
+that span genuinely alternates** — `swap_count ≥ 2` over 6 s, *both* halves swinging past
+`GROW_MIN_PTP_DEG = 8°`, *and* the raw legs anti-correlated past `GROW_MIN_ANTIPHASE = 0.5`. The last
+gate is load-bearing and is the §10.2/§11 discriminator applied at the span level: two isolated
+standing weight-shifts also give `swap_count 2` over 6 s (this is precisely the stand-recall cost a
+plain 6 s window pays in the §10.6 table), but their legs are **not** antiphase — requiring leg
+anti-correlation keeps the grow from merging them into a false WALK. This deliberately does **not** try
+to fix `stride_period`; it sidesteps the detector that failed.
+
+On the same 2 s output grid (majority-label, non-lockbox):
+
+| variant | walk-recall | stand-recall |
+|---|---|---|
+| §10.6 adaptive | 0.855 | 0.915 |
+| + §10.7 grow-fallback | **0.921** | 0.868 |
+
+**+0.066 walk-recall for −0.047 stand-recall.** The cost is small and auditable: **+27 pure-STAND
+windows called WALK corpus-wide** against ~268 WALK windows recovered — a **~10:1** trade — and it is
+**not** the known mislabels (rev5 t4/t2 were already called walking at baseline, contribute 0 of the
+27). The gain concentrates where intended: on the 8 files that do **not** begin at rest, walk-recall
+went **0.69 → 0.88**. The residual added false-WALK concentrates on **rev7 t5 (+10 of its 58 stand
+windows)** — routed to the disagreement audit as its own review candidate, not silently absorbed.
+
+Operating point `GROW_MIN_ANTIPHASE = 0.5` was locked deliberately over 0.7 (near-baseline
+specificity, only +0.019 walk-recall) and 0.3 (0.969 walk-recall but stand-recall 0.874 and a heavier
+review load): 0.5 recovers the deployment-relevant slow/large-stride gait while its 27-window cost
+routes through human review anyway. Added to `adaptive_swap_at` behind an `l`/`r` default so any caller
+passing only the interleg signal keeps the untouched §10.6 behaviour. Same caveat as §10.6: **lab-corpus
+validated, not deployment-solved.**
 
 ---
 
@@ -1048,10 +1159,168 @@ from.
 
 ---
 
+## 12. Fusion — the confidence signal is agreement, not either model's own confidence **[measured, 2026-07-22]**
+
+S4 combines the S2 learned label and the S3 physics verdict into one call **and a confidence** —
+the signal the incumbent lacks and the reason the project exists. Every rule below is read off the
+measured S2×S3 contingency (leave-one-rev-out out-of-fold S2 ∩ adaptive swap verdict, non-lockbox,
+4,812 windows), not assumed.
+
+| S2 pred | S3 verdict | n | true STAND | true WALK | |
+|---|---|---|---|---|---|
+| STAND | STANDING | 652 | **93%** | 7% | agree → STAND |
+| WALK | WALKING | 3326 | 1% | **99%** | agree → WALK |
+| STAND | AMBIGUOUS | 76 | 74% | 26% | keep S2 |
+| WALK | AMBIGUOUS | 419 | 9% | 91% | keep S2 |
+| STAND | WALKING | 142 | 22% | **78%** | disagree |
+| WALK | STANDING | 158 | 21% | **79%** | disagree |
+
+**What the contingency dictates:**
+- **Agreement is 98% correct → HIGH confidence.** Disagreement is where the risk concentrates.
+- **S3's WALKING verdict is a reliable WALK signal** (78–99%); its STANDING verdict is **not** —
+  both disagreement cells run ~79% WALK, because S3 under-calls slow gait as "standing". So the
+  fused label is **STAND only when S2 says STAND *and* S3 does not say WALKING; every other cell is
+  WALK.** Physics vetoes toward WALK; its STANDING call is ignored against S2.
+- **Two intuitive rules were measured and REJECTED.** (1) "Trust physics on standing" (override
+  S2=WALK when S3=STANDING) scores macro-F1 0.894 — *below* S2 alone (0.898) — because that cell is
+  79% WALK. (2) "Take whichever model is more confident" fails because S2 is **confident-wrong
+  exactly in disagreement**: when S3 says STANDING, S2's median probability is 0.97 but its accuracy
+  is 0.90. Self-reported confidence cannot see its own overconfidence; the independent physics view
+  can. So the tier is set by **agreement**, never by whose confidence is louder — and agreement also
+  beats an S2-probability abstention at matched coverage (keep-agree 0.833/0.979 vs proba≥0.8
+  0.840/0.973).
+
+**Result.** Fused macro-F1 **0.921** (S2 alone 0.898). The confidence is calibrated and monotonic:
+HIGH 0.83 share / **0.98** acc · MED 0.10 / 0.88 · LOW 0.06 / 0.79. A controller that **abstains on
+LOW** (disagreement) covers **94%** of windows at accuracy **0.969**, macro-F1 **0.943**, and
+stand-recall **0.897** — *above* S2's 0.865. **Standing is recovered by abstention, not by a
+cleverer label**: the fused label alone drops stand-recall to 0.826, and the abstention brings it
+back by declining exactly the windows where standing was being confused. That LOW/abstain output is
+a **machine `-1`** — the same "looked and couldn't call it" the human `-1` marks (§5.2), reproduced
+from model disagreement. Measured train+val only; the lockbox opens once, at the end.
+
+The unrecoverable standing (true STAND that both models call WALK) has **low `grav_stab`** — it does
+not look like standing to the physics either, i.e. it is motion-contaminated "standing" (ramps,
+weight-shifts), a **label** problem (S3 hypothesis `stand_labeled_bouts_are_dynamic_repositioning`),
+not a feature gap. No anchor separates it because there is nothing physical to separate.
+
+### 12.1 The fusion agent's live review — a verified weakness, a refuted mechanism **[measured, 2026-07-22]**
+
+First live `--phase 5` run (`runs/2026-07-22_run3`, 6 findings, all provenance-gated, $1.41). It
+validated the fuser where it works (rev2_t5: S2 calls STAND across ~70 s of real walking, the
+S3-WALKING override catches it, `low_accuracy=1.0`) and flagged one label problem (rev2_t6,
+motion-contaminated "standing", correctly abstained). Its substantive claim: brief STAND pauses
+inside walking bouts get labeled WALK.
+
+**The outcome is real; the agent's mechanism is refuted — §11.4 again, now on the fusion agent.** The
+agent blamed the stride-adaptive window (§10.6), "sized up to 6 s, bridging the pause." Measured: the
+true-STAND disagreement windows carry `swap_window_s` = **2.0 s** — the *base* window, not widened
+(their median is 2.0 s vs 2.94 s corpus-wide). The adaptive rule only ever *widens*, so it cannot be
+the cause. The real mechanism is the **opposite of slow gait**: a 2 s window is too *coarse* to
+isolate a sub-2 s stop — it straddles the surrounding strides and counts them (`swap_count = 3` on a
+standing window). Brief stops sit below the window's resolution floor, and the stride-adaptive window
+(which grows, never shrinks) does not touch them. The agent pattern-matched to the most recent work.
+
+**The confidence signal quarantines the label's errors.** All **64/64** truly-STAND disagreement
+windows are labeled WALK by the majority rule (the ~21% minority of the two disagreement cells) — and
+all 64 are LOW-confidence, so a controller acting on HIGH+MED abstains on every one. The label is
+wrong exactly where the confidence says "don't trust me." **Open, recorded, not closed:** brief
+(< 2 s) stops are a genuine window-resolution-floor limitation — the fine-grained sibling of the
+slow-gait problem (§10.6), and not something the adaptive window addresses.
+
+### 12.2 The ceiling is data — and the fusion becomes a data-collection director **[measured, 2026-07-22]**
+
+At **row** level (dense inference, the level the taxonomy and the incumbent comparison live at), the
+fusion cuts the hazardous bucket: `steady_confusion` **0.823 → 0.785**, row accuracy **0.925 →
+0.942**. Real, but modest — `steady_confusion` is *still* 78% of errors. The fusion reduces the
+standing problem; it does not solve it, because the residual is **label contamination** (§12: the
+missed standing has low `grav_stab` — it does not look like standing to the physics either). That is
+a **ground-truth ceiling**, so the dominant remaining lever is *data* (better labels on the
+motion-contaminated "standing", and more subjects — n=5, rev69 dominant), not more macro-F1 in code.
+
+The highest-leverage *pipeline-side* move is therefore to make the model **direct the data effort**
+(`stages/s4_fusion/curate.py`). Each flagged window is routed, and the routes self-validate on the
+labeled corpus:
+
+| route | signal | spans / windows | meaning |
+|---|---|---|---|
+| `relabel_candidate` | **both** models contradict the label (STAND labeled, S2 = WALK *and* swap = WALKING) | 34 / 40 | strong mislabel *candidate* — two independent methods rarely share an error |
+| `new_class_candidate` | STAND labeled but moving (`grav_stab` < 0.5) | 177 / 347 | structure the {stand,walk} taxonomy misses (dynamic repositioning, H2) |
+| `collect_more` | single-model disagreement / slow-cadence under-call | 177 / 268 | a physics error or under-served condition — review + more data |
+
+**Never auto-fix a label — the "error_rate = 1.00" is a trap.** The tempting shortcut ("physics
+contradicts the label 100% of the time, just flip it") fails on measurement. That 1.00 is
+*tautological*: the route is defined as disagreement and the fused label follows physics, so
+`fused ≠ label` by construction — it measures disagreement, not label-wrongness. There is no ground
+truth above the human label, and "physics contradicts label" has three causes: a mislabel, **a
+physics error** (the §10.6/§12.1 slow-gait/brief-stop failures), or a transition. Measured on the
+one-model version of the route: only 55% had S2 also disagreeing; the other **45% were human + S2
+against physics** — auto-flipping those would inject S3's known failures into the golden labels. So
+the route now requires **both** independent models to contradict the label (40 windows), which is the
+strongest signal available — and it is still only a *candidate a human confirms*. Code never edits a
+label (non-negotiable #1; the golden-data precedent is the rev13 angvel edit, flagged to Lu each
+time). The corroboration idea — two independent votes against the reference — is the sharpening; the
+auto-fix is the forbidden move.
+
+**On new classes (the intuitive-but-governed idea).** The taxonomy *is* too coarse — 18% of
+"standing" sits above quiet stance in rest-relative leg angle. But the intuitive candidate, a static
+**sit** (both legs at a large angle, aligned, still), is **absent** — it matched exactly 1 window;
+the excess is *moving* standing, not a held posture. So a new-class proposer must be **governed** to
+avoid the §11.2 "invented category" trap: agent proposes from the `new_class_candidate` spans →
+deterministic validation that it is a recurring cluster with *mass* (not a §11.1 GMM/BIC artifact) →
+`needs_human` to confirm against protocol/video. And adding a class needs richer ground truth — which
+is the data lever again. Rest-relative angle removes the per-subject zeroing bias (§4.6) the champion
+had to drop, so it is the honest feature for this, unlike raw absolute angle.
+
+### 12.3 Anchors as S2 features — early fusion does not beat the late-fusion policy **[measured, 2026-07-22]**
+
+Given S3's anchors are already validated, the tempting shortcut is to pull them straight into S2's
+feature set (**early fusion**: the RandomForest weighs the anchor) rather than let the S4 swap policy
+adjudicate after the fact (**late fusion**, §12). Tested the two anchors that are both rate-invariant
+(§12 audit: `periodicity`/`grav_stab`/`gait_hz` invariant; `antiphase`/`gyro_energy` disqualified)
+**and** not already present as an S2 proxy — `grav_stab` and `periodicity` — added to
+`features.window_features` and measured in the champion config (`drop_static_offset_family`, 0.8977),
+LORO. A control run that drops both anchors reproduced the champion **exactly** (0.8977, 18 feat), so
+the harness is clean and the deltas are the anchor:
+
+| added anchor | macro-F1 | Δ vs champion | note |
+|---|---|---|---|
+| grav_stab | 0.8983 | **+0.0006** | below the 0.005 margin; **0.72-collinear** with `L/R_ang_LPF_ptp`/`std` already present |
+| periodicity | 0.8921 | **−0.0056** | *regresses* despite low collinearity (\|r\|≈0.38) — overfits the small revs |
+| both | 0.8967 | −0.0010 | `steady_confusion` **worse** (0.823 → 0.838) |
+
+**Not promoted — none clears the gate.** `grav_stab` is `1/(1+0.5·(std_L+std_R))`, a monotone
+transform of `std` features the tree can already split on, so it relocates signal rather than adding
+it — and it already earns its keep in the S4 late-fusion tier where it drives the abstain calibration
+(§12/§12.2). `periodicity` fails the same way §11.2 predicts (it moves at cadence *changes*, not
+arrhythmia) and just adds a noisy split. **Rule: an anchor belongs in the S4 policy, not the S2
+feature set, unless it is rate-invariant AND carries information no existing feature does — measure
+collinearity first (the §4.6 discipline).** Code reverted; champion unchanged. This is §11.4 again in
+the other direction: the gate correctly *refused* a change whose story sounded good.
+
+### 12.4 S4 does not special-case an untrusted rest zero — by measured null, not omission **[decided, 2026-07-22]**
+
+S3 now exposes `rest_offset_trusted` per window (§10.5.1): `False` on the 6 rev5 files whose zero fell
+back off the opening rest. The natural fusion question is whether the S4 policy should treat an
+untrusted-rest window differently — defer to S2, or drop it to a lower confidence tier. **Decision:
+no.** The guarded-vs-unguarded measurement shows those windows are classified *identically* (rev5
+walk-recall 0.786, stand-recall 0.893 either way), because a 36–44° swing commits past ±`delta`
+regardless of a few degrees of center error — so a trust-conditioned S4 rule would fire on a
+distinction that makes no difference here, adding policy surface for zero measured gain (§11.1, a rule
+that discriminates on noise). The flag stays an **agent-facing** signal — it annotates the S3 plots so
+the hypothesis agent can discount a file's verdicts qualitatively — not a fusion input. Revisit only
+if a future file is untrusted **and** small-swing (where the center error could flip a call); nothing
+in the current corpus is. Recorded so S4's silence on the flag is a decision, not an oversight.
+
+---
+
 ## Changelog
 
 | Date | Phase | Added |
 |---|---|---|
+| 2026-07-22 | 5 | **Rest-quality guard added to the swap-rule zero (§10.5.1, §10.2, §12.4 NEW).** `rest_offset()` trusted the opening 3 s was rest on faith; measured it is **not** — 6 of 8 rev5 files open *mid-gait* (36–44° swing, 4–5 swaps), unique among revs, so the "recordings begin at rest" label (§10.2) is not universal. `anchors.rest_anchor()` now verifies: trust the opening span only if the swap rule calls it STANDING (0 swaps centered) → else the stillest true-rest span anywhere → else whole-file median flagged `rest_offset_trusted=False`, surfaced on every anchor row + the per-trial plot (`⚠ rest zero untrusted`). A *single* 3 s swing window is a poisoned zero (per-window median wanders **±4–5°**, spread to 20°); the whole-file median is stable (averages strides). **Correctness fix with a measured-null metric impact:** corpus walk-recall 0.691→0.692, stand 0.927→0.925; rev5 bit-identical — the offset trap only bites when offset ≈ swing amplitude (rev2_t6/t7), and rev5's swings are large. Value is latent insurance + honesty. S4 does **not** consume the flag by decision (§12.4). Label-free, lockbox untouched (§10.4). Runs alongside the §10.7 span-grow work, both uncommitted. |
+| 2026-07-22 | 5 | **Anchor early-fusion MEASURED and NOT promoted (§12.3 NEW).** Tested pulling the rate-invariant, not-already-present S3 anchors (`grav_stab`, `periodicity`) directly into `features.window_features` (early fusion) vs leaving them in the S4 swap policy (late fusion, §12). Measured in champion config (`drop_static_offset_family` 0.8977), LORO, with a control run reproducing the champion **exactly** (0.8977/18-feat, harness clean): `grav_stab` **+0.0006** (below the 0.005 margin, and 0.72-collinear with `L/R_ang_LPF_ptp`/`std` already present), `periodicity` **−0.0056** (regresses), both **−0.0010** (`steady_confusion` 0.823→0.838 worse). **None clears the gate — not promoted, `features.py` reverted, champion unchanged.** `grav_stab` is a monotone transform of `std` features the tree already splits on and already earns its keep in the S4 abstain tier; early fusion relocates signal, does not add it. §11.4 in the other direction — the gate correctly refused a good-sounding change. New op-doc `USE.md` documents the anchor-promotion procedure + the two eligibility gates (rate-invariance, non-redundancy). |
+| 2026-07-22 | 5 | **S4 fusion stage built + agent run live (§12, §12.1 NEW).** Restructured S4 from a read-only report to a **fusion**: `stages/s4_fusion/` (`fuse`, `run`) + `stages/s2_ml/oof.py` (champion out-of-fold predictions as a joinable artifact). Policy read off the measured S2×S3 contingency, not assumed — agreement 98% correct → HIGH; S3-WALKING vetoes toward WALK, S3-STANDING ignored against S2; two intuitive rules measured and **rejected** (physics-overrides-standing scored *below* S2; higher-confidence-wins fails because S2 is confident-wrong in disagreement). Fused macro-F1 **0.921** (S2 0.898); acting on HIGH+MED covers **94%** at accuracy **0.969**, stand-recall **0.897** — standing recovered by *abstention*, not a cleverer label; LOW/abstain = a machine `-1` (§5.2). Judgement agent (`agents/s4_fusion.py`, Read/Grep, provenance-gated) run live (`runs/2026-07-22_run3`, 6/6 findings, $1.41): validated the fuser, flagged a label problem, and claimed a brief-stop weakness whose *mechanism it got wrong* — verified as a window-resolution floor, not adaptive-window bridging (§12.1). `--phase 5` wired. **Row-level: `steady_confusion` 0.823 → 0.785, row-acc → 0.942 — helps the hazardous bucket but does not solve it; the residual is label contamination (§12.2).** Built `curate.py` — the confidence signal as a **data-collection director**: routes flagged windows to `relabel_candidate` (error_rate 1.00, a precise mislabel detector) / `new_class_candidate` / `collect_more`. New-class idea evaluated: taxonomy is too coarse (18% non-quiet standing) but a static "sit" is absent — governed proposal loop required (§11.2/§12.2). Evaluated train+val; lockbox sealed. |
 | 2026-07-21 | 4 | **S3 physics stage built — Phase 4 deterministic core (§10.4 NEW).** Ported the swap rule (§10) + `ileg_minhalf`/`interleg_offset` (§10.1) + five anchors into `stages/s3_physics/` on the canonical 2 s windows; faithful to §10 on non-lockbox files (rev2_t1 walk-rec 0.994, rev2_t3 0.931). **Rate-invariance audit** (`rate_audit.py`; 100→50 Hz, walking-gated; absolute delta for bounded anchors, relative for ratio-scale): `periodicity`/`grav_stab`/`gait_hz` **invariant**; `antiphase` and `gyro_energy` **rate_dependent** — `gyro_energy` re-derives id=69, defined as the summed-square that fails on purpose so the audit demonstrates itself. Per-trial plots + a physics-vs-label disagreement ranking feed the hypothesis agent (`agents/s3_physics.py`, Read/Grep); code enforces the provenance gate (no window-level evidence ⇒ rejected) and attaches every relied-on anchor's verdict. Wired as `orchestrator.py --phase 4`; `features.iter_windows` refactored out as the single-sourced window iterator. **Lockbox sealed in the stage** (`load_analysis_trials`, train+val only) after it was first — wrongly — computed over rev8/rev13; mistake + fix in tracker POSTDAY4 §3. **Stride-adaptive window** flagged product-critical (§10.4). Agent not yet run live. |
 | 2026-07-21 | 3 | **Per-file calibration MEASURED and SCRAPPED as an S2 lever (§7).** Built per-file posture (recentre `ang` on the at-rest opening, §10.2) + amplitude (rescale `angvel` by a robust per-file scale) calibration onto the corpus-global reference, gate-wired behind a default-off `ExperimentSpec.calibrate`. Against champion `drop_static_offset_family` (0.8977): **posture is a no-op** (+0.0000 — the champion already drops the five posture features; keep-and-calibrate 0.8904 loses to drop 0.8977) and **amplitude regresses** (−0.026) with no label-free scale rescuing it (MAD/p75/p90/p95/p99 monotonic toward but never past baseline, best −0.013). The leave-one-rev-out RandomForest already handles the per-file gain a fixed threshold couldn't, so §7's rev8 `0→1.000` is threshold-only and does not transfer. **Code reverted** — `stages/s2_ml/calibrate.py` removed, `experiment.py`/`replay.py` wiring backed out, the orphaned `calibrate_posture_amplitude` ledger entry dropped (kept `replay.py` exact-replay green); finding preserved in §7. Global-features version stands. |
 | 2026-07-21 | 3 | **Phase-3 gate: two blockers closed, one denominator reconciled.** (1) **Critic bites** — `agents/s2_critic_probe.py` fed the live critic 3 proposals it must not approve (a verbatim ledger repeat, a cosmetic `window_s=4` repeat, and a false `GAIT_BAND_HZ` premise); all 3 rejected, the critic verifying the premise against `features.py` and citing ledger entries by name ($0.23). (2) **Reconstructibility demonstrated** — `stages/s2_ml/replay.py --name drop_angvel_dom_hz` replays the at-HEAD champion **EXACT** (≤1e-9), so a same-sha ledger entry is a faithful revert unit. (3) **Incumbent reconciled** (§7): the naive `0.519`-vs-`0.888` `steady_confusion` gap was cross-recording (7/8 `loco` pairs are the sealed rev13 lockbox); on the one shared non-lockbox recording, same rows, ours is **LOWER** (0.016 vs 0.086) — directional, pending lockbox. Current champion `drop_angvel_dom_hz` macro-F1 0.8886. |

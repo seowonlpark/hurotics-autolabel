@@ -37,6 +37,27 @@ def build_anchor_table(trials: list[Trial], spec: WindowSpec | None = None) -> p
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+# the physics CAUSE of one window's disagreement with its human label (§10.7, §11) -- turns the
+# label_audit flag from a boolean into something the reviewer can triage. a WALK-labeled window
+# the swap rule does not call walking is one of three very different things: legs moving IN PHASE
+# (antiphase<=0, not gait at all -- physics is right, the label is the suspect), a single committed
+# hump the §10.7 grow still could not alternate twice (`single_hump` -- a genuinely brief/edge
+# stride), or an antiphase swing that never commits both bands (`sub_threshold`). a STAND-labeled
+# window the rule DOES call walking is the label-audit direction (a ramp/mislabel, the S4
+# precedent). None when verdict and label agree. driven by columns the row already carries, so it
+# cannot drift from the verdict it explains.
+def disagree_reason(label: object, verdict: str, antiphase: float, swap_count: int) -> str | None:
+    if label == WALK and verdict != WALKING:
+        if antiphase <= 0:
+            return "in_phase_not_gait" # legs together -- physics right, likely a real label issue
+        if swap_count <= 1:
+            return "single_hump"       # alternates but <2 crossings even after the §10.7 grow
+        return "sub_threshold"         # antiphase swing that never commits both ±delta bands
+    if label == STAND and verdict == WALKING:
+        return "stand_reads_walking"   # label-audit: a standing stretch the physics reads as gait
+    return None
+
+
 # per-trial physics-vs-label disagreement, ranked. two directions the swap rule (§10) and
 # the human label can part ways: a WALK-labeled window the physics does NOT call walking
 # (slow-cadence tail, §10.3), and a STAND-labeled window it DOES (a mislabeled ramp, the S4
@@ -44,7 +65,8 @@ def build_anchor_table(trials: list[Trial], spec: WindowSpec | None = None) -> p
 # verdict flags slow-gait windows the rule simply can't resolve, drowning real label issues in
 # window artifacts -- the adaptive call resolves those, so what remains ranked is more likely a
 # genuine label problem. this is where the agent should look first, so code ranks it rather
-# than making the agent read all 44 figures blind.
+# than making the agent read all 44 figures blind. each row carries a `reasons` histogram (§10.7)
+# so the reviewer sees WHY a trial ranks, not just that it does.
 def label_disagreement(table: pd.DataFrame) -> list[dict]:
     rows = []
     for (rev, trial), g in table.groupby(["rev", "trial"], sort=True):
@@ -52,11 +74,13 @@ def label_disagreement(table: pd.DataFrame) -> list[dict]:
         stand_lab = g[g["label"] == STAND]
         walk_not_walking = float((walk_lab["swap_verdict_adaptive"] != WALKING).mean()) if len(walk_lab) else 0.0
         stand_is_walking = float((stand_lab["swap_verdict_adaptive"] == WALKING).mean()) if len(stand_lab) else 0.0
+        reasons = g["disagree_reason"].dropna().value_counts().to_dict() if "disagree_reason" in g else {}
         rows.append({
             "rev": rev, "trial": int(trial), "n_windows": int(len(g)),
             "walk_labeled_not_walking": round(walk_not_walking, 3),
             "stand_labeled_is_walking": round(stand_is_walking, 3),
             "disagreement": round(max(walk_not_walking, stand_is_walking), 3),
+            "reasons": {k: int(v) for k, v in reasons.items()},
             "plot": f"{PLOTS_SUBDIR}/trial_{rev}_t{int(trial)}.png",
         })
     return sorted(rows, key=lambda r: r["disagreement"], reverse=True)
@@ -85,6 +109,11 @@ def run(out_dir: Path = S3_OUT_DIR, spec: WindowSpec | None = None) -> dict:
             png.unlink()
 
     table = build_anchor_table(trials, spec)
+    if not table.empty: # §10.7: annotate each window's disagreement cause for the reviewer/agent
+        table["disagree_reason"] = [
+            disagree_reason(lab, v, ap, sc) for lab, v, ap, sc in zip(
+                table["label"], table["swap_verdict_adaptive"],
+                table["antiphase"], table["swap_count"])]
     table.to_csv(out_dir / ANCHORS_CSV, index=False)
 
     disagreement = label_disagreement(table)

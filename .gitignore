@@ -7,6 +7,8 @@ data/clean/
 tracker/
 
 runs/
+results/
+
 !runs/.gitkeep
 
 CODE_STYLE.md

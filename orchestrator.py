@@ -197,7 +197,37 @@ async def phase4(run_dir: Path) -> None:
     print(f"[s3] cost: ${res.cost_usd:.4f}, turns={res.num_turns}")
 
 
-PHASES = {2: phase2, 3: phase3, 4: phase4}
+# S4 fusion: the deterministic fuser combines S2 + S3 into one call + a confidence, then the
+# agent characterises the disagreement (LOW-confidence) cases. code makes every call; the agent
+# only judges what the abstentions are made of (PLAN S5).
+async def phase5(run_dir: Path) -> None:
+    from stages.s4_fusion.run import S4_OUT_DIR, run as run_s4_core
+    from stages.s3_physics.run import S3_OUT_DIR
+    from agents import s4_fusion
+
+    # 1. deterministic core -- regenerate the fused table, metrics, disagreement ranking
+    metrics = run_s4_core(S4_OUT_DIR)
+    a = metrics["acting_on_confidence"]
+    print(f"[s4] fused macro-F1 {metrics['fused']['macro_f1']} (S2 alone "
+          f"{metrics['s2_alone']['macro_f1']}); acting on HIGH+MED: coverage {a['coverage']} "
+          f"at accuracy {a['accuracy']}")
+
+    # 2. the agent judges the disagreements (read-only; physics figures are S3's, lockbox-sealed)
+    prompt = s4_fusion.build_prompt(metrics, S3_OUT_DIR / "plots")
+    res = await run_agent(s4_fusion.S4_FUSION_AGENT, prompt, run_dir)
+
+    # 3. gate -- code keeps a finding only if it carries window-level provenance
+    findings = s4_fusion.parse_review(res.final_text)
+    path, n_ok, n_flagged = s4_fusion.write_review(run_dir, findings, res.final_text)
+    if findings is None:
+        print("[s4] review did not parse — nothing recorded")
+    else:
+        print(f"[s4] {n_ok} findings passed the provenance gate, {n_flagged} flagged "
+              f"-> {path.name}")
+    print(f"[s4] cost: ${res.cost_usd:.4f}, turns={res.num_turns}")
+
+
+PHASES = {2: phase2, 3: phase3, 4: phase4, 5: phase5}
 
 
 def main() -> None:
