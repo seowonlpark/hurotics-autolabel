@@ -114,8 +114,12 @@ Computes the physics anchors per window — the validated **swap rule** (`DOMAIN
 five audited anchors — and writes `anchors.csv`, the per-anchor rate-invariance verdicts to
 `rate_audit.json` (100→50 Hz decimation; `gyro_energy` and `antiphase` come back **rate_dependent**),
 a physics-vs-label disagreement ranking to `disagreement.json`, and one figure per trial under
-`plots/`. The **lockbox revs are sealed here too** — S3 runs on train+val only, because its plots
-feed an agent whose hypotheses reach `DOMAIN_NOTES`. See `DOMAIN_NOTES` §10.4.
+`plots/`. The swap rule is hardened past its fixed-window prototype: the interleg signal is recentred
+on each file's rest zero (`§10.5` — a per-subject offset otherwise reads real gait as STANDING) and
+the swap window is sized to the local stride period (`§10.6` — a fixed 2 s window can't resolve slow
+gait), reported as `swap_verdict_adaptive`. The **lockbox revs are sealed here too** — S3 runs on
+train+val only, because its plots feed an agent whose hypotheses reach `DOMAIN_NOTES`. See
+`DOMAIN_NOTES` §10.4–§10.6.
 
 ### Agents
 
@@ -222,8 +226,8 @@ change the champion outside the S2 promotion path.
 | 0 — skeleton | done |
 | 1 — S1 deterministic core | complete — schema/rate/gaps, gyro unit+axis trust, yaw-drift trust, degenerate-time-base rejection, quarantine ledger; gate passes (every raw file accounted) |
 | 2 — S1 exception agent | complete — `agents/s1_exception.py` triages the exception queue into known_expected / novel / needs_human with grounded rationale; verified on the real corpus and signed off (gate closed) |
-| 3 — S2 loop | running end to end — dataset/transform/features/train/locoeval/taxonomy built; champion `drop_offset_only` at LORO macro-F1 **0.8862**, promoted from an agent proposal (2 promotions, 5 rejections ledgered). Gate open: replay-reconstructibility unverified, the critic has never rejected a proposal, lockbox still sealed |
-| 4 — S3 physics | deterministic core built — swap rule + five anchors ported to `stages/s3_physics/`, rate-invariance audit recorded (`antiphase`/`gyro_energy` rate_dependent), per-trial plots + provenance-gated hypothesis agent wired as `--phase 4`; lockbox sealed in the stage. Agent not yet run live; **stride-adaptive window open (product-critical, `DOMAIN_NOTES` §10.4)** |
+| 3 — S2 loop | complete, gate closed 2026-07-21 — dataset/transform/features/train/locoeval/taxonomy built; champion `drop_static_offset_family` at LORO macro-F1 **0.8977** (18 features), 4 promotions / 8 non-promotions across 12 ledger entries. Replay reconstructs each spec exactly (≤1e-9), the critic bites 3/3 on the adversarial probe; lockbox (`rev8`/`rev13`) stays sealed as the final test |
+| 4 — S3 physics | complete — swap rule + five anchors in `stages/s3_physics/`, rate-invariance audit recorded (`antiphase`/`gyro_energy` rate_dependent), per-trial plots + provenance-gated hypothesis agent run live 2026-07-22 (4/4 hypotheses passed the gate). The agent surfaced two swap-rule defects, both measured and fixed: rest-anchor centering (§10.5) and the stride-adaptive window (§10.6, walk-recall 0.691→0.855 at no stand cost). Lockbox sealed in the stage |
 | 5 — S4 report | not started |
 | 6 — hardening + handoff | not started |
 

@@ -84,17 +84,20 @@ def plot_trial(trial: Trial, out_dir: Path, spec: WindowSpec | None = None) -> P
     ax1.legend(handles=handles, loc="upper right", ncol=5, fontsize=8, framealpha=0.9)
 
     # panel 2: the swap signal L_ang - R_ang with the +/-1 deg commit bands and the swap
-    # rule's per-window verdict as dots at the top -- the physics call over the label band
+    # rule's STRIDE-ADAPTIVE verdict as dots at the top (§10.6 -- window sized to local cadence,
+    # so slow gait a fixed 2 s window can't resolve is not misread as STANDING). the physics
+    # call over the label band; this is the verdict the disagreement ranking is built on.
     ax2.axhline(SWAP_DELTA_DEG, color="#888", ls="--", lw=0.7)
     ax2.axhline(-SWAP_DELTA_DEG, color="#888", ls="--", lw=0.7)
     ax2.axhline(0, color="#bbb", lw=0.5)
     if not anchors.empty:
         ytop = ax2.get_ylim()[1]
         for verdict, color in VERDICT_COLOR.items():
-            m = anchors["swap_verdict"] == verdict
+            m = anchors["swap_verdict_adaptive"] == verdict
             ax2.scatter(wt[m], np.full(int(m.sum()), ytop), s=14, c=color,
                         marker="s", label=verdict, clip_on=False)
-        ax2.legend(loc="lower right", ncol=3, fontsize=8, framealpha=0.9, title="swap verdict")
+        ax2.legend(loc="lower right", ncol=3, fontsize=8, framealpha=0.9,
+                   title="swap verdict (stride-adaptive)")
     ax2.set_ylabel("L_ang − R_ang (deg)")
 
     # panel 3: anchor timeline. bounded anchors on the left axis, cadence on the right.

@@ -15,7 +15,7 @@ from scipy.signal import decimate
 from stages.s1_clean.config import CANONICAL_HZ, DECIMATE_FILTER
 from stages.s2_ml.dataset import FEATURES, Trial
 from stages.s2_ml.features import WindowSpec, iter_windows
-from stages.s3_physics.anchors import ANCHOR_NAMES, WALKING, window_anchors
+from stages.s3_physics.anchors import ANCHOR_NAMES, WALKING, rest_offset, window_anchors
 
 # halve the rate: a genuine bandwidth cut, not the 99.4-vs-100 timestamp quantization that
 # is really the same rate (§2.2). if an anchor survives a real 2x decimation it is not a
@@ -82,15 +82,16 @@ def audit_anchors(trials: list[Trial], spec: WindowSpec | None = None,
     n_total = 0
 
     for trial in trials:
+        center = rest_offset(trial, spec.fs_hz) # same per-file zero the swap rule uses (§10.4)
         for _meta, win in iter_windows(trial, spec):
-            native = window_anchors(win, spec.fs_hz)
+            native = window_anchors(win, spec.fs_hz, center)
             n_total += 1
             if native["swap_verdict"] != WALKING: # audit anchors only where they describe
                 continue
             dec_win, dec_fs = decimate_window(win, factor)
             if len(dec_win) < 8: # too short to recompute anything meaningful
                 continue
-            decd = window_anchors(dec_win, dec_fs)
+            decd = window_anchors(dec_win, dec_fs, center)
             for a in ANCHOR_NAMES:
                 deltas[a].append(_delta(a, native[a], decd[a]))
 

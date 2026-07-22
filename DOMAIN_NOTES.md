@@ -729,6 +729,16 @@ rev14's header was never measured. Retracted.)
   Worth fixing properly: a tiny `read_jsonl` / `read_json` helper that hard-codes the encoding, so
   the correct call is the shortest one to type. Every occurrence so far has been someone (including
   Claude) reaching for the stdlib default under time pressure.
+- **SDK stream buffer — the third stdio trap [measured, 2026-07-22].** The first live S3 run
+  (`--phase 4`) reached the agent, then died: `Failed to decode JSON: JSON message exceeded maximum
+  buffer size of 1048576 bytes`. The SDK transport (`subprocess_cli.py`) reads the CLI's stdout as
+  newline-delimited JSON with a **1 MB per-message buffer** (`_DEFAULT_MAX_BUFFER_SIZE`). S3 is the
+  first agent to Read PNGs, and the CLI streams a `Read`-of-image back **inline as base64** in one
+  message; a turn that batches several figures (parallel Read) past 1 MB is a fatal decode mid-run.
+  **Fix:** `run_agent` sets `ClaudeAgentOptions(max_buffer_size=32 MB)` — a supported option, not a
+  monkey-patch. Chose to raise the buffer rather than shrink the plots: the agent needs the figure
+  detail (swap strips, anchor timelines) to do its job. Same family as the two traps above — a stdio
+  limit that only bites once the payload (prompt size, then image size) crosses it.
 
 ---
 
@@ -884,7 +894,87 @@ slow gait — one leg swing does not complete an alternation, so `swap_count` re
 weakness, now inherited by the stage). This is **not cosmetic**: the deployment population
 (assistive / rehab) walks slowly and variably, which is exactly where the fixed window fails, so a
 **stride-adaptive window** — length scaled to the detected stride period — is what carries the physics
-from lab cadence to clinic. Flagged, not built (tracker POSTDAY4 §2).
+from lab cadence to clinic. **Now built and measured — see §10.6.**
+
+### 10.5 The interleg DC offset defeats the raw swap rule — rest-anchor centering fixes it **[measured, 2026-07-22]**
+
+The ported rule counts crossings of `L_ang − R_ang` past ±`SWAP_DELTA_DEG`, silently assuming the
+interleg signal is zero-centered. It is not: some files carry a large per-subject DC offset on `L−R`
+— the same `ang_LR_offset` static bias the S2 champion `drop_static_offset_family` drops as zeroing
+artifact, not gait (§4.6). When that offset exceeds the swing's negative reach, `L−R` never commits
+past −delta, `swap_count` reads 0, and the rule calls real, rhythmic, antiphase gait STANDING.
+
+rev2 trials 6 and 7 carry a **+11° interleg offset** whose per-window minimum never drops below
++3.9°, and the raw rule calls **0.00 / 0.04** of their WALK-labeled windows walking — the two
+largest physics-vs-label disagreements in the corpus (`walk_labeled_not_walking` 1.000 / 0.957). The
+S3 hypothesis agent surfaced this from the plots on its first live run (`runs/2026-07-22_run2`,
+hypothesis `offset_biased_gait_defeats_swap_rule`); the deterministic `interleg_offset` column
+confirmed it, and the remedy was measured before it was believed (§11.4).
+
+**Fix: subtract the per-file rest zero (§10.2) before counting swaps.** `anchors.rest_offset()` takes
+the median of `L−R` over the opening `REST_ANCHOR_S = 3 s` — the per-subject offset, measured
+label-free off the "recordings begin at rest" anchor. On the recentred signal the rule recovers
+rev2_t7 0.00→**0.78** and rev2_t6 0.04→**0.99**, and corpus-wide (non-lockbox) it is a **Pareto gain:
+walk-recall 0.626 → 0.691 and stand-recall 0.903 → 0.927** — both improve, no tradeoff. The posture
+descriptors (`interleg_offset`, `ileg_minhalf`) stay on the raw signal — the offset *is* the posture;
+only the swap count is recentred.
+
+Two things this does **not** do, both measured:
+
+- **Per-window centering is wrong**, though it scores a higher walk-recall (0.819): it removes
+  within-file posture, so split-stance and postural-sway standing windows false-fire as walking and
+  stand-recall collapses to **0.798**. The per-file rest anchor is the principled choice, and it
+  beats a whole-trial median on standing (0.927 vs 0.892) — direct evidence that *the rest anchor*,
+  not merely some offset estimate, is what works.
+- **It does not fix the variable-amplitude failures.** After centering, the top disagreements are
+  rev6/rev4/rev7 trials whose offset already crosses zero — a genuine window-length problem
+  (fast/variable cadence, the §9/§10.4 stride-adaptive-window item), not an offset one. Centering
+  cleanly *separates* the two failure modes: it removed every offset-caused disagreement and left the
+  window-length ones untouched.
+
+Rate-invariance verdicts are unchanged — centering does not touch the five anchors, only which
+windows the audit gates in as walking (2,674 → 2,943). This did **not** open the lockbox: measured on
+train+val only, per §10.4.
+
+### 10.6 Stride-adaptive window — one fixed window cannot call slow gait and standing both **[measured, 2026-07-22]**
+
+The swap rule counts interleg alternations in a window, and `gait_hz`/`periodicity` resolve to
+1/window. A fixed 2 s window therefore fails once the stride period nears 2 s: it holds <2 strides,
+`swap_count` reads 0–1, and the rule under-calls walking. Not a lab edge case — the deployment
+population (assistive / rehab) walks slowly, and several trials here have a **measured ~2.9 s stride**
+(0.33 Hz) a 2 s window physically cannot contain.
+
+The tradeoff is fundamental, not a bad constant. Rest-centered swap rule at fixed windows, labeled
+corpus (non-lockbox):
+
+| window | walk-recall | stand-recall |
+|---|---|---|
+| 2 s | 0.691 | 0.927 |
+| 4 s | 0.946 | 0.780 |
+| 6 s | 0.983 | 0.738 |
+
+Walk-recall rises monotonically with window (more strides seen); stand-recall falls monotonically (a
+longer *standing* window absorbs a transition/sway and false-fires WALKING). No fixed window wins both.
+
+**Fix: size the swap window per cell to ~2 detected strides.** For each 2 s output cell,
+`anchors.stride_period()` reads the local stride period from the autocorrelation of the centered
+interleg over a 6 s bootstrap — the first local max *after* the acf first dips below zero, because a
+plain argmax grabs the monotonic lag-0 shoulder and returned 0.33 s (the band floor) on 2.9 s
+strides. Periodic → window = 2×period (capped 6 s); non-periodic (standing has no peak above the 0.35
+floor) → the base 2 s, so a standing cell is never lengthened into its neighbours.
+
+On the same 2 s output grid this scores **walk-recall 0.855, stand-recall 0.915** — most of the
+long-window walk gain (**+0.164** over fixed 2 s) for almost none of the stand cost (**−0.012**, vs
+fixed-4 s's −0.147). It is added as `swap_verdict_adaptive` + `swap_window_s` alongside the untouched
+§10 per-window `swap_verdict`, and the disagreement ranking is now built on it: the fixed verdict
+flagged slow-gait windows the rule simply cannot resolve, drowning real label issues in window
+artifacts (rev6/rev4 dropped from `walk_not_walking` 0.65/0.69 to 0.37/0.33).
+`ADAPTIVE_PERIODICITY_FLOOR = 0.35` trades walk vs stand recovery; set so stand-recall holds at the
+fixed-2 s level, because on a powered device calling a stationary user "walking" is an unwanted
+actuation, not a null.
+
+Built and measured, not merely flagged — but **not** retired as deployment-solved: validated on the
+labeled lab corpus, and the same live-cadence sizing must still hold on streaming clinic data.
 
 ---
 

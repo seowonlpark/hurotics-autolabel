@@ -20,6 +20,12 @@ MODEL_SMART = "sonnet" # judgment work
 
 DEFAULT_MAX_TURNS = 25 # hard ceiling on turns; a stuck agent fails fast, doesn't spin
 
+# stream-json carries tool results inline, base64 images included. one S3 turn can batch
+# several ~0.5 MB figures (parallel Read) into a single message, past the SDK transport's
+# 1 MB default line buffer -- a fatal decode mid-run (the third stdio trap after CreateProcess
+# length and cp949, DOMAIN_NOTES §8). raise the cap so image-reading agents survive a big turn.
+MAX_BUFFER_SIZE = 32 * 1024 * 1024 # 32 MB
+
 TOOL_LOG_FILENAME = "run_log.jsonl" # per-run tool-call log
 COST_FILENAME = "costs.json" # per-run cost ledger
 # the exact system prompt the agent saw, and the file the CLI reads it from -- doubles
@@ -126,6 +132,7 @@ async def run_agent(spec: AgentSpec, prompt: str, run_dir: Path) -> AgentResult:
         allowed_tools=spec.allowed_tools,
         model=spec.model,
         max_turns=spec.max_turns,
+        max_buffer_size=MAX_BUFFER_SIZE, # images ride inline in stream-json; 1 MB default is too small
         cwd=str(REPO_ROOT),
         # matcher=None fires for every tool call
         hooks={"PostToolUse": [HookMatcher(matcher=None, hooks=[_make_audit_hook(log_path, spec.name)])]},

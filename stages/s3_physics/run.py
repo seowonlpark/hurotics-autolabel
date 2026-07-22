@@ -40,15 +40,18 @@ def build_anchor_table(trials: list[Trial], spec: WindowSpec | None = None) -> p
 # per-trial physics-vs-label disagreement, ranked. two directions the swap rule (§10) and
 # the human label can part ways: a WALK-labeled window the physics does NOT call walking
 # (slow-cadence tail, §10.3), and a STAND-labeled window it DOES (a mislabeled ramp, the S4
-# label-audit precedent). this is where the agent should look first, so code ranks it rather
+# label-audit precedent). ranked on the STRIDE-ADAPTIVE verdict (§10.6): the fixed-window
+# verdict flags slow-gait windows the rule simply can't resolve, drowning real label issues in
+# window artifacts -- the adaptive call resolves those, so what remains ranked is more likely a
+# genuine label problem. this is where the agent should look first, so code ranks it rather
 # than making the agent read all 44 figures blind.
 def label_disagreement(table: pd.DataFrame) -> list[dict]:
     rows = []
     for (rev, trial), g in table.groupby(["rev", "trial"], sort=True):
         walk_lab = g[g["label"] == WALK]
         stand_lab = g[g["label"] == STAND]
-        walk_not_walking = float((walk_lab["swap_verdict"] != WALKING).mean()) if len(walk_lab) else 0.0
-        stand_is_walking = float((stand_lab["swap_verdict"] == WALKING).mean()) if len(stand_lab) else 0.0
+        walk_not_walking = float((walk_lab["swap_verdict_adaptive"] != WALKING).mean()) if len(walk_lab) else 0.0
+        stand_is_walking = float((stand_lab["swap_verdict_adaptive"] == WALKING).mean()) if len(stand_lab) else 0.0
         rows.append({
             "rev": rev, "trial": int(trial), "n_windows": int(len(g)),
             "walk_labeled_not_walking": round(walk_not_walking, 3),

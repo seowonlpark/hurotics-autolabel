@@ -1,6 +1,6 @@
 # H-CARE Agent Pipeline — Structure & Progression Plan
 
-**Owner:** Lu · **Status:** Phases 0–2 complete · Phase 3 (S2 loop) **gate closed 2026-07-21** (replay + critic-bite verified) · **Last updated:** 2026-07-21
+**Owner:** Lu · **Status:** Phases 0–3 complete · Phase 4 (S3 physics) **complete** — core + gate exercised live, swap rule hardened (rest-anchor centering §10.5, stride-adaptive window §10.6); S4 remains · **Last updated:** 2026-07-22
 
 Goal: a staged, agent-assisted pipeline for IMU locomotion data — cleaning, ML experimentation, physics-based analysis, and reporting — where deterministic code does the work, Claude agents handle judgment at defined points, and every decision is logged and reconstructible. Built on the Claude Agent SDK (Python).
 
@@ -126,15 +126,18 @@ second, drift-prone source of truth.
       (git tag deliberately dropped — see the S2 contract above)
 - ☑ Experimenter + critic run 3–5 proposal cycles (4 agent cycles live, ~$0.21 each; 7 ledger
       entries including the manually specified ones)
-- ☑ ≥1 promotion and ≥1 rejection have occurred — **2 promotions, 5 rejections.** Current champion
-      `drop_offset_only` at **0.8862** (+0.0132), the first champion proposed by an agent rather
-      than seeded by hand
+- ☑ ≥1 promotion and ≥1 rejection have occurred — **4 promotions (1 seed + 3 agent-driven),
+      8 non-promotions** across 12 ledger entries. Current champion `drop_static_offset_family` at
+      **0.8977** (18 features) — the static-offset angle family is per-subject zeroing bias, not gait,
+      and leaks under LORO. `drop_offset_only` (0.8862) was the first champion proposed by an agent
+      rather than seeded by hand
 - ☑ Both fully reconstructible from `experiments.jsonl` + git history alone — **verified 2026-07-21**
-      by `stages/s2_ml/replay.py`: reconstruct each spec from its ledger entry and re-run it. All 7
-      entries replayed **exactly** (worst metric Δ ≤ 1e-9 across macro-F1, per-rev, and taxonomy
-      fractions), so the spec + `git_sha` is a faithful revert unit — the champion is truly its
-      `champion.json`, not a model blob. (Same-sha entries must be exact by determinism; older-sha
-      ones also matched, meaning the deterministic core has not drifted since `d5a15b3`.)
+      by `stages/s2_ml/replay.py`: reconstruct each spec from its ledger entry and re-run it. Every
+      entry replayed at that point matched **exactly** (worst metric Δ ≤ 1e-9 across macro-F1, per-rev,
+      and taxonomy fractions), so the spec + `git_sha` is a faithful revert unit — the champion is
+      truly its `champion.json`, not a model blob. (Same-sha entries must be exact by determinism;
+      older-sha ones also matched, meaning the deterministic core has not drifted since `d5a15b3`.
+      Ledger entries added since have not been re-swept — rerun `replay.py` to re-confirm.)
 - ☑ DOMAIN_NOTES updated
 - ☑ **Gate blockers closed (2026-07-21):**
   - the critic **demonstrably bites** — `agents/s2_critic_probe.py` feeds it three proposals it must
@@ -151,9 +154,10 @@ second, drift-prone source of truth.
 ### Phase 4 — S3 (1–2 days)
 - ☑ gk/anchor work ported into stage format — swap rule (§10) + `ileg_minhalf`/`interleg_offset` (§10.1) + five anchors in `stages/s3_physics/`; faithful to §10 on non-lockbox files
 - ☑ Rate-invariance audit completed for all five anchors; verdicts recorded (`rate_audit.json`) — periodicity/grav_stab/gait_hz **invariant**, antiphase + gyro_energy **rate_dependent** (gyro_energy re-derives id=69)
-- 🟡 Hypotheses reference real windows with provenance — gate **enforced in code** (`agents/s3_physics.validate_hypothesis`), not yet exercised on a live `--phase 4` run
-- ☑ DOMAIN_NOTES updated (§10.4)
-- ☐ **Stride-adaptive window** (product-critical, not polish) — fixed 2 s abstains on slow gait (§9/§10.4); the assistive/rehab population walks slowly, so this is a real lab→clinic generalization requirement. See tracker POSTDAY4 §2.
+- ☑ Hypotheses reference real windows with provenance — gate **enforced in code** (`agents/s3_physics.validate_hypothesis`) and **exercised live 2026-07-22** (`runs/2026-07-22_run2`): 4 hypotheses, 4 passed the provenance gate, 0 flagged; the agent self-respected both `rate_dependent` verdicts (used `antiphase` qualitatively only), $0.33
+- ☑ **Rest-anchor centering** — the live run's top hypothesis (`offset_biased_gait_defeats_swap_rule`) surfaced that a per-subject interleg DC offset (§4.6, the same bias `drop_static_offset_family` drops) defeats the raw swap rule; measured, then fixed by subtracting the per-file rest zero (§10.2) before counting swaps — corpus Pareto gain (walk 0.626→0.691, stand 0.903→0.927). See DOMAIN_NOTES §10.5.
+- ☑ DOMAIN_NOTES updated (§10.4, §10.5)
+- ☑ **Stride-adaptive window** (product-critical, not polish) — fixed 2 s abstains on slow gait (§9/§10.4); the assistive/rehab population walks slowly, so this is a real lab→clinic generalization requirement. **Built + measured 2026-07-22 (§10.6):** per-cell window sized to ~2 detected strides (autocorr period, first peak past the lag-0 shoulder), capped 6 s, standing kept short. Recovers walk-recall 0.691→0.855 for stand-recall 0.927→0.915 — most of a long window's gain, little of its cost. Added as `swap_verdict_adaptive`; disagreement ranking now built on it. Validated on the lab corpus; live-cadence sizing on streaming clinic data remains to confirm.
 - ☑ Lockbox sealed in the stage (train+val only) — S3 feeds an agent, so it must seal `rev8`/`rev13` too, not just the training path (tracker POSTDAY4 §3)
 
 ### Phase 5 — S4 (1 day)
