@@ -1,5 +1,6 @@
 # stage orchestrator -- deliberately dumb: sequence, gate, log; no intelligence here
-# --phase 2 = S1 exception triage, --phase 3 = S2 champion/challenger cycle. see README.
+# invoked by STEP NAME matching the agent file, e.g. `python orchestrator.py s4_newclass`.
+# steps: s1_exception, s2_cycle, s3_physics, s4_fusion, s4_newclass. see README.
 
 from __future__ import annotations
 
@@ -58,7 +59,7 @@ def new_run_dir() -> Path:
 
 
 # S1 exception triage: code builds the queue and writes the review, the agent only judges
-async def phase2(run_dir: Path) -> None:
+async def run_s1_exception(run_dir: Path) -> None:
     if not CLEAN_RUN_DIR.exists():
         raise FileNotFoundError(
             f"No clean run at {CLEAN_RUN_DIR}. Run `python -m stages.s1_clean.clean "
@@ -89,7 +90,7 @@ async def phase2(run_dir: Path) -> None:
 
 # S2 champion/challenger: experimenter proposes, critic reviews before any training,
 # code decides. promotion is never an agent's call -- decide() gates on measured macro-F1
-async def phase3(run_dir: Path) -> None:
+async def run_s2_cycle(run_dir: Path) -> None:
     from stages.s2_ml.experiment import (
         ExperimentSpec, decide, ledger, load_champion, proposals,
         record, record_proposal, run_experiment,
@@ -167,7 +168,7 @@ async def phase3(run_dir: Path) -> None:
 # S3 physics: deterministic core computes anchors + audit + plots, then the hypothesis agent
 # reads the figures and writes hypotheses. code enforces the provenance gate before recording
 # -- an agent's claim is kept only if it points at a real window (PLAN S3).
-async def phase4(run_dir: Path) -> None:
+async def run_s3_physics(run_dir: Path) -> None:
     from stages.s3_physics.run import S3_OUT_DIR, run as run_s3_core
     from agents import s3_physics
 
@@ -200,7 +201,7 @@ async def phase4(run_dir: Path) -> None:
 # S4 fusion: the deterministic fuser combines S2 + S3 into one call + a confidence, then the
 # agent characterises the disagreement (LOW-confidence) cases. code makes every call; the agent
 # only judges what the abstentions are made of (PLAN S5).
-async def phase5(run_dir: Path) -> None:
+async def run_s4_fusion(run_dir: Path) -> None:
     from stages.s4_fusion.run import S4_OUT_DIR, run as run_s4_core
     from stages.s3_physics.run import S3_OUT_DIR
     from agents import s4_fusion
@@ -232,7 +233,7 @@ async def phase5(run_dir: Path) -> None:
 # taxonomy misses. governed (DOMAIN_NOTES Section 11.2): code validates cluster mass + provenance and
 # routes every proposal to needs_human -- it never adds a class, never touches the model, the
 # swap rule, the fuser, or a label. read-only, orthogonal to the deployed algorithm.
-async def phase6(run_dir: Path) -> None:
+async def run_s4_newclass(run_dir: Path) -> None:
     from stages.s4_fusion.newclass import CANDIDATES_JSON, build_bundle
     from stages.s4_fusion.run import FUSED_CSV, S4_OUT_DIR
     from stages.s3_physics.run import S3_OUT_DIR
@@ -241,7 +242,8 @@ async def phase6(run_dir: Path) -> None:
     if not (S4_OUT_DIR / FUSED_CSV).exists():
         raise FileNotFoundError(
             f"No fused table at {S4_OUT_DIR / FUSED_CSV}. Run `python -m stages.s4_fusion.run` "
-            f"(or --phase 5) first - new-class discovery reads the fusion's curation spans.")
+            f"(or `orchestrator.py s4_fusion`) first - new-class discovery reads the fusion's "
+            f"curation spans.")
 
     # 1. deterministic core -- assemble the candidate evidence bundle
     bundle = build_bundle(S4_OUT_DIR, S3_OUT_DIR)
@@ -269,7 +271,16 @@ async def phase6(run_dir: Path) -> None:
     print(f"[s4-nc] cost: ${res.cost_usd:.4f}, turns={res.num_turns}")
 
 
-PHASES = {2: phase2, 3: phase3, 4: phase4, 5: phase5, 6: phase6}
+# run steps, keyed by the NAME you type -- each name matches its agent file (agents/<name>.py,
+# except s2_cycle which runs the experimenter+critic pair). the deployable pipeline is one stage
+# per pass; a stage with more than one agent (s2, s4) gets one named step per job.
+STEPS = {
+    "s1_exception": run_s1_exception, # agents/s1_exception.py
+    "s2_cycle": run_s2_cycle,         # agents/s2_experimenter.py + s2_critic.py
+    "s3_physics": run_s3_physics,     # agents/s3_physics.py
+    "s4_fusion": run_s4_fusion,       # agents/s4_fusion.py
+    "s4_newclass": run_s4_newclass,   # agents/s4_newclass.py
+}
 
 
 def main() -> None:
@@ -281,13 +292,14 @@ def main() -> None:
 
     load_dotenv(REPO_ROOT / ".env") # SDK reads ANTHROPIC_API_KEY from the environment
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", type=int, required=True, choices=sorted(PHASES))
+    parser = argparse.ArgumentParser(description="Run one pipeline step by name.")
+    parser.add_argument("step", choices=list(STEPS),
+                        help="which step to run (matches agents/<name>.py)")
     args = parser.parse_args()
 
     run_dir = new_run_dir()
-    print(f"[run] {run_dir}")
-    asyncio.run(PHASES[args.phase](run_dir))
+    print(f"[run] {args.step} -> {run_dir}")
+    asyncio.run(STEPS[args.step](run_dir))
     print(f"[run] artifacts in {run_dir}")
 
 

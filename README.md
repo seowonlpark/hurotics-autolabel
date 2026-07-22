@@ -124,12 +124,18 @@ train+val only, because its plots feed an agent whose hypotheses reach `DOMAIN_N
 ### Agents
 
 ```powershell
-python orchestrator.py --phase 2      # S1 exception triage over the latest clean run
-python orchestrator.py --phase 3      # one S2 champion/challenger cycle
-python orchestrator.py --phase 4      # S3: physics core, then the hypothesis agent
-python orchestrator.py --phase 5      # S4: fuse S2+S3 into a call + confidence, then the judgement agent
-python orchestrator.py --phase 6      # S4: propose classes the {stand,walk} taxonomy misses (governed, needs_human)
+python orchestrator.py s1_exception   # S1 exception triage over the latest clean run
+python orchestrator.py s2_cycle       # one S2 champion/challenger cycle (experimenter + critic)
+python orchestrator.py s3_physics     # S3: physics core, then the hypothesis agent
+python orchestrator.py s4_fusion      # S4: fuse S2+S3 into a call + confidence, then the judgement agent
+python orchestrator.py s4_newclass    # S4: propose classes the {stand,walk} taxonomy misses (governed, needs_human)
 ```
+
+Each step name matches its agent file (`agents/<name>.py`); `s2_cycle` runs the experimenter +
+critic pair. The `sN_` prefix is the **pipeline stage** the step operates on (S1 clean -> S2 ml ->
+S3 physics -> S4 fusion), so a stage with two jobs has two named steps (`s4_fusion`, `s4_newclass`) -
+the stage number is not a run-order counter. The build-order narrative ("Phase 0-7") lives in
+`PLAN.md` and is a separate thing from these run steps.
 
 S4 fusion combines the S2 learned label and the S3 physics verdict into one call **plus a
 confidence** - the signal the incumbent lacks. The deterministic core (`stages/s4_fusion/run.py`,
@@ -142,7 +148,7 @@ The agent then characterises the disagreement cases; it judges, it never arbitra
 The confidence signal also drives a **data-collection director** (`stages/s4_fusion/curate.py`):
 flagged windows route to `relabel_candidate` (two-vote - BOTH S2 and physics must contradict the
 label), `new_class_candidate`, or `collect_more`. From the new-class spans, **governed discovery**
-(`--phase 6`) assembles a physics-profile bundle and an agent proposes classes the 2-class taxonomy
+(`s4_newclass`) assembles a physics-profile bundle and an agent proposes classes the 2-class taxonomy
 misses; code validates provenance + cluster mass and routes every proposal to `needs_human` - it never
 adds a class or edits a label. The one honest test of the fused model on the sealed revs waits behind
 a deliberate gate: `python -m stages.s4_fusion.lockbox --confirm OPEN-LOCKBOX` (it refuses otherwise).
@@ -248,7 +254,7 @@ change the champion outside the S2 promotion path.
 | 3 - S2 loop | complete, gate closed 2026-07-21 - dataset/transform/features/train/locoeval/taxonomy built; champion `drop_static_offset_family` at LORO macro-F1 **0.8977** (18 features), 4 promotions / 8 non-promotions across 12 ledger entries. Replay reconstructs each spec exactly (<=1e-9), the critic bites 3/3 on the adversarial probe; lockbox (`rev8`/`rev13`) stays sealed as the final test |
 | 4 - S3 physics | complete - swap rule + four anchors in `stages/s3_physics/` (`gait_hz` dropped Section 10.8 as degenerate at 2 s), rate-invariance audit recorded (`antiphase`/`gyro_energy` rate_dependent), per-trial plots + provenance-gated hypothesis agent run live 2026-07-22 (4/4 hypotheses passed the gate). The agent surfaced two swap-rule defects, both measured and fixed: rest-anchor centering (Section 10.5) and the stride-adaptive window (Section 10.6), extended by the span-grow fallback (Section 10.7, walk-recall 0.691->0.855->0.921 at a ~10:1 stand cost). Lockbox sealed in the stage |
 | 5 - S4 fusion | complete - deterministic fuser combines S2 + S3 into a call + calibrated confidence; `DOMAIN_NOTES` Section 12. Judgement agent run live 2026-07-22. Data-collection director + guarded lockbox eval of the *fused* model both built. **Lockbox OPENED (rev8, final, Section 12.5):** the raw fused label did NOT beat S2 out-of-sample (0.798 vs 0.822), but the confidence signal generalized - the deployable is the confidence-GATED system (acting-on-confidence 0.845 macro-F1 / 0.898 acc / 0.659 stand-recall at 94% coverage). `lockbox.py` now marked spent (refuses to re-score rev8/rev13; kept for a future sealed rev) |
-| 6 - S4 new-class discovery | complete - `--phase 6` (`stages/s4_fusion/newclass.py` + `agents/s4_newclass.py`) run live 2026-07-22: 28 candidate spans -> 2 cluster-mass-supported proposals (`bilateral_transition_maneuver`, `standing_shifting`), both `needs_human`. Governed (Section 11.2): read-only, provenance + cluster-mass gate in code, never adds a class or edits a label |
+| 6 - S4 new-class discovery | complete - `s4_newclass` step (`stages/s4_fusion/newclass.py` + `agents/s4_newclass.py`) run live 2026-07-22: 28 candidate spans -> 2 cluster-mass-supported proposals (`bilateral_transition_maneuver`, `standing_shifting`), both `needs_human`. Governed (Section 11.2): read-only, provenance + cluster-mass gate in code, never adds a class or edits a label |
 | 7 - hardening + handoff | not started - `max_turns` audit, clean-room run, handoff doc |
 
 Current corpus counts (files, clean vs quarantined, usable segments/minutes, subjects) live in the

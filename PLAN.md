@@ -1,6 +1,6 @@
 # H-CARE Agent Pipeline - Structure & Progression Plan
 
-**Owner:** Lu - **Status:** Phases 0-6 complete - **LOCKBOX OPENED (rev8, final, DOMAIN_NOTES Section 12.5):** raw fused label did NOT beat S2 out-of-sample (rev8 0.798 vs 0.822), but the **confidence signal generalized** - acting-on-confidence 0.845 macro-F1 / 0.898 acc / 0.659 stand-recall at 94% coverage, calibrated LOW tier (0.27). Deployable artifact = the confidence-GATED system, not the raw relabel; generalization gap is stand-recall on unseen subjects = the data ceiling (Section 12.2). New-class discovery (`--phase 6`) run live: 2 supported proposals, all `needs_human`. 2-class model final; no sealed rev left - **Last updated:** 2026-07-22
+**Owner:** Lu - **Status:** Phases 0-6 complete - **LOCKBOX OPENED (rev8, final, DOMAIN_NOTES Section 12.5):** raw fused label did NOT beat S2 out-of-sample (rev8 0.798 vs 0.822), but the **confidence signal generalized** - acting-on-confidence 0.845 macro-F1 / 0.898 acc / 0.659 stand-recall at 94% coverage, calibrated LOW tier (0.27). Deployable artifact = the confidence-GATED system, not the raw relabel; generalization gap is stand-recall on unseen subjects = the data ceiling (Section 12.2). New-class discovery (`s4_newclass`) run live: 2 supported proposals, all `needs_human`. 2-class model final; no sealed rev left - **Last updated:** 2026-07-22
 
 Goal: a staged, agent-assisted pipeline for IMU locomotion data - cleaning, ML experimentation, physics-based analysis, and reporting - where deterministic code does the work, Claude agents handle judgment at defined points, and every decision is logged and reconstructible. Built on the Claude Agent SDK (Python).
 
@@ -117,7 +117,7 @@ problems). Fusion is deterministic; the agent judges the disagreement cases, it 
 
 ### Phase 2 - S1 exception agent (1-2 days)
 *First real agent. Proving ground for prompt / tool-restriction / escalation patterns.*
-- [x] Agent processes the real exception queue (`agents/s1_exception.py`; `orchestrator.py --phase 2`)
+- [x] Agent processes the real exception queue (`agents/s1_exception.py`; `orchestrator.py s1_exception`)
 - [x] Every decision has written rationale grounded in a DOMAIN_NOTES section; `needs_human` fires
       (the degenerate-time-base quarantines -> re-export) while pipeline-handled anomalies/drift ->
       `known_expected`. Read-only agent; deterministic wrapper writes `exceptions_review.jsonl`
@@ -179,8 +179,8 @@ problems). Fusion is deterministic; the agent judges the disagreement cases, it 
 - [x] **CLOSED (decided, not a code defect):** brief (< 2 s) stops sit below the window resolution floor (Section 10.6/Section 12.1) - a resolution limit, not something the adaptive window addresses, and unvalidatable now the lockbox is spent. *Handled* by the gated deployable (all 64 LOW -> abstained), and the lockbox corroborated it generalizes (rev8 LOW tier 0.27 acc, Section 12.5). Closed like Section 12.4: recorded, absorbed by abstention, no window-size change
 **The honest bottom line (Section 12.2):** the dominant remaining lever is **data** - better labels on the motion-contaminated "standing" and more subjects (n=5, rev69 dominant) - not more macro-F1 in code. The pipeline's job now is to *direct* that data effort, which the curation queue does.
 
-### Phase 6 - S4 new-class discovery (`--phase 6`)
-- [x] **Governed new-class discovery run live** (`stages/s4_fusion/newclass.py` + `agents/s4_newclass.py`, `orchestrator.py --phase 6`, `runs/2026-07-22_run4`, $0.99): 28 candidate spans (mean antiphase **-0.30** = legs moving *together*, not gait) -> 2 cluster-mass-supported proposals, both `needs_human` - `bilateral_transition_maneuver` (sit-to-stand/squat/turn, honest caveat: sensors can't tell a turn from a sit-to-stand) and `standing_shifting` (the Section 10.3 hypothesis recurring with mass). Read-only, orthogonal to the deployed algorithm - never adds a class or edits a label (Section 11.2)
+### Phase 6 - S4 new-class discovery (`s4_newclass` step)
+- [x] **Governed new-class discovery run live** (`stages/s4_fusion/newclass.py` + `agents/s4_newclass.py`, `orchestrator.py s4_newclass`, `runs/2026-07-22_run4`, $0.99): 28 candidate spans (mean antiphase **-0.30** = legs moving *together*, not gait) -> 2 cluster-mass-supported proposals, both `needs_human` - `bilateral_transition_maneuver` (sit-to-stand/squat/turn, honest caveat: sensors can't tell a turn from a sit-to-stand) and `standing_shifting` (the Section 10.3 hypothesis recurring with mass). Read-only, orthogonal to the deployed algorithm - never adds a class or edits a label (Section 11.2)
 - [x] Deterministic gate enforced in code: provenance (every `span_ref` overlaps a real candidate span) + cluster mass (>= 4 spans across >= 2 revs); every proposal `needs_human` regardless of confidence
 - [ ] Human adjudication of the two proposals against protocol/video (out of scope for the pipeline - the `needs_human` handoff)
 
