@@ -575,8 +575,9 @@ rev14's header was never measured. Retracted.)
   The earlier line here was wrong twice: **there is no `remainder` bucket** (`steady_confusion`
   absorbs whatever precedence leaves, so the partition closes without a catch-all), and
   **`omission` splits three ways** - `swallowed` is the one worth watching, since a fully
-  absorbed bout leaves no trace at all. Thresholds: `FLICKER_MAX_MS=200`, `LAG_MAX_MS=1000`,
-  `SUSTAINED_FRACTION=0.5`, `MIN_EVENTS_FOR_STATISTIC=10`, `WEAK_CLASS_F1=0.5`.
+  absorbed bout leaves no trace at all. Thresholds (the three actually wired): `FLICKER_MAX_MS=200`,
+  `LAG_MAX_MS=1000`, `SUSTAINED_FRACTION=0.5`. (The port's `MIN_EVENTS_FOR_STATISTIC`/`WEAK_CLASS_F1`
+  low-sample/weak-class tagging was never implemented here and has been dropped, 2026-07-22.)
 - **The taxonomy is ROW-level (~10 ms) and a windowed classifier cannot be scored by it
   directly [decided].** A model predicting once per 2 s is piecewise-constant over that
   span, so it *cannot emit* a run shorter than `FLICKER_MAX_MS` - flicker would read zero
@@ -1250,9 +1251,17 @@ standing window). Brief stops sit below the window's resolution floor, and the s
 **The confidence signal quarantines the label's errors.** All **64/64** truly-STAND disagreement
 windows are labeled WALK by the majority rule (the ~21% minority of the two disagreement cells) - and
 all 64 are LOW-confidence, so a controller acting on HIGH+MED abstains on every one. The label is
-wrong exactly where the confidence says "don't trust me." **Open, recorded, not closed:** brief
-(< 2 s) stops are a genuine window-resolution-floor limitation - the fine-grained sibling of the
-slow-gait problem (Section 10.6), and not something the adaptive window addresses.
+wrong exactly where the confidence says "don't trust me."
+
+**CLOSED - handled by the confidence-gated deployable, corroborated out-of-sample [2026-07-22].**
+Brief (< 2 s) stops are a genuine window-resolution-floor limitation - the fine-grained sibling of
+the slow-gait problem (Section 10.6), NOT something the adaptive window addresses (it only widens).
+It is not a code defect to fix: a shorter window trades resolution for noise across the whole
+pipeline, and it could not be validated now anyway (the lockbox is spent). It is *handled* by what
+we ship - the confidence-gated system abstains on all 64 - and the lockbox confirmed this
+generalizes: on the unseen rev8 the LOW tier scored **0.27** accuracy (Section 12.5), i.e. the model
+flags exactly these blind spots on a subject it never saw. Closed as decided (like Section 12.4): the
+resolution floor stays recorded, the gated deployable absorbs it, no window-size change made.
 
 ### 12.2 The ceiling is data - and the fusion becomes a data-collection director **[measured, 2026-07-22]**
 
@@ -1357,12 +1366,78 @@ the hypothesis agent can discount a file's verdicts qualitatively - not a fusion
 if a future file is untrusted **and** small-swing (where the center error could flip a call); nothing
 in the current corpus is. Recorded so S4's silence on the flag is a decision, not an oversight.
 
+### 12.5 Lockbox OPENED - the confidence signal generalized, the fused label did not **[measured, 2026-07-22, FINAL - rev8 spent]**
+
+`rev8` (the last sealed rev; rev13 was already spent on the axis decision) was opened once via
+`stages/s4_fusion/lockbox.py --confirm OPEN-LOCKBOX`, scoring the deployable **fused** model (S2 fit
+on every non-lockbox rev, predicting rev8 unseen; S3 verdicts computed on rev8; fuse). This is the
+final unbiased number and **cannot be re-run** - rev8 is spent.
+
+| model (rev8, 198 windows) | macro-F1 | accuracy | stand-recall | walk-recall |
+|---|---|---|---|---|
+| S2 alone | 0.822 | 0.874 | 0.635 | 0.959 |
+| fused (raw label) | 0.798 | 0.864 | **0.558** | 0.973 |
+| **acting-on-confidence** (abstain LOW) | **0.845** | **0.898** | **0.659** | 0.972 |
+
+Tier calibration held out-of-sample: HIGH 0.92 (n=175) / MED 0.58 (n=12) / **LOW 0.27 (n=11)**.
+rev13 (reference, spent): fused == S2 exactly (macro-F1 0.764, a fusion no-op).
+
+**Full per-rev breakdown (S2 alone vs the GATED deployable = acting-on-confidence).** rev2-7 are
+leave-one-rev-out (each held out of its own fold); rev8/rev13 are the lockbox. `acc / F1 / st` =
+accuracy / macro-F1 / stand-recall; `cov` = coverage (fraction acted on, the rest abstained at LOW).
+
+| rev | split | n | S2 acc / F1 / st | GATED acc / F1 / st / cov |
+|---|---|---|---|---|
+| rev2 | train+val | 1751 | 0.917 / 0.806 / 0.966 | **0.971 / 0.918 / 0.965** / 0.92 |
+| rev3 | train+val | 528 | 0.991 / 0.969 / 0.891 | **0.991 / 0.969 / 0.891** / 1.00 |
+| rev4 | train+val | 89 | 0.966 / 0.955 / 0.913 | **0.977 / 0.970 / 0.913** / 0.98 |
+| rev5 | train+val | 145 | 0.938 / 0.890 / 0.714 | **0.944 / 0.896 / 0.704** / 0.98 |
+| rev6 | train+val | 1267 | 0.946 / 0.934 / 0.859 | **0.966 / 0.958 / 0.916** / 0.91 |
+| rev7 | train+val | 1032 | 0.947 / 0.907 / 0.808 | **0.960 / 0.926 / 0.831** / 0.95 |
+| **rev8** | **LOCKBOX (final)** | 198 | 0.874 / 0.822 / 0.635 | **0.898 / 0.845 / 0.659** / 0.94 |
+| rev13 | lockbox (spent) | 1235 | 0.948 / 0.764 / 0.385 | 0.951 / 0.771 / 0.396 / 1.00 |
+
+The gated deployable ties-or-beats S2 on **every** rev, and never by hurting standing (rev6
+stand-recall 0.859 -> 0.916). The raw fused label, by contrast, *hurt* stand-recall on rev5/6/7/8 -
+gating repairs it because the flipped windows land in LOW and abstain. The generalization cliff is
+standing on unseen subjects: 0.70-0.97 within training, **0.66 (rev8) / 0.38 (rev13)** held out -
+walk-recall stays 0.96-1.0 throughout. This is the Section 12.2 data ceiling, per rev.
+
+**Three findings, honest:**
+
+1. **The raw fused label did NOT beat S2 alone out-of-sample.** rev8 slightly *worse* (0.798 vs
+   0.822), rev13 a no-op. The mechanism is the one Section 12 flagged as the risk: the S3 `WALKING`-veto
+   flipped a handful of true STAND windows S2 had correct into WALK (stand-recall 0.635 -> 0.558,
+   walk-recall up 0.959 -> 0.973) - physics over-called walking on an unseen subject's stands. **The
+   train+val fusion advantage (0.921 > 0.898) did not replicate.** Caveat: on 198 windows the
+   fused-vs-S2 gap is only ~4 stand windows - this *fails to confirm* fusion, it does not decisively
+   refute it. But the burden was on fusion to confirm, and it did not.
+
+2. **The confidence signal - the reason this project exists - DID generalize, and is the real
+   product.** Abstaining on LOW beat both S2-alone and full-coverage fusion on rev8: macro-F1 0.845,
+   stand-recall 0.659 (above S2), accuracy 0.898 at 94% coverage, with a calibrated LOW tier that
+   concentrates errors (27% accuracy - the model knows where it is blind). **The deployable artifact
+   is the confidence-GATED system, not the raw fused relabel.** Standing is recovered by abstention,
+   not a cleverer label (the Section 12 thesis, now confirmed out-of-sample).
+
+3. **The generalization gap is stand-recall on unseen subjects - the data lever again (Section 12.2).**
+   Stand-recall collapses out-of-sample (0.56 rev8, 0.38 rev13 vs ~0.90 LORO) while walk-recall stays
+   0.96-1.0. Both sealed revs agree: *standing* is what does not generalize - the motion-contaminated
+   "standing" / label-contamination ceiling, not a code defect. n=2 held-out subjects: a point
+   estimate with wide error bars, read alongside the better-powered LORO number, never instead of it.
+
+**What this closes:** the 2-class fused model is final at these numbers. Any improvement now (cleaner
+standing labels, adopting a Section 12.5-adjacent new class) produces a *different* model needing a *new*
+sealed rev - there is none left in this corpus. Do not tune against rev8/rev13; they are spent.
+
 ---
 
 ## Changelog
 
 | Date | Phase | Added |
 |---|---|---|
+| 2026-07-22 | 5 | **LOCKBOX OPENED - final number, rev8 spent (Section 12.5 NEW).** Built `stages/s4_fusion/lockbox.py` (guarded one-way open, `--confirm OPEN-LOCKBOX`; scores the FUSED model - S2 fit on every non-lockbox rev predicting rev8 unseen, S3 verdicts on rev8, fuse) and corrected it to headline **rev8 alone** (rev13 already spent on the axis decision, reported reference-only). Opened once. **The raw fused label did NOT beat S2 alone out-of-sample** (rev8 0.798 vs 0.822; rev13 identical) - the S3 WALKING-veto flipped ~4 true stands to walk, so the train+val fusion advantage (0.921>0.898) did not replicate. **But the confidence signal generalized and is the real product**: acting-on-confidence (abstain LOW) scored macro-F1 0.845 / acc 0.898 / stand-recall 0.659 at 94% coverage, above S2, with a calibrated LOW tier (0.27 acc). Generalization gap is stand-recall on unseen subjects (0.56/0.38 vs ~0.90 LORO) = the Section 12.2 data ceiling, not a code defect. Deployable artifact is the confidence-GATED system, not the raw relabel. 2-class model FINAL at these numbers; no sealed rev left to spend. |
+| 2026-07-22 | 6 | **Governed new-class discovery built + run live (Section 11.2, Section 12.2).** `stages/s4_fusion/newclass.py` (evidence core: 28 `new_class_candidate` spans / 347 windows across 6 revs into per-span physics profiles) + `agents/s4_newclass.py` (proposer, Read/Grep, provenance + cluster-mass gate: >=4 spans across >=2 revs) + `orchestrator.py --phase 6`. Read-only, orthogonal to the deployed algorithm - never touches the model/rule/fuser/labels; every proposal is `needs_human`. Run live (`runs/2026-07-22_run4`, $0.99, 15 turns): 2 proposals, both cluster-mass supported - `bilateral_transition_maneuver` (10 spans/4 revs, medium: brief in-phase bilateral swing bracketing STAND/WALK, candidate sit-to-stand/squat/turn, with the honest caveat that gravity-referenced thigh sensors cannot distinguish a body turn from a sit-to-stand) and `standing_shifting` (8 spans/2 revs, low: restless stance, the Section 10.3 hypothesis recurring with mass). Both to `needs_human`. Also added `curate.py` two-vote relabel (BOTH S2 and physics must contradict a label - corrected the earlier overstated "error_rate 1.00 = precise mislabel detector"; it is disagreement by construction, Section 12.2). |
 | 2026-07-22 | 4 | **`gait_hz` anchor removed end-to-end (Section 10.8).** Sanity check of the S3 physics core found `gait_hz` (the fifth audited anchor) already dropped from `ANCHOR_NAMES`/`window_anchors` but still referenced downstream, which would crash a fresh run at plot time. Completed the removal: the `plots.py` panel-3 cadence axis, the dead `rate_audit.ANCHOR_METRIC`/`ANCHOR_FLOOR` keys, and the `agents/s3_physics.py` prompt example; reconciled the docs (`DOMAIN_NOTES` four-anchor table + Section 10.6/Section 12.3 refs, `PLAN.md`, `USE.md`, `README.md`) to four anchors. Verified: modules compile, the anchor table carries no `gait_hz`, every audited anchor still has a metric, a synthetic trial renders its plot without error. Rationale for the drop itself is Section 10.8 (degenerate at the 2 s window, walk-vs-stand AUC 0.487, a false-pass audit). Separately swept em dashes out of all project Python source to stop cp949 console-encoding errors. |
 | 2026-07-22 | 5 | **Rest-quality guard added to the swap-rule zero (Section 10.5.1, Section 10.2, Section 12.4 NEW).** `rest_offset()` trusted the opening 3 s was rest on faith; measured it is **not** - 6 of 8 rev5 files open *mid-gait* (36-44deg swing, 4-5 swaps), unique among revs, so the "recordings begin at rest" label (Section 10.2) is not universal. `anchors.rest_anchor()` now verifies: trust the opening span only if the swap rule calls it STANDING (0 swaps centered) -> else the stillest true-rest span anywhere -> else whole-file median flagged `rest_offset_trusted=False`, surfaced on every anchor row + the per-trial plot (`[!] rest zero untrusted`). A *single* 3 s swing window is a poisoned zero (per-window median wanders **+/-4-5deg**, spread to 20deg); the whole-file median is stable (averages strides). **Correctness fix with a measured-null metric impact:** corpus walk-recall 0.691->0.692, stand 0.927->0.925; rev5 bit-identical - the offset trap only bites when offset ~= swing amplitude (rev2_t6/t7), and rev5's swings are large. Value is latent insurance + honesty. S4 does **not** consume the flag by decision (Section 12.4). Label-free, lockbox untouched (Section 10.4). Runs alongside the Section 10.7 span-grow work, both uncommitted. |
 | 2026-07-22 | 5 | **Anchor early-fusion MEASURED and NOT promoted (Section 12.3 NEW).** Tested pulling the rate-invariant, not-already-present S3 anchors (`grav_stab`, `periodicity`) directly into `features.window_features` (early fusion) vs leaving them in the S4 swap policy (late fusion, Section 12). Measured in champion config (`drop_static_offset_family` 0.8977), LORO, with a control run reproducing the champion **exactly** (0.8977/18-feat, harness clean): `grav_stab` **+0.0006** (below the 0.005 margin, and 0.72-collinear with `L/R_ang_LPF_ptp`/`std` already present), `periodicity` **-0.0056** (regresses), both **-0.0010** (`steady_confusion` 0.823->0.838 worse). **None clears the gate - not promoted, `features.py` reverted, champion unchanged.** `grav_stab` is a monotone transform of `std` features the tree already splits on and already earns its keep in the S4 abstain tier; early fusion relocates signal, does not add it. Section 11.4 in the other direction - the gate correctly refused a good-sounding change. New op-doc `USE.md` documents the anchor-promotion procedure + the two eligibility gates (rate-invariance, non-redundancy). |

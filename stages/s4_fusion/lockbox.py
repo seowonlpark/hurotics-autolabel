@@ -10,7 +10,14 @@
 #   - it REFUSES to run without an explicit --confirm token. opening the lockbox is a one-way
 #     door: once these revs have set a number you acted on, they are spent as an unbiased test.
 #     the guard makes that a deliberate act, never an accident of a stray `python -m`.
-# see README / PLAN S4 / DOMAIN_NOTES Section 7.
+#
+# STATUS: rev8 was OPENED once on 2026-07-22 -- the final number is recorded in DOMAIN_NOTES
+# Section 12.5 (the fused label did not beat S2 out-of-sample; the confidence-gated system did, and
+# is the deployable). rev8/rev13 are now SPENT (OPENED_REVS): main() will not re-score them even
+# with --confirm, because the model was finalized knowing them so a second number is not blind.
+# this module is KEPT as the reusable harness for a FUTURE sealed rev (a new model needs new
+# held-out data, Section 12.5) -- not deleted, just guarded against a misleading re-open.
+# see README / PLAN S4 / DOMAIN_NOTES Section 7 + Section 12.5.
 
 from __future__ import annotations
 
@@ -41,6 +48,14 @@ RESULT_MD = "lockbox_result.md"
 # the honest generalization number is rev8 ALONE.
 SEALED_REVS = ("rev8",)   # unspent -- the honest one-shot final test
 SPENT_REVS = ("rev13",)   # already scored on the axis decision -- reference only, not the headline
+
+# revs whose lockbox value has ALREADY been spent (opened once, number recorded in DOMAIN_NOTES
+# Section 12.5). the harness stays here because it is the reusable tool for a FUTURE sealed rev,
+# but a rev in this set must never be re-scored and called an unbiased test again: the model was
+# finalized knowing it, so a second number is not blind. main() refuses to open a spent rev even
+# with --confirm; to evaluate a new model, seal a genuinely NEW rev (add it to dataset's
+# DEFAULT_LOCKBOX_REVS and to SEALED_REVS) that is not in this set.
+OPENED_REVS = ("rev8", "rev13")
 
 
 # score one subframe: fused vs S2-alone at full coverage, acting-on-confidence, tier calibration
@@ -132,7 +147,7 @@ def _render_block(title: str, b: dict) -> list[str]:
 def render(m: dict) -> str:
     L = [
         "# S4 lockbox result - the fused model on the sealed revs", "",
-        f"**One-shot generalization test.** The S2 half was fit on every non-lockbox rev and "
+        "**One-shot generalization test.** The S2 half was fit on every non-lockbox rev and "
         "predicts the sealed revs unseen; the S3 half is model-free. This scores the **fused** "
         "model - the deployable artifact - not S2 alone.", "",
         f"The honest number is **rev8 alone** ({m['sealed_revs']}): the only lockbox rev never "
@@ -159,13 +174,19 @@ def render(m: dict) -> str:
 # what the open WOULD do, without touching the lockbox -- the refusal path prints this so the
 # operator sees exactly what is gated behind the confirm token
 def _dry_run_notice(out_dir: Path) -> None:
+    spent = all(r in OPENED_REVS for r in SEALED_REVS)
+    if spent:
+        print(f"[lockbox] SPENT - {list(SEALED_REVS)} was already opened once; the final number is "
+              "recorded in DOMAIN_NOTES Section 12.5 (the fused label did not beat S2 out-of-"
+              "sample; the confidence signal generalized - deployable = the confidence-gated system).")
+        print(f"[lockbox] the result artifact is {out_dir / RESULT_MD}. This harness is kept for a "
+              "FUTURE sealed rev only; --confirm will NOT re-score a spent rev.")
+        return
     print("[lockbox] SEALED - refusing to open without confirmation.")
-    print(f"[lockbox] the honest final number is rev8 {list(SEALED_REVS)} - the only lockbox rev "
-          f"never seen. rev13 {list(SPENT_REVS)} was already spent on the axis decision "
-          "(DOMAIN_NOTES axis note), so it is reference-only, not the headline.")
+    print(f"[lockbox] the honest final number is {list(SEALED_REVS)} - never seen.")
     print("[lockbox] this would: fit S2 on every non-lockbox rev, predict the sealed revs, "
           "compute S3 verdicts on them, fuse, and score the FUSED model once.")
-    print(f"[lockbox] to open - only when you are calling the fused model FINAL - run:")
+    print("[lockbox] to open - only when you are calling the fused model FINAL - run:")
     print(f"[lockbox]   python -m stages.s4_fusion.lockbox --confirm {CONFIRM_TOKEN}")
     print(f"[lockbox] results would be written to {out_dir / RESULT_JSON}")
 
@@ -180,6 +201,19 @@ def main() -> None:
 
     if args.confirm != CONFIRM_TOKEN:
         _dry_run_notice(args.out)
+        return
+
+    # spent-guard: rev8/rev13 were already opened (number recorded, Section 12.5). re-scoring a
+    # spent rev is not a valid unbiased test -- refuse even with --confirm. the harness stays for
+    # a future NEW sealed rev; only a rev outside OPENED_REVS may actually be opened here.
+    fresh = [r for r in SEALED_REVS if r not in OPENED_REVS]
+    if not fresh:
+        print(f"[lockbox] SPENT - {list(SEALED_REVS)} already opened once; the number is recorded "
+              "in DOMAIN_NOTES Section 12.5 (fused did not beat S2 out-of-sample; the confidence "
+              "signal generalized). Re-scoring is NOT a valid unbiased test - the model was "
+              "finalized knowing it.")
+        print("[lockbox] to evaluate a future model, seal a genuinely NEW rev (add it to "
+              "dataset.DEFAULT_LOCKBOX_REVS and SEALED_REVS, outside OPENED_REVS), then open that.")
         return
 
     args.out.mkdir(parents=True, exist_ok=True)

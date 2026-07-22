@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from stages.s1_clean.census import read_header, strip_prefix
-from stages.s2_ml.dataset import STAND, TIME_COL, TRAIN_CLASSES, WALK, _read_raw, find_trials
+from stages.s2_ml.dataset import TIME_COL, TRAIN_CLASSES, _read_raw, find_trials
 from stages.s2_ml.predict import labeled_runs
 from stages.s2_ml.taxonomy import ERROR_BUCKETS, aggregate, bucket_errors
 

@@ -1,6 +1,6 @@
 # H-CARE Agent Pipeline - Structure & Progression Plan
 
-**Owner:** Lu - **Status:** Phases 0-5 complete - S4 **fusion** built + calibrated (fused macro-F1 0.921; act-on-confidence 0.969 acc at 94% coverage, DOMAIN_NOTES Section 12), judgement agent run live; data-collection director + guarded lockbox eval + governed new-class discovery agent (`--phase 6`) wired - lockbox unopened, new-class live run pending (both Lu's call) - **Last updated:** 2026-07-22
+**Owner:** Lu - **Status:** Phases 0-6 complete - **LOCKBOX OPENED (rev8, final, DOMAIN_NOTES Section 12.5):** raw fused label did NOT beat S2 out-of-sample (rev8 0.798 vs 0.822), but the **confidence signal generalized** - acting-on-confidence 0.845 macro-F1 / 0.898 acc / 0.659 stand-recall at 94% coverage, calibrated LOW tier (0.27). Deployable artifact = the confidence-GATED system, not the raw relabel; generalization gap is stand-recall on unseen subjects = the data ceiling (Section 12.2). New-class discovery (`--phase 6`) run live: 2 supported proposals, all `needs_human`. 2-class model final; no sealed rev left - **Last updated:** 2026-07-22
 
 Goal: a staged, agent-assisted pipeline for IMU locomotion data - cleaning, ML experimentation, physics-based analysis, and reporting - where deterministic code does the work, Claude agents handle judgment at defined points, and every decision is logged and reconstructible. Built on the Claude Agent SDK (Python).
 
@@ -26,14 +26,14 @@ h-care-agents/
 |   |-- s1_clean/          # deterministic clean: census, resample, channel trust, quarantine
 |   |-- s2_ml/             # train + locoeval wrapper, champion/challenger loop
 |   |-- s3_physics/        # anchor features (gk lineage), plots, hypothesis agent
-|   `-- s4_report/         # read-only reporter + label audit
+|   `-- s4_fusion/         # deterministic fuser + confidence, curation director, new-class + lockbox
 |-- data/
 |   |-- raw/               # untouched inputs
 |   `-- clean/             # S1 output, trusted channels only
 `-- runs/YYYY-MM-DD_runN/  # per-run artifacts, append-only, never overwritten
     |-- run_log.jsonl      # every tool call (via PostToolUse hook)
     |-- costs.json         # per-stage USD from SDK result messages
-    `-- s1_clean/ ... s4_report/
+    `-- s1_clean/ ... s4_fusion/
 ```
 
 ---
@@ -175,13 +175,16 @@ problems). Fusion is deterministic; the agent judges the disagreement cases, it 
 - [x] DOMAIN_NOTES updated (Section 12 + Section 12.1 - including the agent's *refuted* mechanism: brief-stop errors are a window-resolution floor, not adaptive-window bridging; verified before recording, Section 11.4)
 - [x] **Row-level safety payoff** (Section 12.2): fusion cuts `steady_confusion` 0.823 -> 0.785, row-acc -> 0.942 - helps the hazardous bucket, does not solve it (still 78% of errors); the residual is label contamination
 - [x] **Data-collection director built** (`stages/s4_fusion/curate.py`) - the confidence signal routes flagged windows to `relabel_candidate` (**two-vote**: BOTH S2 and physics must contradict the label - one model disagreeing is usually that model's own error, Section 12.2) / `new_class_candidate` / `collect_more`. The highest-leverage pipeline-side move: the model directs the data effort. Code never edits a label; a human confirms every candidate
-- [x] **Lockbox evaluation wired** (`stages/s4_fusion/lockbox.py`) - scores the **fused** model (not S2 alone) on the sealed revs: S2 fit on every non-lockbox rev predicts them unseen, S3 verdicts computed on them, fuse, score. Guarded one-way door: refuses without `--confirm OPEN-LOCKBOX`. Not opened - waits for Lu to call the fused model final
-- [ ] **Open (recorded, not fixed):** brief (< 2 s) stops sit below the window resolution floor (Section 10.6/Section 12.1); confidence quarantines these (all 64 LOW -> abstained)
-- [ ] **Governed new-class discovery BUILT, not yet run live** (`stages/s4_fusion/newclass.py` + `agents/s4_newclass.py`, `orchestrator.py --phase 6`): the `new_class_candidate` spans (28 spans / 347 windows across 6 revs, mean antiphase **-0.30** = legs moving *together*, not gait) become a physics-profile evidence bundle; the agent PROPOSES classes; a deterministic gate validates provenance + cluster mass (>=4 spans across >=2 revs) and routes every proposal to `needs_human`. Read-only, orthogonal to the deployed algorithm - code never adds a class or edits a label (Section 11.2)
-
+- [x] **Lockbox OPENED - final number (`stages/s4_fusion/lockbox.py`, Section 12.5).** Headline rev8 (rev13 spent on the axis decision, reference-only): **the raw fused label did NOT beat S2 alone out-of-sample** (0.798 vs 0.822; the S3 WALKING-veto flipped ~4 true stands to walk), so the train+val advantage (0.921>0.898) did not replicate. **But the confidence signal generalized** - acting-on-confidence 0.845 macro-F1 / 0.898 acc / **0.659 stand-recall** at 94% coverage, above S2, with a calibrated LOW tier (0.27 acc). Deployable artifact = the confidence-GATED system, not the raw relabel. rev8/rev13 spent - no sealed rev left; any future change needs a new one
+- [x] **CLOSED (decided, not a code defect):** brief (< 2 s) stops sit below the window resolution floor (Section 10.6/Section 12.1) - a resolution limit, not something the adaptive window addresses, and unvalidatable now the lockbox is spent. *Handled* by the gated deployable (all 64 LOW -> abstained), and the lockbox corroborated it generalizes (rev8 LOW tier 0.27 acc, Section 12.5). Closed like Section 12.4: recorded, absorbed by abstention, no window-size change
 **The honest bottom line (Section 12.2):** the dominant remaining lever is **data** - better labels on the motion-contaminated "standing" and more subjects (n=5, rev69 dominant) - not more macro-F1 in code. The pipeline's job now is to *direct* that data effort, which the curation queue does.
 
-### Phase 6 - Hardening + handoff (remaining time)
+### Phase 6 - S4 new-class discovery (`--phase 6`)
+- [x] **Governed new-class discovery run live** (`stages/s4_fusion/newclass.py` + `agents/s4_newclass.py`, `orchestrator.py --phase 6`, `runs/2026-07-22_run4`, $0.99): 28 candidate spans (mean antiphase **-0.30** = legs moving *together*, not gait) -> 2 cluster-mass-supported proposals, both `needs_human` - `bilateral_transition_maneuver` (sit-to-stand/squat/turn, honest caveat: sensors can't tell a turn from a sit-to-stand) and `standing_shifting` (the Section 10.3 hypothesis recurring with mass). Read-only, orthogonal to the deployed algorithm - never adds a class or edits a label (Section 11.2)
+- [x] Deterministic gate enforced in code: provenance (every `span_ref` overlaps a real candidate span) + cluster mass (>= 4 spans across >= 2 revs); every proposal `needs_human` regardless of confidence
+- [ ] Human adjudication of the two proposals against protocol/video (out of scope for the pipeline - the `needs_human` handoff)
+
+### Phase 7 - Hardening + handoff (remaining time)
 - [ ] `max_turns` caps verified on every agent
 - [ ] Clean-room run: fresh clone -> raw data -> report, no manual intervention
 - [ ] Handoff doc assembled (~= DOMAIN_NOTES + this PLAN + run walkthrough)

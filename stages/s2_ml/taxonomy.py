@@ -15,7 +15,6 @@ FLICKER_MAX_MS = 200.0 # pred run shorter than this, flanked by equal others => 
 LAG_MAX_MS = 1000.0 # beyond this, a lag is not detection jitter
 SUSTAINED_FRACTION = 0.5 # early/late over >= this fraction of the segment AND past
                          # LAG_MAX_MS is a sustained misclassification, not jitter
-MIN_EVENTS_FOR_STATISTIC = 10 # below this, timing statistics are tagged low_sample
 
 ERROR_BUCKETS = [
     "omission",
