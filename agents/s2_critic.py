@@ -5,10 +5,9 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
-from agents.base import MODEL_SMART, AgentSpec
+from agents.base import MODEL_SMART, AgentSpec, extract_json_object
 
 REVIEW_FILENAME = "critic_review.json"
 
@@ -60,6 +59,8 @@ S2_CRITIC_AGENT = AgentSpec(
     allowed_tools=["Read", "Grep"],
     model=MODEL_SMART,
     max_turns=10,
+    # same footprint as the experimenter it reviews (also used by s2_critic_probe)
+    domain_sections=("4", "5", "6", "7", "9", "10", "11"),
 )
 
 
@@ -87,16 +88,7 @@ def build_prompt(proposal: dict, ledger_rows: list[dict], report_md: str,
 
 # pull the verdict JSON out of the agent's final text; None if absent or malformed
 def parse_review(final_text: str) -> dict | None:
-    if not final_text:
-        return None
-    m = re.search(r"\{.*\}", final_text, re.DOTALL)
-    if not m:
-        return None
-    try:
-        data = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, dict) else None
+    return extract_json_object(final_text)
 
 
 # persist the review; an unparseable review becomes a revise, never an approve

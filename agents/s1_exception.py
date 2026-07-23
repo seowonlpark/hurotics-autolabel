@@ -5,10 +5,9 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
-from agents.base import MODEL_CHEAP, AgentSpec
+from agents.base import MODEL_CHEAP, AgentSpec, extract_json_array
 from stages.s2_ml.transform import SAGITTAL_DEG_AXIS
 
 REVIEW_FILENAME = "exceptions_review.jsonl"
@@ -67,6 +66,8 @@ S1_EXCEPTION_AGENT = AgentSpec(
     allowed_tools=["Read", "Grep"],
     model=MODEL_CHEAP,
     max_turns=15,
+    # schema/units/quarantine/drift/axis + label contamination + eyeball-not-truth
+    domain_sections=("1", "2", "3", "4", "5", "6", "11"),
 )
 
 
@@ -185,16 +186,7 @@ def build_prompt(queue: list[dict], summary: dict) -> str:
 
 # pull the JSON array out of the agent's final text; tolerant of fences/prose
 def parse_review(final_text: str) -> list[dict] | None:
-    if not final_text:
-        return None
-    m = re.search(r"\[.*\]", final_text, re.DOTALL)
-    if not m:
-        return None
-    try:
-        data = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, list) else None
+    return extract_json_array(final_text)
 
 
 _REVIEW_KEYS = ("explained", "action", "sections", "rationale", "confidence")

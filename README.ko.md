@@ -169,7 +169,7 @@ python run_pipeline.py --with-agents
 
 ## 실행이 끝나면...
 
-실행이 끝나면 결과는 `runs/s4_fusion/` 아래에 생깁니다:
+**최종 결과물.** 실행이 끝나면 대부분의 사람이 원하는 두 파일은 `runs/s4_fusion/` 아래에 생깁니다:
 
 - **`fusion_report.md`** - 사람이 읽을 수 있는 요약본입니다. 결합된 판정이 얼마나 잘 맞았는지,
   그리고 신뢰도 등급별로 데이터를 얼마나 라벨링할 수 있는지를 보여 줍니다.
@@ -182,7 +182,72 @@ python run_pipeline.py --with-agents
 움직임을 멈추는 식으로 쓰게 됩니다.
 
 판정을 원본 파일에 다시 써 넣고 싶다면 (녹화 파일마다 라벨과 신뢰도가 열로 추가된 CSV 한 개씩),
-`python -m stages.s4_fusion.export` 를 실행하세요. 결과는 `results/` 폴더에 생깁니다.
+`python -m stages.s4_fusion.export` 를 실행하세요. 결과는 `results/` 폴더에 생깁니다. 파이프라인이
+채점하지 않은 행(전환 구간, 버려지거나 너무 짧은 구간, 봉인된 lockbox 에 속한 행)은 일부러 빈칸으로
+둡니다. export 는 계산하지 않은 값을 절대 추측해서 채우지 않습니다.
+
+### 결과물의 모든 형태
+
+이 파이프라인은 보고서 하나가 아니라 여러 개가 쌓인 것입니다 - 각 단계가 자기 결과물을 쓰며, 그
+결과물은 몇 가지 정해진 형태로 나옵니다. 이 파일들은 손으로 고치지 않으며, 다시 실행하면 전부
+새로 만들어집니다. 아래는 전체 목록으로, 각 형태와 그 형태가 무엇을 위한 것인지에 따라 묶었습니다.
+
+무료 실행(`python run_pipeline.py`)은 AI 에이전트 결과물을 뺀 나머지 전부를 만듭니다. 아래에
+**(에이전트)** 로 표시된 항목은 에이전트 단계까지 함께 실행할 때(`--with-agents`)만 생기며,
+lockbox 결과는 의도적으로 단 한 번만 하는 실행에서만 생깁니다. 그렇게 하지 않으면 해당 파일은
+그냥 없을 뿐입니다 - 무엇도 지어내지 않습니다.
+
+**사람이 읽는 보고서 (`.md`)** - 바로 읽으라고 만든 서술형 요약본입니다:
+
+- `runs/s1_census/census.md` - 코퍼스 점검: 파일과 계열 수, 그리고 예상치 못한 열 이름.
+- `runs/s1_clean/clean_report.md` - 정제 집계: 사용 가능 대 격리된 파일, 남은 분량(분), 레이트 구성,
+  채널별 신뢰 플래그.
+- `runs/s2_ml/locoeval.md` - 학습된 분류기가 rev 별로 얼마나 잘 맞추는지.
+- `runs/s4_fusion/fusion_report.md` - 위에서 설명한 핵심 결과물.
+- `runs/s4_fusion/curation.md` **(에이전트)** - 재라벨 / 새 클래스 / 추가 수집으로 보낼 플래그된
+  구간의 대기열.
+- `runs/s4_fusion/new_class_candidates.md` **(에이전트)** - 두 라벨 분류 체계가 놓쳤을 수 있는 구조로,
+  각 항목이 사람 검토용으로 표시됩니다.
+- `runs/s4_fusion/lockbox_result.md` **(lockbox 전용)** - 단 한 번 쓰는 봉인 세트 점수로, lockbox 를
+  의도적으로 열 때만 기록됩니다.
+
+**데이터 표 (`.csv` / `.parquet`)** - 레코드마다 한 줄씩, 코드나 스프레드시트로 불러오라고 만든 것입니다:
+
+- `runs/s4_fusion/fused_windows.csv` - 채점된 구간마다 한 줄 (핵심 결과 표).
+- `results/<recording>.csv` - 원본 녹화 파일에 결합 라벨과 신뢰도가 덧붙은 것 (위에서 설명한 export).
+- `runs/s3_physics/anchors.csv` - 구간별 물리 앵커 측정값.
+- `runs/s2_ml/oof_champion.csv` - 분류기의 out-of-fold 예측값 (fusion 이 물리 관점과 결합하는 입력).
+- `data/clean/**.parquet` - 정제되고 리샘플링된 센서 데이터 그 자체, 녹화 파일마다 하나씩.
+
+**기계가 읽는 상태와 지표 (`.json`)** - 코드가 소비할 정확한 수치와 설정값입니다:
+
+- `runs/s2_ml/champion.json`, `model_meta.json`, `taxonomy.json`, `locoeval.json` - 우승 모델의 정의,
+  학습 메타데이터, 클래스 분류 체계, 전체 점수.
+- `runs/s3_physics/rate_audit.json`, `disagreement.json` - 레이트 불변성 판정과 물리 대 라벨 불일치.
+- `runs/s4_fusion/fusion.json`, `disagreements.json` - fusion 지표와 두 관점이 갈리는 사례.
+- `data/clean/**.channel_trust.json` - 어떤 채널을 신뢰했는지 기록한 파일별 사이드카.
+
+**추가만 하는 원장 (`.jsonl`)** - 한 줄에 JSON 레코드 하나씩, 덮어쓰지 않고 쌓여 가는 감사 기록입니다:
+
+- `runs/s1_*/manifest.jsonl`, `segments.jsonl`, `observations.jsonl`, `quarantine.jsonl` - 무엇이
+  들어왔고, 유지됐고, 관찰됐고, 거부됐는지.
+- `runs/s2_ml/experiments.jsonl`, `proposals.jsonl` - 시도한 모든 모델 아이디어와 거부된 모든 아이디어
+  (거부 기록이 같은 아이디어의 재제안을 막아 줍니다).
+- `runs/s3_physics/hypotheses.jsonl`, `runs/s4_fusion/fusion_review.jsonl`,
+  `runs/s4_fusion/curation_queue.jsonl` **(에이전트)** - 에이전트가 남긴 추론과 분류 결정.
+
+**그래프 (`.png`)** - 물리 에이전트가 읽는 시각 자료입니다:
+
+- `runs/s3_physics/plots/trial_*.png` - 시험마다 그림 하나씩. `rate_audit.png` - 레이트 불변성 개요.
+
+**학습된 모델 (`.joblib`)** - `runs/s2_ml/champion.joblib`, 저장된 분류기 그 자체로, 새 데이터를 바로
+채점할 수 있습니다.
+
+**실행별 에이전트 로그 (에이전트)** - 각 에이전트 단계는 프롬프트, 도구 로그, 비용을 담은 타임스탬프
+폴더 `runs/<date>_runN/` 도 함께 씁니다. 그래서 어떤 AI 판단이든 그것이 실제로 무엇을 봤는지까지
+되짚을 수 있습니다.
+
+단계별 명령어-결과물 대응 전체 목록은 [`PIPELINE.md`](PIPELINE.md)의 8-9번 항목(영어)을 참고하세요.
 
 ---
 

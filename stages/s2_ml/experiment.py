@@ -9,14 +9,13 @@ from __future__ import annotations
 import json
 import platform
 import subprocess
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import LeaveOneGroupOut
 
 from stages.s2_ml.dataset import load_dataset
 from stages.s2_ml.features import TRANSITION, WindowSpec, build_windows, feature_columns
@@ -27,6 +26,12 @@ from stages.s2_ml.taxonomy import aggregate, bucket_errors
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LEDGER_FILENAME = "experiments.jsonl"
 CHAMPION_FILENAME = "champion.json"
+
+# the champion's spec, tracked in git -- unlike champion.json, which lives under gitignored
+# runs/ and is absent from a fresh clone. this is the single source the clean-room seed
+# reproduces from; record() rewrites it on every promotion, so it can never silently drift
+# from the champion it re-seeds (the old hand-synced CHAMPION_SPEC dict in run_pipeline.py).
+CHAMPION_SPEC_PATH = Path(__file__).resolve().parent / "champion_spec.json"
 
 BASE_MODEL_PARAMS = dict(n_estimators=300, random_state=0, n_jobs=-1,
                          class_weight="balanced")
@@ -162,27 +167,28 @@ def run_experiment(spec: ExperimentSpec, trials=None, *, taxonomy: bool = False,
     y = train_df["label"].to_numpy(int)
     groups = train_df["rev"].to_numpy()
 
+    # one leave-one-rev-out pass: the fold that holds a rev out is the same model that scores
+    # that rev's windows (OOF) and, when asked, its rows (taxonomy) -- so train it once and use
+    # it for both, rather than refitting the identical LORO forests a second time. deterministic
+    # (fixed random_state), and the oof array is filled by mask, so fold order does not matter.
+    params = spec.resolved_params()
     oof = np.empty_like(y)
-    for tr, te in LeaveOneGroupOut().split(X, y, groups):
-        model = RandomForestClassifier(**spec.resolved_params())
-        model.fit(X[tr], y[tr])
+    per_run: list = []
+    for rev in sorted(pd.unique(groups)):
+        te = groups == rev
+        model = RandomForestClassifier(**params)
+        model.fit(X[~te], y[~te])
         oof[te] = model.predict(X[te])
+        if not taxonomy:
+            continue
+        for tr in trials:
+            if tr.split != "train" or tr.rev != rev:
+                continue
+            for gt, pred, t in dense_predict_trial(model, tr.frame, feats, wspec, stride_s):
+                per_run.append(bucket_errors(gt, pred, t))
 
     result = evaluate(y, oof, groups=groups)
-
-    tax = None
-    if taxonomy:
-        per_run = []
-        for rev in sorted(pd.unique(groups)):
-            fit = train_df[train_df["rev"] != rev]
-            model = RandomForestClassifier(**spec.resolved_params())
-            model.fit(fit[feats].to_numpy(float), fit["label"].to_numpy(int))
-            for tr in trials:
-                if tr.split != "train" or tr.rev != rev:
-                    continue
-                for gt, pred, t in dense_predict_trial(model, tr.frame, feats, wspec, stride_s):
-                    per_run.append(bucket_errors(gt, pred, t))
-        tax = aggregate(per_run)
+    tax = aggregate(per_run) if taxonomy else None
 
     return ExperimentResult(spec, result.macro_f1, result.accuracy,
                             result.balanced_accuracy, result.per_rev_macro_f1,
@@ -193,6 +199,21 @@ def run_experiment(spec: ExperimentSpec, trials=None, *, taxonomy: bool = False,
 def load_champion(out_dir: Path) -> dict | None:
     path = out_dir / CHAMPION_FILENAME
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+# the tracked champion spec as an ExperimentSpec, for the clean-room re-seed. filtered to the
+# dataclass fields so a spec written by an older/newer schema is not fatal
+def load_champion_spec(path: Path = CHAMPION_SPEC_PATH) -> ExperimentSpec:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    valid = {f.name for f in fields(ExperimentSpec)}
+    return ExperimentSpec(**{k: v for k, v in data.items() if k in valid})
+
+
+# rewrite the tracked champion spec; called on every promotion so the git-tracked seed always
+# matches the promoted champion.json (which is not in git). commit it alongside the promotion.
+def save_champion_spec(spec: dict, path: Path = CHAMPION_SPEC_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(spec, indent=2) + "\n", encoding="utf-8")
 
 
 # secondary criterion, applied ONLY on a macro-F1 tie: at equal accuracy prefer lower
@@ -265,6 +286,8 @@ def record(out_dir: Path, result: ExperimentResult, promoted: bool, reason: str,
         (out_dir / CHAMPION_FILENAME).write_text(
             json.dumps({k: entry[k] for k in keys if k in entry}, indent=2),
             encoding="utf-8")
+        # keep the git-tracked seed in lockstep with the champion it reproduces, automatically
+        save_champion_spec(entry["spec"])
     return entry
 
 

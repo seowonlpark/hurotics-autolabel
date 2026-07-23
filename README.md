@@ -153,7 +153,8 @@ would run.
 
 ## What you get
 
-When the run finishes, the results live under `runs/s4_fusion/`:
+**The deliverable.** When the run finishes, the two files most people want live under
+`runs/s4_fusion/`:
 
 - **`fusion_report.md`** - the human-readable summary: how the combined call performed, and how much
   of the data it can label at each confidence level.
@@ -165,7 +166,78 @@ The point of the project is that last column. A **high** or **medium** call is o
 real device, you would act on the confident calls and hold on the low-confidence ones.
 
 To write the calls back onto your original files (one CSV per recording, with the label and confidence
-added as columns), run `python -m stages.s4_fusion.export` - the results land in `results/`.
+added as columns), run `python -m stages.s4_fusion.export` - the results land in `results/`. Rows the
+pipeline did not score (transitions, dropped or short segments, and anything in the held-out lockbox)
+are left blank on purpose: the export never guesses a value it did not compute.
+
+### Every form of output
+
+The pipeline is not one report but a stack of them - each stage writes its own outputs, and they come
+in a few fixed forms. You never edit any of these by hand; every one regenerates from a re-run. Below
+is the full set, grouped by the form it takes and what that form is for.
+
+A free run (`python run_pipeline.py`) produces everything except the AI-agent outputs. The items
+marked **(agents)** below appear only when you also run the agent steps (`--with-agents`), and the
+lockbox result appears only on the deliberate single-use run. Without those, the corresponding files
+are simply absent - nothing is faked.
+
+**Human-readable reports (`.md`)** - the narrative summaries meant to be read directly:
+
+- `runs/s1_census/census.md` - corpus sanity: file and family counts, and any unexpected column names.
+- `runs/s1_clean/clean_report.md` - the cleaning rollup: usable vs quarantined files, minutes kept,
+  rate mix, and per-channel trust flags.
+- `runs/s2_ml/locoeval.md` - how the trained classifier scores, per rev.
+- `runs/s4_fusion/fusion_report.md` - the headline deliverable described above.
+- `runs/s4_fusion/curation.md` **(agents)** - the queue of flagged windows routed for relabel /
+  new-class / collect-more.
+- `runs/s4_fusion/new_class_candidates.md` **(agents)** - structure the two-label taxonomy may be
+  missing, each marked for a human.
+- `runs/s4_fusion/lockbox_result.md` **(lockbox only)** - the single-use held-out score, written only
+  when you deliberately spend the lockbox.
+
+**Data tables (`.csv` / `.parquet`)** - one row per record, meant to be loaded into code or a spreadsheet:
+
+- `runs/s4_fusion/fused_windows.csv` - one row per scored window (the deliverable table).
+- `results/<recording>.csv` - your original recordings with the fused label and confidence appended
+  (the export described above).
+- `runs/s3_physics/anchors.csv` - the physics anchor measurements per window.
+- `runs/s2_ml/oof_champion.csv` - the classifier's out-of-fold predictions (the input fusion combines
+  with the physics view).
+- `data/clean/**.parquet` - the cleaned, resampled sensor data itself, one file per recording.
+
+**Machine-readable state and metrics (`.json`)** - exact numbers and settings for the code to consume:
+
+- `runs/s2_ml/champion.json`, `model_meta.json`, `taxonomy.json`, `locoeval.json` - the winning model's
+  definition, training metadata, class taxonomy, and full scores.
+- `runs/s3_physics/rate_audit.json`, `disagreement.json` - the rate-invariance verdicts and the
+  physics-vs-label disagreements.
+- `runs/s4_fusion/fusion.json`, `disagreements.json` - the fusion metrics and the cases where the two
+  views disagree.
+- `data/clean/**.channel_trust.json` - a per-file sidecar recording which channels were trusted.
+
+**Append-only ledgers (`.jsonl`)** - one JSON record per line, an audit trail that grows rather than
+being overwritten:
+
+- `runs/s1_*/manifest.jsonl`, `segments.jsonl`, `observations.jsonl`, `quarantine.jsonl` - what was
+  ingested, kept, observed, and rejected.
+- `runs/s2_ml/experiments.jsonl`, `proposals.jsonl` - every model idea tried and every one refused
+  (the rejections are what stop the same idea being re-proposed).
+- `runs/s3_physics/hypotheses.jsonl`, `runs/s4_fusion/fusion_review.jsonl`,
+  `runs/s4_fusion/curation_queue.jsonl` **(agents)** - the agents' logged reasoning and routing
+  decisions.
+
+**Plots (`.png`)** - the visual companions the physics agent reads:
+
+- `runs/s3_physics/plots/trial_*.png` - one figure per trial; `rate_audit.png` - the rate-invariance
+  overview.
+
+**The trained model (`.joblib`)** - `runs/s2_ml/champion.joblib`, the saved classifier itself, ready
+to score new data.
+
+**Per-run agent logs (agents)** - each agent step also writes a timestamped `runs/<date>_runN/` folder
+holding its prompt, tool log, and cost, so any AI decision can be traced back to exactly what it saw.
+
+For the exhaustive per-stage command-to-output mapping, see [`PIPELINE.md`](PIPELINE.md) sections 8-9.
 
 ---
 

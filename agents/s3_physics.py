@@ -9,10 +9,9 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
-from agents.base import MODEL_SMART, AgentSpec
+from agents.base import MODEL_SMART, AgentSpec, extract_json_array
 from stages.s3_physics.anchors import ANCHOR_NAMES
 
 HYPOTHESES_FILENAME = "hypotheses.jsonl"
@@ -77,6 +76,8 @@ S3_HYPOTHESIS_AGENT = AgentSpec(
     allowed_tools=["Read", "Grep"], # Read renders the PNGs; Grep spot-checks anchors.csv
     model=MODEL_SMART,
     max_turns=30, # reading many figures costs turns
+    # rate/antialiasing + segments + channel trust + labels + swap rule + methodology
+    domain_sections=("2", "3", "4", "5", "10", "11"),
 )
 
 
@@ -107,16 +108,7 @@ def build_prompt(audit: dict, disagreement: list[dict], plot_paths: list[str]) -
 
 # pull the JSON array out of the agent's reply; tolerant of fences and prose
 def parse_hypotheses(final_text: str) -> list[dict] | None:
-    if not final_text:
-        return None
-    m = re.search(r"\[.*\]", final_text, re.DOTALL)
-    if not m:
-        return None
-    try:
-        data = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, list) else None
+    return extract_json_array(final_text)
 
 
 # one evidence item carries window-level provenance: a rev, a trial, a real time window, and

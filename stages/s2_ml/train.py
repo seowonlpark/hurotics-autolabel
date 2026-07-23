@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import LeaveOneGroupOut
 
 from stages.s2_ml.dataset import load_dataset
 from stages.s2_ml.features import TRANSITION, WindowSpec, build_windows, feature_columns
@@ -43,23 +42,6 @@ def trainable(df: pd.DataFrame, split: str = "train") -> pd.DataFrame:
     return df[(df["split"] == split) & (df["label"] != TRANSITION)].reset_index(drop=True)
 
 
-# leave-one-rev-out error taxonomy, scored at row level via dense inference; a rev's rows
-# are only ever scored by a model that never saw that rev
-def taxonomy_loro(trials, train_df: pd.DataFrame, feats: list[str], spec: WindowSpec,
-                  stride_s: float) -> dict:
-    per_run = []
-    for rev in sorted(train_df["rev"].unique()):
-        fit = train_df[train_df["rev"] != rev]
-        model = build_model()
-        model.fit(fit[feats].to_numpy(float), fit["label"].to_numpy(int))
-        for tr in trials:
-            if tr.split != "train" or tr.rev != rev:
-                continue
-            for gt, pred, t in dense_predict_trial(model, tr.frame, feats, spec, stride_s):
-                per_run.append(bucket_errors(gt, pred, t))
-    return aggregate(per_run)
-
-
 # render the row-level taxonomy section as markdown
 def render_taxonomy(agg: dict, stride_s: float) -> str:
     lines = [
@@ -77,18 +59,31 @@ def render_taxonomy(agg: dict, stride_s: float) -> str:
     return "\n".join(lines)
 
 
-# leave-one-rev-out out-of-fold predictions; returns (y_true, y_pred)
-def cross_validate(df: pd.DataFrame, feats: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    X = df[feats].to_numpy(float)
-    y = df["label"].to_numpy(int)
-    groups = df["rev"].to_numpy()
+# one leave-one-rev-out pass -> (y_true, y_pred, taxonomy|None). the fold that holds a rev
+# out scores that rev's windows (OOF) and, when taxonomy is asked, its rows via dense
+# inference -- one model per rev, used for both, so the identical LORO forests are never
+# refit a second time. a rev's rows are only ever scored by a model that never saw that rev.
+def loro(trials, train_df: pd.DataFrame, feats: list[str], spec: WindowSpec,
+         stride_s: float, taxonomy: bool) -> tuple[np.ndarray, np.ndarray, dict | None]:
+    X = train_df[feats].to_numpy(float)
+    y = train_df["label"].to_numpy(int)
+    groups = train_df["rev"].to_numpy()
 
     oof = np.empty_like(y)
-    for tr, te in LeaveOneGroupOut().split(X, y, groups):
+    per_run: list = []
+    for rev in sorted(train_df["rev"].unique()):
+        te = groups == rev
         model = build_model()
-        model.fit(X[tr], y[tr])
+        model.fit(X[~te], y[~te])
         oof[te] = model.predict(X[te])
-    return y, oof
+        if not taxonomy:
+            continue
+        for tr in trials:
+            if tr.split != "train" or tr.rev != rev:
+                continue
+            for gt, pred, t in dense_predict_trial(model, tr.frame, feats, spec, stride_s):
+                per_run.append(bucket_errors(gt, pred, t))
+    return y, oof, (aggregate(per_run) if taxonomy else None)
 
 
 # train + LORO-score at the given window, optionally the taxonomy, write all artifacts
@@ -117,7 +112,9 @@ def main() -> None:
     print(f"[s2] window={spec.window_s}s  train windows={len(train_df):,}  "
           f"features={len(feats)}  revs={len(revs)} {revs}")
 
-    y, oof = cross_validate(train_df, feats)
+    if args.taxonomy:
+        print(f"[s2] dense inference @ {args.stride_s * 1000:.0f} ms for the row-level taxonomy...")
+    y, oof, tax = loro(trials, train_df, feats, spec, args.stride_s, args.taxonomy)
     result = evaluate(y, oof, groups=train_df["rev"].to_numpy(),
                       unknown_frac=train_df["unknown_frac"].to_numpy())
     trans = transition_report(train_df, oof)
@@ -133,10 +130,7 @@ def main() -> None:
 
     importances = sorted(zip(feats, model.feature_importances_), key=lambda x: -x[1])
 
-    tax = None
-    if args.taxonomy:
-        print(f"[s2] dense inference @ {args.stride_s * 1000:.0f} ms for the row-level taxonomy...")
-        tax = taxonomy_loro(trials, train_df, feats, spec, args.stride_s)
+    if tax:
         print(f"[s2] row accuracy {tax['row_accuracy']:.4f}, dominant error: {tax['dominant']}")
         for b in ERROR_BUCKETS:
             if tax["counts"][b]:

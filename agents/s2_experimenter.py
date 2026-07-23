@@ -5,10 +5,9 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
-from agents.base import MODEL_SMART, AgentSpec
+from agents.base import MODEL_SMART, AgentSpec, extract_json_object
 from stages.s2_ml.experiment import ALLOWED_MODEL_PARAMS, WINDOW_S_RANGE
 
 PROPOSAL_FILENAME = "proposal.json"
@@ -55,6 +54,8 @@ S2_EXPERIMENTER_AGENT = AgentSpec(
     allowed_tools=["Read", "Grep"],
     model=MODEL_SMART,
     max_turns=15,
+    # channel trust + labels/task + features + eval/gate + spec vocab + descriptors + methodology
+    domain_sections=("4", "5", "6", "7", "9", "10", "11"),
 )
 
 
@@ -84,16 +85,7 @@ def build_prompt(report_md: str, ledger_rows: list[dict], champion: dict | None,
 
 # pull the JSON object out of the agent's reply; tolerant of fences and prose
 def parse_proposal(final_text: str) -> dict | None:
-    if not final_text:
-        return None
-    m = re.search(r"\{.*\}", final_text, re.DOTALL)
-    if not m:
-        return None
-    try:
-        data = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, dict) else None
+    return extract_json_object(final_text)
 
 
 # persist the proposal (or the raw text when it did not parse) for audit

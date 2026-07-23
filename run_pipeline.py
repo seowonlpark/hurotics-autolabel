@@ -32,19 +32,10 @@ PY = sys.executable  # the venv's python, so subprocesses use the same interpret
 
 # the champion is defined by its spec + git_sha (the replayable revert unit, DOMAIN_NOTES
 # Section 11.3 / USE.md). runs/ is gitignored, so a fresh clone has no champion.json. the
-# forest is deterministic (BASE_MODEL_PARAMS random_state=0), so re-running this spec through
+# forest is deterministic (BASE_MODEL_PARAMS random_state=0), so re-running the spec through
 # run_experiment reproduces the recorded champion (drop_static_offset_family, LORO 0.8977)
-# exactly. keep this in sync with runs/s2_ml/champion.json if the champion ever changes.
-CHAMPION_SPEC = {
-    "name": "drop_static_offset_family",
-    "rationale": ("static-offset angle family is per-subject zeroing bias "
-                  "(DOMAIN_NOTES Section 4.6), not gait; it leaks under leave-one-rev-out"),
-    "drop_features": [
-        "ang_LR_offset",
-        "L_ang_LPF_mean", "R_ang_LPF_mean",
-        "L_ang_LPF_absmean", "R_ang_LPF_absmean",
-    ],
-}
+# exactly. the spec lives in the git-tracked stages/s2_ml/champion_spec.json, which every
+# promotion rewrites automatically -- no hand-sync with champion.json, and no second copy here.
 
 
 # one pipeline step. exactly one of cmd / fn is set
@@ -63,14 +54,14 @@ class Step:
 # already exists (e.g. a prior run, or one promoted by --s2-cycle) it is left untouched
 def seed_champion() -> None:
     from stages.s2_ml.experiment import (
-        ExperimentSpec, decide, load_champion, record, run_experiment,
+        decide, load_champion, load_champion_spec, record, run_experiment,
     )
 
     out = RUNS / "s2_ml"
     if load_champion(out) is not None:
         print("  champion.json already present -- leaving it untouched")
         return
-    spec = ExperimentSpec(**CHAMPION_SPEC)
+    spec = load_champion_spec()  # the git-tracked seed, kept current by every promotion
     print(f"  seeding champion '{spec.name}' ({len(spec.drop_features)} features dropped)...")
     result = run_experiment(spec, taxonomy=True)
     promote, why = decide(result, None)  # champion=None => establishes the baseline
@@ -94,7 +85,7 @@ def build_steps() -> list[Step]:
         Step("s2_train", "S2 train + locoeval (leave-one-rev-out baseline)",
              cmd=[PY, "-m", "stages.s2_ml.train", "--out", "runs/s2_ml", "--taxonomy"],
              gate=RUNS / "s2_ml" / "locoeval.md"),
-        Step("s2_champion", "S2 seed champion (deterministic, from CHAMPION_SPEC)",
+        Step("s2_champion", "S2 seed champion (deterministic, from champion_spec.json)",
              fn=seed_champion, gate=RUNS / "s2_ml" / "champion.json"),
         Step("s2_cycle", "S2 champion/challenger cycle (experimenter + critic)",
              cmd=[PY, "orchestrator.py", "s2_cycle"], agent=True, opt_in=True),

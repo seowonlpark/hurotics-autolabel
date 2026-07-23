@@ -10,10 +10,9 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
-from agents.base import MODEL_SMART, AgentSpec
+from agents.base import MODEL_SMART, AgentSpec, extract_json_array
 
 PROPOSALS_FILENAME = "new_class_proposals.jsonl"
 
@@ -72,6 +71,8 @@ S4_NEWCLASS_AGENT = AgentSpec(
     allowed_tools=["Read", "Grep"], # Read renders the S3 PNGs + json; Grep slices the candidates
     model=MODEL_SMART,
     max_turns=30,
+    # labels + swap rule + methodology (incl. 11.2 invented-category) + fusion/new-class
+    domain_sections=("5", "10", "11", "12"),
 )
 
 
@@ -96,16 +97,7 @@ def build_prompt(bundle: dict, plot_dir: Path) -> str:
 
 # pull the JSON array out of the reply; tolerant of fences and prose
 def parse_proposals(final_text: str) -> list[dict] | None:
-    if not final_text:
-        return None
-    m = re.search(r"\[.*\]", final_text, re.DOTALL)
-    if not m:
-        return None
-    try:
-        data = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, list) else None
+    return extract_json_array(final_text)
 
 
 # validate every proposal (cluster mass + provenance) and write one JSONL line each, plus the
