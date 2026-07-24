@@ -1,7 +1,6 @@
-# the S3/S4 provenance gates are what keep an agent's claim out of the record unless it points at
-# a real window. a finding with no window, no statement, or an inverted time range must be flagged
-# ok=False; a hypothesis that leans on a rate_dependent anchor without saying so must be warned
-# (kept, but not silently). these tests exercise the accept and reject paths.
+# the S3/S4 provenance gates keep an agent's claim out of the record unless it points at a real window.
+# a finding with no window/statement or an inverted time range is flagged ok=False; a hypothesis leaning
+# on a rate_dependent anchor without saying so is warned. these tests exercise both paths.
 
 from agents.s3_physics import _evidence_strength, _valid_evidence, validate_hypothesis
 from agents.s4_fusion import measure_finding, validate_finding
@@ -16,7 +15,7 @@ def _evidence(**kw):
     return ev
 
 
-# ---- s3 evidence + hypothesis ---------------------------------------------
+# s3 evidence + hypothesis
 
 def test_valid_evidence_accepts_complete_item():
     assert _valid_evidence(_evidence()) is True
@@ -72,7 +71,7 @@ def test_acknowledging_rate_dependence_clears_warning():
     assert v["validation"]["warnings"] == []
 
 
-# ---- s4 fusion finding -----------------------------------------------------
+# s4 fusion finding
 
 def _finding(**kw):
     f = dict(statement="a claim", classification="label_problem", confidence="high",
@@ -99,7 +98,7 @@ def test_finding_missing_time_flagged():
     assert v["validation"]["ok"] is False
 
 
-# ---- s3 evidence strength (confidence grounded in code) ---------------------
+# s3 evidence strength (confidence grounded in code)
 # the agent's self-reported confidence must not stand unchecked: code measures the evidence behind
 # it -- windows and, crucially, how many revs they span -- and flags a 'high' resting on one window.
 
@@ -125,7 +124,7 @@ def test_validate_hypothesis_attaches_evidence_strength():
     assert "evidence_strength" in v and v["evidence_strength"]["tier"] == "weak"
 
 
-# ---- s4 finding measured against ground truth (#3 + #4) ---------------------
+# s4 finding measured against ground truth
 # a finding's fusion_verdict is checked against the labels on the windows it cites, and a finding
 # that lands on no scored window is dropped. rows carry the fused table's per-window facts.
 

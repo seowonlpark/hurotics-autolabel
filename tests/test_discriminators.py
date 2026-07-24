@@ -1,8 +1,6 @@
-# the discriminator registry is the seam that lets the physics view carry more than stand/walk
-# (Section 13). two things must stay pinned: (1) the swap rule is registered VERBATIM -- its verdict
-# read back through the registry is exactly swap_verdict(swap_count), so the refactor that added the
-# registry changed no result; (2) the declarative extension path (ThresholdRule / from_spec) fires
-# correctly and its validation gate rejects anything a proposed class must not smuggle in.
+# the discriminator registry (Section 13). two things stay pinned: the swap rule is registered VERBATIM
+# (its verdict read back through the registry equals swap_verdict(swap_count)), and the declarative
+# extension path (ThresholdRule / from_spec) fires correctly and its validation gate rejects bad specs.
 
 import pytest
 
@@ -13,7 +11,7 @@ from stages.s3_physics.anchors import (
 from stages.s3_physics import discriminators as disc
 
 
-# --- the swap rule as the first registered discriminator (the zero-change guarantee) ---
+# the swap rule as the first registered discriminator (the zero-change guarantee)
 
 def test_swap_registered_as_code_callable():
     d = disc.get("swap")
@@ -26,8 +24,7 @@ def test_swap_registered_as_code_callable():
 @pytest.mark.parametrize("count,verdict", [
     (0, STANDING), (1, AMBIGUOUS), (2, WALKING), (5, WALKING)])
 def test_swap_verdict_bands_unchanged_through_registry(count, verdict):
-    # verdict_of read back through the registry must equal the bare swap_verdict -- this is the
-    # property that makes the anchors.csv golden diff come out empty on the swap_verdict column
+    # verdict_of read back through the registry must equal the bare swap_verdict
     assert SWAP_DISCRIMINATOR.verdict_of({"swap_count": count}) == verdict
     assert swap_verdict(count) == verdict
 
@@ -42,7 +39,7 @@ def test_duplicate_registration_is_loud():
         disc.register(SWAP_DISCRIMINATOR)
 
 
-# --- the declarative extension path: a new class's physics test, as data ---
+# the declarative extension path: a new class's physics test, as data
 
 def test_threshold_rule_fires_on_all_clauses():
     # a bilateral squat sketch: legs move TOGETHER (antiphase < 0) and posture sweeps (grav_stab low)

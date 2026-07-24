@@ -1,8 +1,6 @@
-# champion/challenger machinery: run an experiment, gate it, log it
-# PLAN S2's gate enforced in code: the champion only ever changes via a logged,
-# metric-justified promotion. an agent proposes a declarative ExperimentSpec (never code);
-# this module runs it, scores it with locoeval, applies the rule, logs every outcome to
-# experiments.jsonl. rejections are the valuable half -- they stop re-proposals. see README.
+# champion/challenger machinery: run an experiment, gate it, log it. the champion only ever changes
+# via a logged, metric-justified promotion. an agent proposes a declarative ExperimentSpec; this runs
+# it, scores with locoeval, applies the rule, and logs every outcome (rejections included) to the ledger.
 
 from __future__ import annotations
 
@@ -26,10 +24,8 @@ from stages.s2_ml.taxonomy import aggregate, bucket_errors
 LEDGER_FILENAME = "experiments.jsonl"
 CHAMPION_FILENAME = "champion.json"
 
-# the champion's spec, tracked in git -- unlike champion.json, which lives under gitignored
-# runs/ and is absent from a fresh clone. this is the single source the clean-room seed
-# reproduces from; record() rewrites it on every promotion, so it can never silently drift
-# from the champion it re-seeds (the old hand-synced CHAMPION_SPEC dict in run_pipeline.py).
+# the champion's spec, tracked in git (unlike champion.json under gitignored runs/). the single source
+# the clean-room seed reproduces from; record() rewrites it on every promotion so it cannot drift.
 CHAMPION_SPEC_PATH = Path(__file__).resolve().parent / "champion_spec.json"
 
 BASE_MODEL_PARAMS = dict(n_estimators=300, random_state=0, n_jobs=-1,
@@ -47,9 +43,8 @@ class ExperimentSpec:
     rationale: str # why this should help, in one line
     drop_features: list[str] = field(default_factory=list) # features to remove
     window_s: float | None = None # None => champion/default window
-    # stride is INDEPENDENT of window length, and that independence is load-bearing:
-    # tying them means changing window_s also changes the training-set size, confounding
-    # "longer window" with "less data". None keeps the champion's stride
+    # stride is INDEPENDENT of window length: tying them would confound "longer window" with "less
+    # data". None keeps the champion's stride
     stride_s: float | None = None
     model_params: dict = field(default_factory=dict) # overrides on BASE_MODEL_PARAMS
 
@@ -85,9 +80,8 @@ class ExperimentResult:
         return d
 
 
-# the hyperparameters a proposal may touch, with bounds -- a whitelist, so a stray
-# agent-authored key can't reach the estimator. random_state/n_jobs deliberately absent:
-# reproducibility and machine resources are the pipeline's call, not a proposal's
+# the hyperparameters a proposal may touch, with bounds; a whitelist, so a stray agent-authored key
+# can't reach the estimator. random_state/n_jobs deliberately absent: the pipeline's call, not a proposal's.
 ALLOWED_MODEL_PARAMS = {
     "n_estimators": (10, 2000),
     "max_depth": (1, 100),
@@ -153,10 +147,9 @@ def run_experiment(spec: ExperimentSpec, trials=None, *, taxonomy: bool = False,
     y = train_df["label"].to_numpy(int)
     groups = train_df["rev"].to_numpy()
 
-    # one leave-one-rev-out pass: the fold that holds a rev out is the same model that scores
-    # that rev's windows (OOF) and, when asked, its rows (taxonomy) -- so train it once and use
-    # it for both, rather than refitting the identical LORO forests a second time. deterministic
-    # (fixed random_state), and the oof array is filled by mask, so fold order does not matter.
+    # one leave-one-rev-out pass: the fold holding a rev out is the same model that scores that rev's
+    # windows (OOF) and rows (taxonomy), so train it once for both. deterministic, and the oof array is
+    # filled by mask so fold order does not matter.
     oof = np.empty_like(y)
     per_run: list = []
     for rev in sorted(pd.unique(groups)):
@@ -205,20 +198,17 @@ def _spec_from_dict(data: dict) -> ExperimentSpec:
     return ExperimentSpec(**{k: v for k, v in data.items() if k in valid})
 
 
-# the CURRENT champion's spec, read from the runtime champion.json (which a within-session
-# promotion may have advanced past the git-tracked seed). None when no champion exists yet.
-# this is the source the serve path (oof / lockbox / s3 grid / export) must reconstruct from,
-# so the deployed model is the champion in full -- not just its dropped features.
+# the CURRENT champion's spec, from the runtime champion.json (which a within-session promotion may
+# have advanced past the git-tracked seed). None when no champion exists. the source the serve path
+# reconstructs the deployed model from.
 def champion_spec_from_json(out_dir: Path) -> ExperimentSpec | None:
     champ = load_champion(out_dir)
     return _spec_from_dict(champ["spec"]) if champ else None
 
 
-# resolve a spec to the concrete (WindowSpec, model_params, drop_features) it is fit with --
-# the SAME resolution train.main uses, so every serve-path reconstruction (oof, lockbox, the
-# S3 join grid, export's row mapping) matches train.py's persisted champion exactly. a default
-# champion (window_s/stride_s null, model_params {}) resolves to the plain WindowSpec() default,
-# so nothing changes until a non-default window/params champion is actually promoted.
+# resolve a spec to the concrete (WindowSpec, model_params, drop_features) it is fit with, the SAME
+# resolution train.main uses, so every serve-path reconstruction matches train.py's champion. a default
+# spec resolves to the plain WindowSpec() default.
 def champion_config(spec: ExperimentSpec) -> tuple[WindowSpec, dict, list[str]]:
     default = WindowSpec()
     win = spec.window_s or default.window_s
@@ -227,12 +217,9 @@ def champion_config(spec: ExperimentSpec) -> tuple[WindowSpec, dict, list[str]]:
             spec.resolved_params(), list(spec.drop_features))
 
 
-# resolve the CURRENT champion (runtime champion.json) to the (WindowSpec, params, drops) the
-# serve path fits with -- the single entry point oof / lockbox / s3 grid / export share, so they
-# can never disagree on how a champion is rebuilt. window_override forces the sampling grid (a
-# rare, explicit --window-s) while keeping the champion's params/drops. require=True raises when
-# no champion exists (the deployment fits, which cannot proceed without one); require=False falls
-# back to the plain defaults (the model-free stages that can still run standalone).
+# resolve the CURRENT champion to the (WindowSpec, params, drops) the serve path fits with; the single
+# entry point oof / lockbox / s3 grid / export share. window_override forces the grid; require=True
+# raises when no champion exists, require=False falls back to plain defaults.
 def resolve_champion(out_dir: Path, *, window_override: WindowSpec | None = None,
                      require: bool = True) -> tuple[WindowSpec, dict, list[str]]:
     csp = champion_spec_from_json(out_dir)
@@ -246,9 +233,8 @@ def resolve_champion(out_dir: Path, *, window_override: WindowSpec | None = None
     return window_override or wspec, params, drops
 
 
-# secondary criterion, applied ONLY on a macro-F1 tie: at equal accuracy prefer lower
-# steady_confusion -- a sustained wrong call becomes a sustained wrong ACTION on a powered
-# device, whereas swallowed/omission are fail-passive. wrong action beats no action
+# secondary criterion, only on a macro-F1 tie: prefer lower steady_confusion, since a sustained wrong
+# call becomes a sustained wrong ACTION on a powered device, whereas omissions fail passive.
 STEADY_CONFUSION_MARGIN = 0.02
 
 
@@ -261,9 +247,8 @@ def _steady(result_or_champion) -> float | None:
     return tax["fractions"]["steady_confusion"]
 
 
-# the promotion rule -- objective, margin-based, the ONLY path to champion. primary is
-# macro-F1 past PROMOTION_MARGIN; on a tie, lower steady_confusion wins. returns
-# (promote, reason); the reason is logged either way to stop re-proposals
+# the promotion rule, the ONLY path to champion: macro-F1 past PROMOTION_MARGIN, and on a tie lower
+# steady_confusion wins. returns (promote, reason); the reason is logged either way.
 def decide(challenger: ExperimentResult, champion: dict | None) -> tuple[bool, str]:
     if champion is None:
         return True, "no incumbent champion; establishing baseline"
@@ -324,8 +309,8 @@ def record(out_dir: Path, result: ExperimentResult, promoted: bool, reason: str,
 PROPOSALS_FILENAME = "proposals.jsonl"
 
 
-# log every proposal and its fate, including ones the critic stopped; kept separate from
-# experiments.jsonl (measured runs) so the next cycle can still see an idea was refused
+# log every proposal and its fate (critic-stopped ones included), kept separate from experiments.jsonl
+# so the next cycle can still see an idea was refused
 def record_proposal(out_dir: Path, proposal: dict, critic: dict, ran: bool,
                     note: str = "") -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)

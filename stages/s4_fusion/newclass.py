@@ -1,11 +1,6 @@
-# S4 new-class discovery core: assemble the evidence for classes the {stand, walk} taxonomy
-# misses, WITHOUT deciding anything. the curation director (curate.py) already routed the
-# NEW_CLASS windows -- STAND-labeled posture that is MOVING (grav_stab < 0.5) yet not clean
-# gait: a ramp, a weight-shift, a repositioning, maybe a sit. this stage does not name those.
-# it hands the agent a per-span physics profile + the S3 figure, the agent PROPOSES a class,
-# and a deterministic gate (newclass agent) validates cluster mass before anything reaches a
-# human. governed discovery (DOMAIN_NOTES Section 11.2): code never adds a class, never edits a label
-# -- it can only assemble evidence and route a proposal to needs_human. reads artifacts only.
+# S4 new-class discovery core: assemble evidence for classes {stand, walk} misses, WITHOUT deciding.
+# hands the agent a per-span physics profile + S3 figure; a deterministic gate checks cluster mass first.
+# governed, reads artifacts only: code never adds a class or edits a label, only routes to needs_human (11.2).
 
 from __future__ import annotations
 
@@ -83,11 +78,9 @@ def corpus_signature(df: pd.DataFrame, spans: list[dict]) -> dict:
     }
 
 
-# validate ONE agent proposal against the candidate spans (used by the newclass agent). two
-# gates, both deterministic: PROVENANCE -- every span_ref must overlap a real candidate span;
-# CLUSTER MASS -- the matched spans must recur (>= MIN_SPANS spans across >= MIN_REVS revs). a
-# proposal that clears both is "supported"; otherwise "insufficient_evidence". EITHER WAY it is
-# needs_human: code proposes a class, it never adds one (Section 11.2, non-negotiable #1).
+# validate ONE agent proposal against the candidate spans. two deterministic gates: PROVENANCE (every
+# span_ref overlaps a real candidate span) and CLUSTER MASS (matched spans recur, >= MIN_SPANS across
+# >= MIN_REVS revs). clearing both is "supported", else "insufficient_evidence"; either way needs_human.
 def validate_proposal(proposal: dict, spans: list[dict]) -> dict:
     reasons: list[str] = []
     refs = proposal.get("span_refs")

@@ -1,6 +1,5 @@
-# S2 critic: review a proposed challenger before it runs (read-only)
-# sees the ledger so it can catch repeats of rejected ideas; does not decide promotion
-# -- experiment.decide() does that on the metric afterwards. see README.
+# S2 critic (read-only): review a proposed challenger before it runs, catching repeats via the
+# ledger. does not decide promotion; experiment.decide() does that on the metric afterwards.
 
 from __future__ import annotations
 
@@ -92,7 +91,7 @@ def parse_review(final_text: str) -> dict | None:
 
 
 # persist the review; an unparseable review becomes a revise, never an approve. `name` lets a
-# second (post-revision) critique write to a distinct file so the first is not overwritten.
+# post-revision critique write to a distinct file so the first is not overwritten.
 def write_review(out_dir: Path, review: dict | None, final_text: str,
                  name: str = REVIEW_FILENAME) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)

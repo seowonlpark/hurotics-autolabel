@@ -192,10 +192,9 @@ def parse_review(final_text: str) -> list[dict] | None:
 _REVIEW_KEYS = ("explained", "action", "sections", "rationale", "confidence")
 
 
-# collapse the agent's two orthogonal judgements into (disposition, action) -- the only
-# place they combine, so two runs can't disposition the same item differently:
-#   yes/none -> known_expected;  yes/human -> needs_human;
-#   no -> novel (action rides along);  contradicts -> novel, action forced to human
+# collapse the agent's two judgements into (disposition, action), the only place they combine:
+#   yes/none -> known_expected; yes/human -> needs_human;
+#   no -> novel; contradicts -> novel, action forced to human
 def collapse(explained: str | None, action: str | None) -> tuple[str, str]:
     if explained == "contradicts":
         return "novel", "human"

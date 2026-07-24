@@ -1,15 +1,8 @@
-# Regression LOCK on the spent lockbox (rev8, rev13) -- NOT a generalization test.
-#
-# rev8/rev13 were opened once and are spent (DOMAIN_NOTES 12.5): they can never again produce an
-# unbiased number, and the model must never be tuned against them. What is still legitimate is
-# pinning the ALREADY-RECORDED 12.5 result to the code, so a later edit to the deterministic fusion
-# or scoring layer cannot quietly change the number the record reports.
-#
-# The fixture (tests/fixtures/lockbox_windows.csv, made by make_lockbox_fixture.py) freezes the real
-# per-window fusion inputs -- the deployment-fit S2 label+proba and the model-free S3 verdict -- so
-# these tests re-apply the fuser and the scorer to real distributions WITHOUT refitting the model.
-# They assert the exact numbers in DOMAIN_NOTES 12.5 and runs/s4_fusion/lockbox_result.md. If a
-# change is meant to move these, regenerate the fixture and update the constants here deliberately.
+# regression LOCK on the spent lockbox (rev8, rev13), NOT a generalization test. pins the already-recorded
+# 12.5 result to the code, so an edit to the deterministic fusion or scoring layer cannot quietly change it.
+
+# the fixture (made by make_lockbox_fixture.py) freezes the real per-window fusion inputs, so these tests
+# re-apply the fuser and scorer WITHOUT refitting the model. to move the numbers, regenerate deliberately.
 
 from pathlib import Path
 
@@ -44,10 +37,8 @@ def _block(g):
 
 
 def test_lockbox_registry_is_consistent():
-    # lockbox rev status is now ONE authored registry (lockbox.LOCKBOX); membership is
-    # dataset.DEFAULT_LOCKBOX_REVS. the SEALED/SPENT/OPENED tuples are derived from LOCKBOX and the
-    # module raises at import if the registry and the dataset membership disagree -- so importing at
-    # all already proves that tie. this pins the remaining intent: valid roles and the partition.
+    # lockbox rev status is one authored registry (lockbox.LOCKBOX); membership is DEFAULT_LOCKBOX_REVS,
+    # and the module raises at import if they disagree. this pins the rest: valid roles and the partition.
     assert all(r.role in (HEADLINE, REFERENCE) for r in LOCKBOX)
     lockbox = set(DEFAULT_LOCKBOX_REVS)
     sealed, spent, opened = set(SEALED_REVS), set(SPENT_REVS), set(OPENED_REVS)

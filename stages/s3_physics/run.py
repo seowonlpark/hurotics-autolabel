@@ -1,9 +1,6 @@
-# S3 deterministic core: compute the anchor table, run the rate-invariance audit, draw the
-# plots. no agent, no judgement -- this is everything the physics stage can assert with code
-# before Claude reads a single figure. the outputs (anchors.csv, rate_audit.json, plots/) are
-# the interface: the hypothesis agent reads them and writes hypotheses.jsonl, and the PLAN S3
-# gate ("no anchor without a rate-invariance verdict") is satisfied by rate_audit.json here.
-# see README / PLAN S3 / DOMAIN_NOTES Section 10.
+# S3 deterministic core: compute anchor table, run rate-invariance audit, draw plots. no agent, no
+# judgement. outputs (anchors.csv, rate_audit.json, plots/) are the interface the hypothesis agent
+# reads; rate_audit.json satisfies the PLAN S3 gate (Section 10).
 
 from __future__ import annotations
 
@@ -27,10 +24,8 @@ S3_OUT_DIR = REPO_ROOT / "runs" / "s3_physics"
 S2_RUN_DIR = REPO_ROOT / "runs" / "s2_ml"
 
 
-# the champion's window, so S3's per-window grid matches the S2 OOF grid the fusion joins on
-# (JOIN_KEYS include t_start_ms; a mismatched window would collapse the inner join). S3's physics
-# stays model-free -- this only aligns the sampling grid the two stages must share. defaults to
-# the plain WindowSpec() when no champion exists yet or its window is already the default.
+# champion's window, so S3's per-window grid matches the S2 OOF grid the fusion joins on (a
+# mismatched window collapses the inner join). defaults to WindowSpec() when no champion exists yet.
 def champion_windowspec(s2_dir: Path = S2_RUN_DIR) -> WindowSpec:
     return resolve_champion(s2_dir, require=False)[0]
 
@@ -47,36 +42,23 @@ def build_anchor_table(trials: list[Trial], spec: WindowSpec | None = None) -> p
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-# the physics CAUSE of one window's disagreement with its human label (Section 10.7, Section 11) -- turns the
-# label_audit flag from a boolean into something the reviewer can triage. a WALK-labeled window
-# the swap rule does not call walking is one of three very different things: legs moving IN PHASE
-# (antiphase<=0, not gait at all -- physics is right, the label is the suspect), a single committed
-# hump the Section 10.7 grow still could not alternate twice (`single_hump` -- a genuinely brief/edge
-# stride), or an antiphase swing that never commits both bands (`sub_threshold`). a STAND-labeled
-# window the rule DOES call walking is the label-audit direction (a ramp/mislabel, the S4
-# precedent). None when verdict and label agree. driven by columns the row already carries, so it
-# cannot drift from the verdict it explains.
+# physics cause of one window's disagreement with its human label (Section 10.7, Section 11), so the
+# reviewer can triage the flag rather than see a bare boolean. None when verdict and label agree.
 def disagree_reason(label: object, verdict: str, antiphase: float, swap_count: int) -> str | None:
     if label == WALK and verdict != WALKING:
         if antiphase <= 0:
-            return "in_phase_not_gait" # legs together -- physics right, likely a real label issue
+            return "in_phase_not_gait" # legs together: physics right, likely a label issue
         if swap_count <= 1:
-            return "single_hump"       # alternates but <2 crossings even after the Section 10.7 grow
+            return "single_hump"       # alternates but <2 crossings even after the grow
         return "sub_threshold"         # antiphase swing that never commits both +/-delta bands
     if label == STAND and verdict == WALKING:
-        return "stand_reads_walking"   # label-audit: a standing stretch the physics reads as gait
+        return "stand_reads_walking"   # label-audit: standing stretch the physics reads as gait
     return None
 
 
-# per-trial physics-vs-label disagreement, ranked. two directions the swap rule (Section 10) and
-# the human label can part ways: a WALK-labeled window the physics does NOT call walking
-# (slow-cadence tail, Section 10.3), and a STAND-labeled window it DOES (a mislabeled ramp, the S4
-# label-audit precedent). ranked on the STRIDE-ADAPTIVE verdict (Section 10.6): the fixed-window
-# verdict flags slow-gait windows the rule simply can't resolve, drowning real label issues in
-# window artifacts -- the adaptive call resolves those, so what remains ranked is more likely a
-# genuine label problem. this is where the agent should look first, so code ranks it rather
-# than making the agent read all 44 figures blind. each row carries a `reasons` histogram (Section 10.7)
-# so the reviewer sees WHY a trial ranks, not just that it does.
+# per-trial physics-vs-label disagreement, ranked so the agent looks at the worst trials first.
+# ranked on the stride-adaptive verdict (Section 10.6) so slow-gait window artifacts don't drown real
+# label issues. each row carries a `reasons` histogram (Section 10.7) showing why a trial ranks.
 def label_disagreement(table: pd.DataFrame) -> list[dict]:
     rows = []
     for (rev, trial), g in table.groupby(["rev", "trial"], sort=True):
@@ -96,11 +78,8 @@ def label_disagreement(table: pd.DataFrame) -> list[dict]:
     return sorted(rows, key=lambda r: r["disagreement"], reverse=True)
 
 
-# load the trials S3 is allowed to see: train + val only. the lockbox (rev8, rev13) stays
-# SEALED (Section 7) -- S3 is physics enrichment, but its plots feed an agent whose hypotheses reach
-# DOMAIN_NOTES and the human's understanding, so letting it read the lockbox would spend that
-# independence just as surely as training on it would. the swap rule was validated against a
-# held-out rev8 once (Section 10) and that verdict is recorded; the ongoing stage does not re-open it.
+# trials S3 may see: train + val only. lockbox stays SEALED (Section 7), since S3's plots feed an agent
+# whose hypotheses reach DOMAIN_NOTES, and reading the lockbox would spend that independence.
 def load_analysis_trials() -> list[Trial]:
     return [t for t in load_dataset() if t.split != "lockbox"]
 
@@ -111,8 +90,7 @@ def run(out_dir: Path = S3_OUT_DIR, spec: WindowSpec | None = None) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     trials = load_analysis_trials() # lockbox sealed (Section 7)
 
-    # purge stale figures so a previous run's outputs (e.g. lockbox trials) cannot leak to
-    # the agent, which reads every plots/*.png
+    # purge stale figures so a previous run's outputs can't leak to the agent, which reads every png
     plots_dir = out_dir / PLOTS_SUBDIR
     if plots_dir.exists():
         for png in plots_dir.glob("*.png"):

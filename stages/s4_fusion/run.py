@@ -1,9 +1,6 @@
-# S4 fusion deterministic core: join the S2 out-of-fold labels with the S3 physics verdicts,
-# apply the fuser, and score it. no agent, no judgement -- everything the fusion can assert with
-# code before Claude reads a case. writes the fused per-window table, a fused-vs-S2 report, the
-# confidence-tier calibration, and the ranked disagreement cases the agent then characterises.
-# both inputs are non-lockbox by construction (S2 OOF is train-only, S3 seals the lockbox), so
-# this evaluates on train+val; the lockbox opens once, at the very end. see README / PLAN S4.
+# S4 fusion deterministic core: join the S2 out-of-fold labels with the S3 physics verdicts, apply the
+# fuser, and score it. no agent, no judgement. writes the fused per-window table, a fused-vs-S2 report,
+# the calibration, and the ranked disagreement cases. evaluates on train+val (both inputs non-lockbox).
 
 from __future__ import annotations
 
@@ -43,10 +40,8 @@ def load_aligned(s2_dir: Path = S2_OUT_DIR, s3_dir: Path = S3_OUT_DIR) -> pd.Dat
     return m.rename(columns={"label": "true", "swap_verdict_adaptive": "s3"})
 
 
-# apply the fuser row-wise; adds fused_label, confidence, abstain. an explicit FusionPolicy is the
-# measured NxN policy (Section 12/Section 13); policy=None is the frozen 2-class default, byte-identical to
-# it on this corpus. the lockbox path calls this with NO policy on purpose -- it applies the frozen
-# default, never a policy re-derived on the sealed revs (that would fit the held-out set, Section 12.5).
+# apply the fuser row-wise; adds fused_label, confidence, abstain. policy=None is the frozen 2-class
+# default; the lockbox path passes NO policy on purpose, never one re-derived on the sealed revs (12.5).
 def apply_fusion(df: pd.DataFrame, policy: FusionPolicy | None = None) -> pd.DataFrame:
     res = [fuse(int(r.s2_pred), float(r.s2_proba), r.s3, policy) for r in df.itertuples()]
     df = df.copy()
@@ -91,10 +86,8 @@ def calibration(df: pd.DataFrame) -> dict:
     return out
 
 
-# per-rev breakdown: S2 alone vs fused (full coverage) vs fused acting-on-confidence, on the
-# joined windows -- the deployment question is one held-out subject/day at a time, and the
-# fused label only beats S2 on every rev once the abstention is applied (rev6/rev7 regress at
-# full coverage). the honest rev8 number waits for lockbox-open.
+# per-rev breakdown: S2 alone vs fused (full coverage) vs fused acting-on-confidence, on the joined
+# windows. the fused label only beats S2 on every rev once the abstention is applied.
 def per_rev(df: pd.DataFrame) -> list[dict]:
     rows = []
     for rev, g in df.groupby("rev", sort=True):
@@ -174,10 +167,8 @@ def render(fused: dict, s2: dict, cal: dict, act: dict, n: int, unmatched: int,
 _S3_TO_CLASS = {STANDING: STAND, WALKING: WALK}
 
 
-# group the fused windows into the per-trial lookup the S4 agent's findings are measured against:
-# (rev, trial) -> list of row dicts the ground-truth check reads. carries t_start in SECONDS to
-# match the agent's window coordinates, and pre-maps s3 to a class so the agent module stays free
-# of the stage's label constants. built once per run and handed to write_review.
+# group the fused windows into the per-trial lookup findings are measured against: (rev, trial) -> row
+# dicts. carries t_start in SECONDS to match the agent's coordinates, and pre-maps s3 to a class.
 def fused_windows_lookup(df: pd.DataFrame) -> dict:
     out: dict = {}
     for r in df.itertuples():
@@ -197,10 +188,8 @@ def run(out_dir: Path = S4_OUT_DIR, s2_dir: Path = S2_OUT_DIR, s3_dir: Path = S3
     out_dir.mkdir(parents=True, exist_ok=True)
     aligned = load_aligned(s2_dir, s3_dir)
     n_oof = len(pd.read_csv(s2_dir / OOF_CSV)) if (s2_dir / OOF_CSV).exists() else len(aligned)
-    # the fused-label policy, read off THIS corpus's measured S2xS3 agreement (Section 12) rather than
-    # hand-wired -- the NxN mechanism Section 13 needs. train+val only (load_aligned is non-lockbox by
-    # construction), so it is the deployment-fit population; on the current 2-class corpus it
-    # reproduces the frozen default exactly (locked by test_fusion_policy + the golden diff).
+    # fused-label policy, read off THIS corpus's measured S2xS3 agreement (Section 12), train+val only.
+    # on the current 2-class corpus it reproduces the frozen default exactly (locked by tests).
     policy = derive_policy(zip(aligned["s2_pred"].astype(int), aligned["s3"],
                                aligned["true"].astype(int)))
     df = apply_fusion(aligned, policy)

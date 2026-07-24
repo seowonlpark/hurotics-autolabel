@@ -1,7 +1,6 @@
-# the fuser is the deployable artifact: one call + one confidence from S2 (learned) and S3
-# (physics). its policy is measured, not intuitive -- physics VETOES toward WALK but its STANDING
-# call is ignored against S2, and any disagreement abstains (LOW). these cases lock that table so
-# a future edit can't quietly turn the veto around or drop the abstention.
+# the fuser: one call + one confidence from S2 (learned) and S3 (physics). its policy is measured, not
+# intuitive: physics VETOES toward WALK but its STANDING call is ignored against S2, and any disagreement
+# abstains (LOW). these cases lock that table so a future edit can't turn the veto around.
 
 from stages.s2_ml.dataset import STAND, WALK
 from stages.s3_physics.anchors import AMBIGUOUS, STANDING, WALKING

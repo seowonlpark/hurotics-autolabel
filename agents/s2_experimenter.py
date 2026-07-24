@@ -1,6 +1,5 @@
-# S2 experimenter: propose one challenger, as a declarative spec (read-only)
-# reads the champion report + full ledger, proposes one change; never writes code or
-# trains -- experiment.py runs the spec, the metric gate decides. see README.
+# S2 experimenter (read-only): propose one challenger as a declarative spec from the champion report
+# + ledger. never writes code or trains; experiment.py runs the spec and the metric gate decides.
 
 from __future__ import annotations
 
@@ -54,12 +53,12 @@ S2_EXPERIMENTER_AGENT = AgentSpec(
     allowed_tools=["Read", "Grep"],
     model=MODEL_SMART,
     max_turns=15,
-    # channel trust + labels/task + features + eval/gate + spec vocab + descriptors + methodology
+    # channel trust, labels, features, eval/gate, spec vocab, descriptors, methodology
     domain_sections=("4", "5", "6", "7", "9", "10", "11"),
 )
 
 
-# assemble the prompt: champion report, available features, and the full ledger
+# assemble the prompt: champion report, available features, full ledger
 def build_prompt(report_md: str, ledger_rows: list[dict], champion: dict | None,
                  features: list[str]) -> str:
     history = [
@@ -83,9 +82,8 @@ def build_prompt(report_md: str, ledger_rows: list[dict], champion: dict | None,
     )
 
 
-# a revision request appended to the experimenter's prompt when the critic returned 'revise':
-# the exact spec the critic held back and the changes it asked for. the experimenter fixes THAT
-# spec rather than starting over, so a 'revise' verdict is acted on instead of ending the cycle.
+# revision request appended to the prompt when the critic returned 'revise': the held-back spec and
+# the changes asked for, so the experimenter fixes THAT spec rather than starting over.
 def revision_block(prev_proposal: dict, critic_reasons: list[str]) -> str:
     return (
         "\nREVISION REQUESTED - the critic did NOT reject your idea. It wants this same "
@@ -103,8 +101,8 @@ def parse_proposal(final_text: str) -> dict | None:
     return extract_json_object(final_text)
 
 
-# persist the proposal (or the raw text when it did not parse) for audit. `name` lets a revision
-# attempt write to a distinct file so no earlier attempt in the same run is overwritten.
+# persist the proposal (or raw text when it did not parse). `name` lets a revision attempt write to a
+# distinct file so no earlier attempt is overwritten.
 def write_proposal(out_dir: Path, proposal: dict | None, final_text: str,
                    name: str = PROPOSAL_FILENAME) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)

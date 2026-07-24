@@ -120,11 +120,8 @@ def main() -> None:
         try:
             _, rows, err, trust = clean_one(p) # written path unused here
         except Exception as exc:
-            # an UNEXPECTED failure (a ragged CSV pandas can't parse, a parquet write error, a
-            # trust-detection edge) must not abort the whole run -- that is the one way the
-            # partition gate below could break. quarantine it like any other whole-file reject,
-            # with the exception as the reason. known failures already come back as `err`; this
-            # only catches what clean_one did not anticipate.
+            # an UNEXPECTED failure must not abort the whole run; quarantine it like any other
+            # whole-file reject, with the exception as the reason. known failures come back as `err`.
             _, rows, err, trust = None, [], f"unexpected error: {type(exc).__name__}: {exc}", None
         all_rows += rows
         if err:

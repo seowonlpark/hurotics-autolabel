@@ -1,9 +1,6 @@
-# the fuser is the deployable, and its policy is the measured S2xS3 agreement (Section 12), now made
-# explicit and N-class ready as FusionPolicy / derive_policy (Section 13). the load-bearing property:
-# deriving the policy from a contingency shaped like the real corpus reproduces the FROZEN 2-class
-# default cell-for-cell -- so routing production through derive_policy changed no result. these tests
-# lock that equivalence, plus the fail-passive guards that keep a thin new-class cell from inventing a
-# call. test_fuse.py still pins the frozen default itself; this pins the generalization around it.
+# the fuser's policy is the measured S2xS3 agreement, made explicit and N-class ready as derive_policy
+# (Section 13). load-bearing property: deriving from a corpus-shaped contingency reproduces the FROZEN
+# 2-class default cell-for-cell. these tests lock that plus the fail-passive guards for thin cells.
 
 import pytest
 
@@ -40,7 +37,7 @@ def _corpus_rows():
     return rows
 
 
-# --- the equivalence that makes the production diff empty ---
+# the equivalence that makes the production diff empty
 
 def test_derived_policy_matches_frozen_default_on_every_cell():
     policy = derive_policy(_corpus_rows())
@@ -60,7 +57,7 @@ def test_derived_cell_labels_are_the_measured_majority():
         assert policy.support[cell] == 100
 
 
-# --- structural tier: reproduces the frozen tiering, generalizes with no fitting ---
+# structural tier: reproduces the frozen tiering, generalizes with no fitting
 
 @pytest.mark.parametrize("s2,s3,tier", [
     (STAND, STANDING, HIGH), (WALK, WALKING, HIGH),   # same class named -> agreement
@@ -72,7 +69,7 @@ def test_tier_is_structural(s2, s3, tier):
     assert fuse(s2, 0.9, s3).confidence == tier
 
 
-# --- fail-passive guards: a thin or tied cell must not set a label, it keeps S2 ---
+# fail-passive guards: a thin or tied cell must not set a label, it keeps S2
 
 def test_thin_cell_is_not_trusted_and_keeps_s2():
     thin = [(STAND, WALKING, WALK)] * (MIN_CELL_SUPPORT - 1)  # a real veto cell, but too few windows

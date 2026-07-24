@@ -22,10 +22,7 @@ MODEL_SMART = "sonnet" # judgment work
 
 DEFAULT_MAX_TURNS = 25 # hard ceiling on turns; a stuck agent fails fast, doesn't spin
 
-# stream-json carries tool results inline, base64 images included. one S3 turn can batch
-# several ~0.5 MB figures (parallel Read) into a single message, past the SDK transport's
-# 1 MB default line buffer -- a fatal decode mid-run (the third stdio trap after CreateProcess
-# length and cp949, DOMAIN_NOTES Section 8). raise the cap so image-reading agents survive a big turn.
+# raise the SDK line-buffer cap so image-heavy turns don't overflow its 1 MB default (Section 8)
 MAX_BUFFER_SIZE = 32 * 1024 * 1024 # 32 MB
 
 TOOL_LOG_FILENAME = "run_log.jsonl" # per-run tool-call log
@@ -43,9 +40,8 @@ class AgentSpec:
     allowed_tools: list[str] # tools the agent may call
     model: str = MODEL_SMART # model alias
     max_turns: int = DEFAULT_MAX_TURNS # turn ceiling
-    # top-level DOMAIN_NOTES sections this agent needs, e.g. ("5", "7", "11"); None injects
-    # the whole file. Section 0 (orientation) is always kept. subsections ride with their
-    # parent (giving "12" gives 12.1-12.5). see _select_sections.
+    # top-level DOMAIN_NOTES sections this agent needs, e.g. ("5", "7", "11"); None injects the
+    # whole file. subsections ride with their parent. see _select_sections.
     domain_sections: tuple[str, ...] | None = None
 
 
@@ -78,12 +74,8 @@ _SECTION_HEADER_RE = re.compile(r"^## (.+)$", re.MULTILINE)
 _SECTION_NUM_RE = re.compile(r"^(\d+)\.")
 
 
-# curate DOMAIN_NOTES to the sections one agent needs. injecting the whole file into every
-# agent does not scale (it once blew the CreateProcess cap, and the cheap agent dropped a
-# field and doubled in cost purely on prompt size -- BUILDLOG Appendix A). an agent needs
-# only its own stage's sections; Section 0 (orientation) is always kept, and a note points
-# at the full file on disk for any cross-referenced section not shown, so under-scoping is
-# recoverable rather than fatal (every agent has Read).
+# curate DOMAIN_NOTES to the sections one agent needs; Section 0 (orientation) is always kept.
+# a note points at the full file so an unshown cross-referenced section is still recoverable.
 def _select_sections(full_text: str, sections: tuple[str, ...]) -> str:
     headers = list(_SECTION_HEADER_RE.finditer(full_text))
     if not headers:
@@ -105,8 +97,7 @@ def _select_sections(full_text: str, sections: tuple[str, ...]) -> str:
     return f"{preamble}\n\n{note}\n\n" + "\n\n".join(kept) + "\n"
 
 
-# role prompt + institutional memory -- subagent contexts start fresh, so this is the
-# only guaranteed channel for hard-won domain facts
+# role prompt + curated DOMAIN_NOTES, the agent's only channel for domain facts
 def _build_system_prompt(spec: AgentSpec) -> str:
     notes = _load_domain_notes()
     if spec.domain_sections is not None:
@@ -121,7 +112,6 @@ def _build_system_prompt(spec: AgentSpec) -> str:
 
 
 # posttooluse hook: append every tool call to the run log; observe only, never block
-# note: may not fire if the agent hits max_turns -- the session ends first
 def _make_audit_hook(log_path: Path, agent_name: str):
 
     # audit helper
@@ -193,14 +183,8 @@ async def run_agent(spec: AgentSpec, prompt: str, run_dir: Path) -> AgentResult:
     return result
 
 
-# --- JSON extraction from an agent reply -------------------------------------
-# agents are told to emit one JSON value, but models still wrap it in prose or a code
-# fence, and sometimes emit more than one brace-delimited span (a worked example, then the
-# answer). the old first-brace-to-last-brace regex breaks on both: any second span, or any
-# prose brace, and json.loads sees the whole run and fails. so: prefer a fenced ```json
-# block, else scan for balanced top-level spans (ignoring delimiters inside strings) and
-# keep the LAST one that parses to the wanted type -- the answer tends to come last. every
-# path fails safe to None, which every caller already treats as "did not parse".
+# JSON extraction from an agent reply. tolerates prose or a code fence: prefer a fenced ```json block,
+# else keep the LAST balanced top-level span that parses to the wanted type. fails safe to None.
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
@@ -258,13 +242,9 @@ def extract_json_array(text: str) -> list | None:
     return _extract_json(text, "[", "]", list)
 
 
-# --- cross-run analyst ledger ------------------------------------------------
-# the S2 loop hands the experimenter the full experiments ledger, so it never re-proposes an
-# idea already tried. the read-only analysts (s3 hypotheses, s4 findings, s4 new-class) had no
-# equivalent: each run read the figures cold and wrote into its own timestamped folder, so a
-# second run could silently repeat, or contradict, what the first already recorded. these two
-# helpers give each analyst a stable, append-only ledger of what prior runs kept -- read into
-# the prompt so a later run must sharpen or contradict-with-reason rather than restate.
+# cross-run analyst ledger.
+# append-only ledger of what prior analyst runs kept, read back into the prompt so a later run
+# sharpens or contradicts-with-reason rather than restating.
 
 
 # every record in a cumulative analyst ledger, in order; empty when the file is absent
@@ -274,9 +254,8 @@ def read_ledger(path: Path) -> list[dict]:
     return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
-# append validated items to the cumulative ledger, each stamped with the run that produced it
-# so a kept claim can be traced back to its timestamped run_dir. no-op on an empty list, so a
-# run that recorded nothing leaves the ledger untouched.
+# append validated items to the cumulative ledger, each stamped with its run for traceability;
+# no-op on an empty list.
 def append_ledger(path: Path, items: list[dict], run_id: str) -> None:
     if not items:
         return
@@ -288,25 +267,17 @@ def append_ledger(path: Path, items: list[dict], run_id: str) -> None:
                                 ensure_ascii=False) + "\n")
 
 
-# --- gate-and-write: the shared "code judges the agent" sink -----------------
-# every read-only agent (s3 hypotheses, s4 findings, s4 new-class proposals) ends the same
-# way: keep the raw reply for audit, run each item through a deterministic validator that
-# stamps a `validation` block, write one JSONL line per validated item, and report how many
-# passed. the gate is the safety boundary, so it lives in ONE place rather than being retyped
-# per stage. `validate` maps a raw item -> the item plus its validation block; `is_ok` reads
-# that block to decide whether an item passed (the default reads validation.ok; new-class
-# overrides it because its pass condition is validation.support == "supported").
+# gate-and-write: the shared "code judges the agent" sink.
+# shared sink for read-only agents: keep the raw reply, run each item through `validate`, write one
+# JSONL line per validated item, report how many passed. `is_ok` decides pass (default: validation.ok).
 
 # an item passed the gate iff its validation block says ok
 def _validation_ok(validated: dict) -> bool:
     return bool(validated.get("validation", {}).get("ok"))
 
 
-# validate every agent-emitted item, persist the raw reply + one JSONL line per item, and
-# return (path, n_passed, n_flagged). None/empty items writes an empty file and the raw reply,
-# so a non-parsing or empty reply still leaves an auditable trace. never raises on a bad item:
-# the validator is responsible for turning a malformed item into a flagged one. the raw reply
-# is written next to `out_name` as `<stem>_raw.txt`.
+# validate every item, persist the raw reply + one JSONL line each, return (path, n_passed,
+# n_flagged). never raises on a bad item; the raw reply is written next to out_name as <stem>_raw.txt.
 def gate_and_write(
     out_dir: Path,
     items: list[dict] | None,
@@ -331,8 +302,7 @@ def gate_and_write(
     with path.open("w", encoding="utf-8") as fh:
         for v in validated:
             fh.write(json.dumps(v, ensure_ascii=False) + "\n")
-    # only the passers reach the cross-run ledger -- flagged items are not a claim the next run
-    # should treat as recorded (the raw reply above still preserves them for audit)
+    # only passers reach the cross-run ledger; flagged items stay only in the raw reply
     if ledger_path is not None:
         append_ledger(ledger_path, [v for v in validated if is_ok(v)], run_id)
     return path, n_ok, len(validated) - n_ok

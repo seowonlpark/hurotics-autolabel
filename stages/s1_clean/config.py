@@ -79,10 +79,8 @@ DECIMATE_FILTER = "fir"
 # so it is the only nearest-interpolated role in practice
 NEAREST_ROLES = ("label",)
 
-# gyro trust / normalization
-# gyro is reliable but its units/axes are inconsistent within a file (Section 4.1b): B is
-# rad/s, L/R is deg/s, and d(Deg_Y)/dt tracks Gyro_Z not Gyro_Y. detected per file
-# in channel_trust.py, never asserted from the tables below. see DOMAIN_NOTES.
+# gyro trust / normalization. units/axes are inconsistent within a file (Section 4.1b): B is rad/s, L/R
+# deg/s, d(Deg_Y)/dt tracks Gyro_Z not Gyro_Y. detected per file in channel_trust.py, not asserted here.
 SIDES = ("L", "R", "B")
 GYRO_AXES = "XYZ"
 RAD2DEG = 57.29577951308232
@@ -108,11 +106,9 @@ DOCUMENTED_GYRO_UNIT = {"L": "deg/s", "R": "deg/s", "B": "rad/s"}
 YAW_DRIFT_R_FLOOR = 0.9 # |corr(Deg, Time)| at/above this => drift-contaminated
 DRIFT_MIN_SEGMENT_S = 5.0 # a segment must span this long for its drift to mean anything
 
-# what the canonical file keeps
-# the line is MEASURED vs COMPUTED. the device measures IMU + load cells; it computes
-# Cadence, GCP, admittance, PID state etc -- firmware opinion, same bucket as `loco`.
-# dropping computed cols also collapses every header shape into one canonical form and strips
-# the firmware-era confound (every position-churning column is a computed one). see Section 9.
+# what the canonical file keeps: MEASURED, not COMPUTED. the device measures IMU + load cells; it
+# computes Cadence, GCP, admittance, PID state (firmware opinion). dropping computed cols also
+# collapses every header shape into one canonical form (Section 9).
 KEEP_MEASURED = (
     "Time",
     *[f"{s}_{k}_{a}" for s in ("L", "R", "B") for k in ("Deg", "Gyro", "Acc") for a in "XYZ"],

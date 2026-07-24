@@ -1,29 +1,12 @@
-# ingest/adapt.py -- turn an arbitrary sheet into a file this pipeline can read.
-#
-# Two targets, both defined by dataset_profile / transform (never re-hardcoded here):
-#
-#   labeled  a labeled trial for TRAINING: data/labeled/<rev>/annotated_loco_<rev>_trial_<n>.csv
-#            columns Time + the four rev2 features + Label (canonical STAND/WALK/unknown codes).
-#
-#   raw      an unlabeled recording for SCORING: data/raw/<YYYYMMDD>/<name>.csv, holding the
-#            five columns the verified raw->feature bridge reads (transform.raw_to_features):
-#            Time + the left/right SAGITTAL angle (_Deg_Y) and its rate (_Gyro_Z). This is the
-#            minimal honest contract -- the full S1 clean stage wants the complete 30-channel
-#            device schema, but the bridge (and the model) only ever read these sagittal channels.
-#
-# The mapping names which of your columns feed the target. Anything you do not map is dropped --
-# a raw sheet that happens to carry a label column simply keeps its five channels and leaves the
-# label behind (a raw/scoring file has no label; the pipeline drops labels from data/raw anyway).
-#
-# Deterministic: it renames columns and (for labeled) remaps label words to codes, then validates
-# the result against the target's own loader -- dataset._read_raw for labeled, raw_to_features for
-# raw -- so a file this tool emits can never fail the contract the pipeline enforces. It never
-# guesses a value it was not told; --scaffold only proposes a mapping for you to confirm, and the
-# agent auto-mapper (ingest/automap.py) likewise only proposes -- this core is the gate both pass.
-#
-# Typical use:
+# ingest/adapt.py: turn an arbitrary sheet into a file this pipeline can read. two targets, both
+# defined by dataset_profile / transform: `labeled` (a training trial: Time + four rev2 features +
+# Label) and `raw` (a scoring recording: Time + left/right sagittal angle and rate).
+
+# deterministic: renames columns, remaps label words to codes, then validates against the target's own
+# loader, so an emitted file can never fail the contract. never guesses; --scaffold only proposes a map.
+
+# typical use:
 #   python -m ingest.adapt my_sheet.csv --target raw --scaffold > map.json   # draft from headers
-#   # edit map.json: point each canonical column at one of yours
 #   python -m ingest.adapt my_sheet.csv --target raw --map map.json          # write the file
 
 from __future__ import annotations
@@ -61,10 +44,9 @@ class AdaptError(Exception):
     """A mapping or validation problem stated in terms the caller can act on."""
 
 
-# --- targets --------------------------------------------------------------------------------
-# one target = the canonical columns a written file must carry, whether it has a Label, a short
-# human note about what each column means (shown in scaffolds and to the agent mapper), and how
-# the output is named/validated.
+# targets.
+# one target = the canonical columns a written file must carry, whether it has a Label, a per-column
+# note (shown in scaffolds and to the agent mapper), and how the output is named/validated.
 
 @dataclass(frozen=True)
 class Target:
@@ -113,7 +95,7 @@ RAW = Target(
 TARGETS = {t.name: t for t in (LABELED, RAW)}
 
 
-# --- reading the input ----------------------------------------------------------------------
+# reading the input.
 
 # read a sheet as a DataFrame. header whitespace is stripped so " Time" and "Time" are one column
 def load_sheet(path: Path) -> pd.DataFrame:
@@ -124,7 +106,7 @@ def load_sheet(path: Path) -> pd.DataFrame:
     return df
 
 
-# --- mapping --------------------------------------------------------------------------------
+# mapping.
 
 # collapse a header to letters+digits, lowercased, for a loose compare in the scaffold guesser
 def _norm(name: str) -> str:
@@ -238,7 +220,7 @@ def _contract_check(df: pd.DataFrame, target: Target) -> None:
             raise AdaptError(f"mapped columns {list(df.columns)} != contract {list(target.columns)}.")
 
 
-# --- naming and writing ---------------------------------------------------------------------
+# naming and writing.
 
 def infer_rev(name: str) -> str | None:
     m = re.search(REV_PATTERN, name)
@@ -286,7 +268,7 @@ def write_trial(df: pd.DataFrame, rev: str, trial: int, out_dir: Path) -> Path:
     return write_output(df, trial_path(out_dir, rev, trial), LABELED)
 
 
-# --- CLI ------------------------------------------------------------------------------------
+# CLI.
 
 # resolve the destination path for a target from flags / mapping / the input filename
 def resolve_dest(target: Target, mapping: dict, args, input_path: Path) -> Path:

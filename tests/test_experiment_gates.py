@@ -1,7 +1,6 @@
-# the S2 gates are the only path to champion, and they run on agent-authored specs. validate_spec
-# is the whitelist that keeps a stray key off the estimator; select_features refuses a silent
-# no-op; decide() is the margin-based promotion rule (and its steady_confusion tiebreaker). these
-# are pure functions with no data or model dependency, so they get pinned down exactly.
+# the S2 gates are the only path to champion, and run on agent-authored specs: validate_spec whitelists
+# keys off the estimator, select_features refuses a silent no-op, decide() is the margin-based promotion
+# rule (plus its steady_confusion tiebreaker). pure functions, so pinned exactly.
 
 import pytest
 
@@ -29,7 +28,7 @@ def _result(macro_f1, steady=None):
                             n_train_windows=100, taxonomy=tax)
 
 
-# ---- validate_spec ---------------------------------------------------------
+# validate_spec
 
 def test_valid_spec_passes():
     validate_spec(_spec(model_params={"n_estimators": 300}, window_s=2.0))
@@ -62,7 +61,7 @@ def test_window_out_of_range_rejected():
         validate_spec(_spec(window_s=20.0))  # outside (0.5, 10.0)
 
 
-# ---- select_features -------------------------------------------------------
+# select_features
 
 def test_select_features_drops_named():
     assert select_features(["a", "b", "c"], ["b"]) == ["a", "c"]
@@ -78,7 +77,7 @@ def test_dropping_everything_rejected():
         select_features(["a", "b"], ["a", "b"])
 
 
-# ---- decide ----------------------------------------------------------------
+# decide
 
 def test_no_champion_establishes_baseline():
     promote, why = decide(_result(0.5), None)
@@ -127,7 +126,7 @@ def test_tie_without_taxonomy_cannot_use_tiebreaker():
     assert promote is False
 
 
-# ---- _spec_from_dict -------------------------------------------------------
+# _spec_from_dict
 
 def test_spec_from_dict_drops_unknown_keys():
     spec = _spec_from_dict({"name": "x", "rationale": "y", "legacy_field": 1})

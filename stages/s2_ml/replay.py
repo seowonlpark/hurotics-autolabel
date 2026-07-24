@@ -1,8 +1,6 @@
-# S2 replay: reconstruct a logged experiment from the ledger and re-run it
-# the PLAN S2 gate ("reconstructible from experiments.jsonl + git history alone") made
-# executable. deterministic code + fixed data => a same-HEAD entry must replay exactly;
-# an older-sha entry may differ (that's why the ledger stores the sha). a mismatch on a
-# same-sha entry means the ledger isn't a faithful revert unit. see README / PLAN.
+# S2 replay: reconstruct a logged experiment from the ledger and re-run it. deterministic code + fixed
+# data => a same-sha entry must replay exactly; an older-sha entry may differ (hence the stored sha).
+# a mismatch on a same-sha entry means the ledger isn't a faithful revert unit.
 
 from __future__ import annotations
 

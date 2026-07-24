@@ -1,8 +1,6 @@
-# S4 results export: one CSV per labeled trial, written to results/ under the same name,
-# carrying the original rev2 columns plus the fused per-window (label, confidence) mapped
-# densely back onto every row. read-only over the labeled corpus and the S4 fused table.
-# rows with no fused window -- transitions, dropped/short segments, and the lockbox +
-# excluded revs (rev8/rev13/rev14) -- carry blank fused columns, not a guess. see PLAN S4.
+# S4 results export: one CSV per labeled trial into results/, carrying the original columns plus the
+# fused per-window (label, confidence) mapped densely onto every row. read-only. rows with no fused
+# window (transitions, short segments, lockbox/excluded revs) carry blank fused columns, not a guess.
 
 from __future__ import annotations
 
@@ -20,10 +18,8 @@ from stages.s4_fusion.run import FUSED_CSV, S4_OUT_DIR, run as run_s4
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_DIR = REPO_ROOT / "results"
 
-# a fused window owns the original rows whose Time falls in [t_start, t_start + window) on the
-# same device clock. the span is the CHAMPION window (export() reads it from the champion spec so
-# the mapping matches the grid the fused table was computed on); this is only the fallback used
-# when no champion is present.
+# a fused window owns the original rows whose Time falls in [t_start, t_start + window). the span is the
+# champion window; this DEFAULT is only the fallback used when no champion is present.
 DEFAULT_WINDOW_MS = DEFAULT_WINDOW_S * 1000.0
 FUSED_COLS = ("fused_label", "confidence")
 

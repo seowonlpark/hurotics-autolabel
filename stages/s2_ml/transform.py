@@ -1,9 +1,6 @@
-# the raw -> rev2 feature bridge: reproduce the labeled columns from a raw CSV
-# reproduces HUROTICS' MATLAB (LPF.m / csv2mat.m) exactly, verified to ~1e-13 (Section 6.2);
-# drift from the training features is silent train/serve skew, so verify_transform.py
-# regression-tests it. two traps: the filter is CAUSAL (filtfilt would be wrong), and the
-# path always reads the sagittal/Y plane, flagging anomalies rather than guessing (Section 6.3).
-# permutation (measured per file) is separate from the axis choice (Section 4.1b/Section 6.3). see README.
+# the raw -> rev2 feature bridge: reproduce the labeled columns from a raw CSV, matching the reference
+# MATLAB exactly (Section 6.2); drift is silent train/serve skew, so verify_transform.py regression-tests
+# it. two traps: the filter is CAUSAL (filtfilt would be wrong), and the path always reads the Y plane.
 
 from __future__ import annotations
 
@@ -20,10 +17,8 @@ from stages.s1_clean.config import DOCUMENTED_GYRO_PERMUTATION
 FC_ANG_HZ = 1.0
 FC_ANGVEL_HZ = 1.0
 
-# policy (2026-07-21): the raw->features path ALWAYS reads the sagittal/Y plane (Deg_Y +
-# its rate Gyro_Z). every export is sagittal; the apparent per-header "convention" was a
-# raw-axis naming inconsistency, not recoverable from any in-file signal (Section 6.3). anomalies
-# are flagged (check_axis_trust / drift), never guessed. see README / DOMAIN_NOTES.
+# the raw->features path ALWAYS reads the sagittal/Y plane (Deg_Y + its rate Gyro_Z); every export is
+# sagittal, not recoverable from any in-file signal (Section 6.3). anomalies are flagged, never guessed.
 SAGITTAL_DEG_AXIS = "Y"
 SAGITTAL_GYRO_AXIS = DOCUMENTED_GYRO_PERMUTATION[SAGITTAL_DEG_AXIS] # "Z", via X->X,Y->Z,Z->Y
 

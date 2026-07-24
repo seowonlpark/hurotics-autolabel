@@ -1,23 +1,6 @@
-# S4 lockbox evaluation: the ONE honest generalization number for the deployable FUSED model.
-# the lockbox (rev8, rev13) has been sealed since Section 7 -- never trained on, never read by any S3
-# plot or agent -- precisely so this number is unbiased. that only holds if you spend it ONCE,
-# at the very end, on the model you are actually shipping. so:
-#   - this scores the FUSED model (S2 + S3 + the fuser), not S2 alone. the fused call is the
-#     deployable artifact; testing S2 in isolation would answer a question nobody ships.
-#   - the S2 half is fit on EVERY non-lockbox rev (the real deployment fit, train.py's final
-#     model), then predicts the sealed revs it has never seen. the S3 half computes its verdicts
-#     on the sealed revs (physics is model-free, so it needs no fit).
-#   - it REFUSES to run without an explicit --confirm token. opening the lockbox is a one-way
-#     door: once these revs have set a number you acted on, they are spent as an unbiased test.
-#     the guard makes that a deliberate act, never an accident of a stray `python -m`.
-#
-# STATUS: rev8 was OPENED once on 2026-07-22 -- the final number is recorded in DOMAIN_NOTES
-# Section 12.5 (the fused label did not beat S2 out-of-sample; the confidence-gated system did, and
-# is the deployable). rev8/rev13 are now SPENT (OPENED_REVS): main() will not re-score them even
-# with --confirm, because the model was finalized knowing them so a second number is not blind.
-# this module is KEPT as the reusable harness for a FUTURE sealed rev (a new model needs new
-# held-out data, Section 12.5) -- not deleted, just guarded against a misleading re-open.
-# see README / PLAN S4 / DOMAIN_NOTES Section 7 + Section 12.5.
+# S4 lockbox evaluation: the ONE honest generalization number for the deployable FUSED model, unbiased
+# only if spent once. scores the fused model (S2 predicting the sealed revs, S3 model-free) and refuses
+# without --confirm. rev8/rev13 spent since 2026-07-22 (Section 12.5); kept as harness for a future rev.
 
 from __future__ import annotations
 
@@ -43,15 +26,9 @@ CONFIRM_TOKEN = "OPEN-LOCKBOX"
 RESULT_JSON = "lockbox_result.json"
 RESULT_MD = "lockbox_result.md"
 
-# --- the lockbox rev registry: ONE authored source for each held-out rev's eval status ----------
-# membership (which revs are the lockbox, held out of training) is dataset.DEFAULT_LOCKBOX_REVS --
-# S2 owns the split and S4 cannot invert that dependency. this registry adds, for each of those
-# revs, its role in the final eval and whether it is spent. the SEALED/SPENT/OPENED tuples below
-# are DERIVED from it, never edited by hand, so the four can no longer drift apart; an import-time
-# check ties the registry to the dataset membership and fails loudly if they disagree.
-#
-# to seal a genuinely NEW rev for a FUTURE model (DOMAIN_NOTES Section 12.5): add it to
-# dataset.DEFAULT_LOCKBOX_REVS AND register a LockboxRev(..., HEADLINE, opened=False) here.
+# lockbox rev registry: one authored source for each held-out rev's eval status. membership lives in
+# dataset.DEFAULT_LOCKBOX_REVS (S2 owns the split); the derived views below come from this and an
+# import-time check fails loudly if they disagree. to add a rev, register a LockboxRev here (Section 12.5).
 
 HEADLINE, REFERENCE = "headline", "reference"
 
@@ -63,16 +40,14 @@ class LockboxRev:
     opened: bool   # True once its lockbox value has been spent (opened for a number acted on)
 
 
-# rev8 is the clean, never-seen rev -> HEADLINE, the honest one-shot generalization number. rev13
-# was already scored on the Y-vs-X axis decision (DOMAIN_NOTES axis note: "scored the lockbox
-# rev13, so rev13 is spent") -> REFERENCE, reported but never blended into the headline. both were
-# opened once on 2026-07-22 (Section 12.5), so both are spent: main() refuses to re-score either.
+# rev8 is the clean never-seen rev -> HEADLINE; rev13 was already spent on the axis decision ->
+# REFERENCE, reported but never blended into the headline. both spent since 2026-07-22 (Section 12.5).
 LOCKBOX = (
     LockboxRev("rev8", HEADLINE, opened=True),
     LockboxRev("rev13", REFERENCE, opened=True),
 )
 
-# derived views -- computed from LOCKBOX, so they cannot disagree with it or with each other
+# derived views, computed from LOCKBOX so they cannot disagree with it
 SEALED_REVS = tuple(r.name for r in LOCKBOX if r.role == HEADLINE)
 SPENT_REVS = tuple(r.name for r in LOCKBOX if r.role == REFERENCE)
 OPENED_REVS = tuple(r.name for r in LOCKBOX if r.opened)

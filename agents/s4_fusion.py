@@ -1,10 +1,6 @@
-# S4 fusion agent: judge the fuser, don't run it (read-only)
-# the deterministic fuser already made every call and flagged the disagreements (S2 vs S3).
-# this agent does the one thing code cannot: look at WHY the two models disagree on a given
-# window and say what it means -- is it a label problem, an S2 error the physics caught, an S3
-# error, or genuine ambiguity? it never re-labels and never changes the fusion; it characterises
-# the LOW-confidence cases so a human knows what the abstentions are made of (PLAN S4). code
-# validates window-level provenance before recording, exactly as S3 does.
+# S4 fusion agent (read-only): judge the fuser, don't run it. characterise WHY S2 and S3 disagree on
+# a window (label problem, S2 error physics caught, S3 error, genuine ambiguity) so a human knows what
+# the abstentions are made of (PLAN S4). code validates window-level provenance before recording.
 
 from __future__ import annotations
 
@@ -14,12 +10,11 @@ from pathlib import Path
 from agents.base import MODEL_SMART, AgentSpec, extract_json_array, gate_and_write
 
 REVIEW_FILENAME = "fusion_review.jsonl"
-# cumulative cross-run record at the stable S4 dir; every run appends its passers and reads it
-# back so a later run does not re-characterise a disagreement an earlier one already settled
+# cumulative cross-run record at the stable S4 dir; every run appends passers and reads it back
 FINDINGS_LEDGER = "fusion_findings_ledger.jsonl"
 
 CONFIDENCE_LEVELS = ("low", "medium", "high")
-# what a disagreement window turns out to be -- the classification the agent must choose from
+# what a disagreement window turns out to be; the classification the agent must choose from
 CLASSES = ("label_problem", "s2_error_physics_caught", "s3_error", "genuine_ambiguity")
 
 SYSTEM_PROMPT = (
@@ -71,13 +66,12 @@ S4_FUSION_AGENT = AgentSpec(
     allowed_tools=["Read", "Grep"], # Read renders the S3 PNGs + json; Grep slices the fused csv
     model=MODEL_SMART,
     max_turns=30,
-    # labels/-1 + row-level taxonomy + swap verdicts + methodology + fusion
+    # labels, taxonomy, swap verdicts, methodology, fusion
     domain_sections=("5", "7", "10", "11", "12"),
 )
 
 
-# prior findings earlier runs already recorded, compacted for the prompt; empty string when
-# there is no history, so the first run's prompt is unchanged
+# prior findings earlier runs recorded, compacted for the prompt; empty string when no history
 def _prior_block(prior: list[dict]) -> str:
     if not prior:
         return ""
@@ -93,8 +87,7 @@ def _prior_block(prior: list[dict]) -> str:
     )
 
 
-# assemble the prompt: the fusion headline, the ranked disagreement cases, the files to read,
-# and the windows earlier runs already characterised
+# assemble the prompt: fusion headline, ranked disagreement cases, files to read, prior windows
 def build_prompt(metrics: dict, plot_dir: Path, prior: list[dict] | None = None) -> str:
     top = metrics["disagreement_cases"][:8]
     return (
@@ -128,11 +121,9 @@ def _cmp(alt: float, fused: float) -> str:
     return "inconclusive"
 
 
-# check the agent's fusion_verdict against what the labels actually say on the cited windows.
-# 's2_should_win'/'s3_should_win' are corroborated only if that model really scored higher than
-# the fused label there; 'abstain_correct' is corroborated only if NO alternative call beat the
-# fused label -- i.e. abstaining lost nothing. this is #4's route: the verdict is no longer an
-# inert opinion, it is measured against ground truth and stamped.
+# check the agent's fusion_verdict against the labels on the cited windows: 's2/s3_should_win' hold
+# only if that model scored higher than the fused label; 'abstain_correct' only if no alternative call
+# beat it.
 def _check_verdict(verdict: str | None, s2_acc: float, s3_acc: float | None,
                    fused_acc: float) -> str:
     if verdict == "s2_should_win":
@@ -145,11 +136,8 @@ def _check_verdict(verdict: str | None, s2_acc: float, s3_acc: float | None,
     return "unverifiable"
 
 
-# measure a finding against the fused windows it cites (plain row dicts: t_start_s, s2_pred, true,
-# fused_label, s3_class (int|None), is_low). code does the arithmetic the agent asserted about --
-# how the models actually scored on those windows -- so the agent's confidence and verdict rest on
-# a measured base, not self-report (principle 4). n_matched=0 means the finding cites no scored
-# window at all: unverifiable, and the caller fails such a finding out of the record.
+# measure a finding against the fused windows it cites: how the models actually scored there, so the
+# agent's verdict rests on a measured base. n_matched=0 means it cites no scored window (unverifiable).
 def measure_finding(finding: dict, rows: list[dict]) -> dict:
     try:
         t0, t1 = float(finding["t_start_s"]), float(finding["t_end_s"])
@@ -174,11 +162,9 @@ def measure_finding(finding: dict, rows: list[dict]) -> dict:
     }
 
 
-# enforce the provenance gate on one finding: real window + valid classification/confidence.
-# when `rows` (the fused windows for this finding's trial) is given, also measure the finding
-# against ground truth: attach the measurement, fail a finding that cites no scored window, and
-# flag a 'high' confidence the labels contradict. returns the finding with a validation block;
-# ok=False means flagged, never silently kept.
+# enforce the provenance gate on one finding: real window + valid classification/confidence. when
+# `rows` is given, also measure against ground truth, fail a finding that cites no scored window, and
+# flag a 'high' the labels contradict. ok=False means flagged, never silently kept.
 def validate_finding(f: dict, rows: list[dict] | None = None) -> dict:
     reasons: list[str] = []
     if not isinstance(f, dict) or not f.get("statement"):
@@ -201,7 +187,7 @@ def validate_finding(f: dict, rows: list[dict] | None = None) -> dict:
         out["measurement"] = m
         flags: list[str] = []
         if m["n_matched"] == 0:
-            # a finding that lands on no scored window is not grounded; keep it out of the record
+            # a finding on no scored window is not grounded; keep it out of the record
             reasons.append("cites no scored window (finding not grounded in the fused table)")
         if m.get("verdict_check") == "contradicted" and f.get("confidence") == "high":
             flags.append("high confidence contradicted by ground truth")
@@ -211,10 +197,9 @@ def validate_finding(f: dict, rows: list[dict] | None = None) -> dict:
     return out
 
 
-# validate all, write one JSONL line per finding + the raw text alongside; passers also go to
-# the cross-run ledger when one is given. `windows` maps (rev, trial) -> the fused row dicts for
-# that trial; when given, each finding is measured against ground truth. returns (path, n_ok,
-# n_flagged).
+# validate all, write one JSONL line per finding; passers also go to the cross-run ledger when one is
+# given. `windows` maps (rev, trial) -> fused row dicts, used to measure each finding. returns (path,
+# n_ok, n_flagged).
 def write_review(out_dir: Path, findings: list[dict] | None, final_text: str,
                  ledger_path: Path | None = None, run_id: str = "",
                  windows: dict | None = None) -> tuple[Path, int, int]:
@@ -227,8 +212,7 @@ def write_review(out_dir: Path, findings: list[dict] | None, final_text: str,
         out_name=REVIEW_FILENAME, ledger_path=ledger_path, run_id=run_id)
 
 
-# normalise a trial identifier to an int key when possible, so a finding's "trial": 1 and the
-# fused table's trial 1 land in the same bucket regardless of int/str/float spelling
+# normalise a trial id to an int key when possible, so int/str/float spellings share a bucket
 def _trial_key(trial: object) -> object:
     try:
         return int(trial)  # type: ignore[arg-type]

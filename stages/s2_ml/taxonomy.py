@@ -1,10 +1,6 @@
-# error taxonomy -- a faithful port of locoeval/diagnose.py bucketing
-# ported (not reinvented) so our classifier is scored by the SAME yardstick as the
-# incumbent; thresholds/precedence copied exactly (changing either breaks comparability).
-# every row lands in one bucket by precedence:
-#   correct > omission/swallowed/edge_omission > flicker > late > early > steady_confusion
-# feed it row-level predictions from dense inference (predict.py), not window labels --
-# the thresholds are ms-scale. runs per segment (Section 3.1). see README / DOMAIN_NOTES Section 7.
+# error taxonomy: a faithful port of the incumbent's bucketing (thresholds/precedence copied exactly),
+# so our classifier is scored by the SAME yardstick. precedence: correct > omission/swallowed/edge_omission
+# > flicker > late > early > steady_confusion. feed it dense per-row predictions, not window labels.
 
 from __future__ import annotations
 

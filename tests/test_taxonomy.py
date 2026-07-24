@@ -1,7 +1,6 @@
-# the error taxonomy is the comparability yardstick (a faithful port of the incumbent's bucketing)
-# and the source of decide()'s steady_confusion tiebreaker. its precedence assignment must
-# partition every row into exactly one bucket. we assert that invariant plus a couple of
-# unambiguous cases, rather than hand-encoding counts that could bake a bug in as "expected".
+# the error taxonomy is the comparability yardstick and the source of decide()'s steady_confusion
+# tiebreaker. its precedence must partition every row into exactly one bucket; we assert that invariant
+# plus a couple of unambiguous cases, rather than hand-encoding counts that could bake a bug in.
 
 import numpy as np
 

@@ -1,9 +1,6 @@
-# per-file gyro trust + unit normalization
-# resolves the Deg->Gyro axis permutation and unit by MEASUREMENT (regress d(Deg)/dt
-# against each Gyro axis), then normalizes every gyro channel to deg/s.
-# does NOT determine sagittality -- that's a hardware fact with no in-file signature;
-# transform.py fixes the sagittal read to the Y plane for every file (Section 6.3). too-static
-# files abstain to the documented convention. see DOMAIN_NOTES Section 4.1/4.1b/6.2 and README.
+# per-file gyro trust + unit normalization: resolve the Deg->Gyro axis permutation and unit by
+# measurement (regress d(Deg)/dt against each Gyro axis), then normalize every channel to deg/s.
+# does NOT determine sagittality (a hardware fact with no in-file signature); transform.py fixes that (6.3).
 
 from __future__ import annotations
 
@@ -75,10 +72,8 @@ def detect_side(df: pd.DataFrame, side: str) -> dict | None:
         return None
     ddeg, gyro = got
 
-    # for each Deg axis, the best-matching Gyro axis and its r.
-    # r-floor is applied PER AXIS, not once to the side: Deg_Z is yaw-like and drifts
-    # rather than oscillates (Section 4.2), so d(Deg_Z)/dt is often noise even mid-walk --
-    # scoring the whole side would launder that into a fake anomaly (Section 11.1)
+    # for each Deg axis, the best-matching Gyro axis and its r. r-floor is applied PER AXIS, not once to
+    # the side: Deg_Z drifts rather than oscillates (Section 4.2), so d(Deg_Z)/dt is often noise mid-walk.
     match: dict[str, str | None] = {}
     r_by_axis: dict[str, float] = {}
     for A in GYRO_AXES:

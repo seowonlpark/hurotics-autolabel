@@ -1,7 +1,5 @@
-# adversarial probe for the S2 critic: does it actually bite?
-# feeds the real critic three proposals it must NOT approve -- a verbatim repeat, a
-# cosmetic repeat (same window_s under a new name), and a false-premise proposal -- and
-# fails if any is approved. writes to a throwaway dir, never the real ledger. see PLAN.
+# adversarial probe for the S2 critic: feed it three proposals it must NOT approve (verbatim repeat,
+# cosmetic repeat, false-premise) and fail if any is approved. writes to a throwaway dir, not the ledger.
 
 from __future__ import annotations
 

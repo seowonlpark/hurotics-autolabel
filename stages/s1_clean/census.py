@@ -1,7 +1,6 @@
-# schema resolution: resolve columns by name, never by position
-# the same index carries different columns across header shapes (e.g. index 47 is `loco`
-# in most files, `Step` in others), so name is the only safe key -- this is the one place
-# that decides what a column *is*
+# schema resolution: resolve columns by name, never by position. the same index carries different
+# cols across header shapes (index 47 is `loco` in most files, `Step` in others), so name is the
+# only safe key. the one place that decides what1 a column is.
 
 from __future__ import annotations
 
@@ -22,7 +21,7 @@ from stages.s1_clean.config import (
 _PREFIX = re.compile(COLUMN_PREFIX_PATTERN)
 
 
-# '47_loco' -> 'loco', '28_L LC' -> 'L LC'; whitespace normalized
+# whitespace normalized
 def strip_prefix(raw_column: str) -> str:
     return _PREFIX.sub("", raw_column.strip()).strip()
 

@@ -1,8 +1,6 @@
-# regression guard for the raw -> rev2 bridge
-# the model trains on labeled rev2 features but runs on raw CSVs; if raw_to_features stops
-# reproducing the labeled columns, that's silent train/serve skew nothing else would catch.
+# regression guard for the raw -> rev2 bridge. the model trains on labeled rev2 features but runs on raw
+# CSVs, so if raw_to_features stops reproducing the labeled columns that is silent train/serve skew.
 # pairs annotated trials with their raw source and asserts reproduction to float roundoff.
-# run after touching transform.py. see README.
 
 from __future__ import annotations
 

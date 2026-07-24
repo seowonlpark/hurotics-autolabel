@@ -1,10 +1,6 @@
-# S3 hypothesis agent: read the plots, write hypotheses grounded in real windows (read-only)
-# the deterministic core already computed the anchors, drew the figures, and gave every
-# anchor a rate-invariance verdict. this agent does the one thing code cannot: look at the
-# physics and say what it means -- but only ever about a NAMED window, and never leaning on
-# an anchor the audit called a grid artifact without saying so. it proposes hypotheses as
-# JSON; code validates the provenance gate and writes hypotheses.jsonl. the agent does not
-# label windows and does not train -- rule discovery, not fitting (Section 11.3). see README / PLAN.
+# S3 hypothesis agent (read-only): read the plots, write hypotheses grounded in real windows. proposes
+# hypotheses as JSON; code validates the provenance gate and writes hypotheses.jsonl. rule discovery,
+# not fitting (Section 11.3).
 
 from __future__ import annotations
 
@@ -15,8 +11,7 @@ from agents.base import MODEL_SMART, AgentSpec, extract_json_array, gate_and_wri
 from stages.s3_physics.anchors import ANCHOR_NAMES
 
 HYPOTHESES_FILENAME = "hypotheses.jsonl"
-# cumulative cross-run record, at the stable S3 dir (not the per-run folder); every run appends
-# its passers here and reads it back so a later run does not restate an earlier hypothesis
+# cumulative cross-run record at the stable S3 dir; every run appends passers and reads it back
 HYPOTHESES_LEDGER = "hypotheses_ledger.jsonl"
 
 CONFIDENCE_LEVELS = ("low", "medium", "high")
@@ -81,13 +76,12 @@ S3_HYPOTHESIS_AGENT = AgentSpec(
     allowed_tools=["Read", "Grep"], # Read renders the PNGs; Grep spot-checks anchors.csv
     model=MODEL_SMART,
     max_turns=30, # reading many figures costs turns
-    # rate/antialiasing + segments + channel trust + labels + swap rule + methodology
+    # rate/antialiasing, segments, channel trust, labels, swap rule, methodology
     domain_sections=("2", "3", "4", "5", "10", "11"),
 )
 
 
-# prior hypotheses earlier runs already recorded, compacted for the prompt; empty string when
-# there is no history, so the first run's prompt is unchanged
+# prior hypotheses earlier runs recorded, compacted for the prompt; empty string when no history
 def _prior_block(prior: list[dict]) -> str:
     if not prior:
         return ""
@@ -101,8 +95,7 @@ def _prior_block(prior: list[dict]) -> str:
     )
 
 
-# assemble the prompt: the rate-invariance verdicts, the disagreement ranking (which plots to
-# read first), the full plot inventory, and what earlier runs already claimed
+# assemble the prompt: rate-invariance verdicts, disagreement ranking, plot inventory, prior claims
 def build_prompt(audit: dict, disagreement: list[dict], plot_paths: list[str],
                  prior: list[dict] | None = None) -> str:
     verdicts = {a: audit["anchors"][a]["verdict"] for a in ANCHOR_NAMES}
@@ -133,8 +126,7 @@ def parse_hypotheses(final_text: str) -> list[dict] | None:
     return extract_json_array(final_text)
 
 
-# one evidence item carries window-level provenance: a rev, a trial, a real time window, and
-# at least one anchor/feature it points at
+# one evidence item carries window-level provenance: rev, trial, a real time window, >=1 anchor
 def _valid_evidence(ev: object) -> bool:
     if not isinstance(ev, dict):
         return False
@@ -149,11 +141,9 @@ def _valid_evidence(ev: object) -> bool:
     return bool(ev.get("anchors"))
 
 
-# the corpus's honest bound is subject generalization over a thin pool (DOMAIN NOTES Section 11),
-# so a hypothesis that recurs across revs is worth more than one seen in a single subject. code
-# measures that strength from the evidence windows and flags a self-reported 'high' the evidence
-# does not carry -- the agent still states its confidence, but it never stands unchecked
-# (principle 4: measure, then state). the S3 analogue of new-class's code-side cluster mass.
+# code-measured evidence strength from the evidence windows: a hypothesis that recurs across revs is
+# worth more than one seen in a single subject, and a self-reported 'high' the evidence can't carry is
+# flagged (Section 11).
 def _evidence_strength(h: dict) -> dict:
     evidence = [e for e in (h.get("evidence") or []) if isinstance(e, dict)]
     n_windows = len(evidence)
@@ -164,15 +154,14 @@ def _evidence_strength(h: dict) -> dict:
         tier = "moderate"
     else:
         tier = "weak"
-    # confidence outruns the evidence when 'high' rests on a single window (no recurrence at all)
+    # confidence outruns the evidence when 'high' rests on a single window
     exceeds = h.get("confidence") == "high" and tier == "weak"
     return {"n_windows": n_windows, "n_revs": n_revs, "tier": tier, "exceeds_evidence": exceeds}
 
 
-# enforce the PLAN S3 gate on one hypothesis: window-level provenance, valid confidence, and
-# every relied-on anchor carries its rate-invariance verdict. returns the verdict-annotated
-# hypothesis, plus a code-measured evidence_strength block that grounds its self-reported
-# confidence; ok=False means it fails the gate (recorded, but flagged, never silently kept).
+# enforce the PLAN S3 gate on one hypothesis: window-level provenance, valid confidence, every
+# relied-on anchor annotated with its rate-invariance verdict. ok=False means it fails the gate
+# (recorded but flagged, never silently kept).
 def validate_hypothesis(h: dict, verdicts: dict[str, str]) -> dict:
     reasons: list[str] = []
     warnings: list[str] = []
@@ -188,8 +177,8 @@ def validate_hypothesis(h: dict, verdicts: dict[str, str]) -> dict:
     elif not all(_valid_evidence(e) for e in evidence):
         reasons.append("an evidence item lacks rev/trial/time-window/anchors provenance")
 
-    # attach the rate-invariance verdict for every anchor the hypothesis leans on; a claim
-    # resting on a rate_dependent anchor is allowed but flagged unless it says so
+    # attach each relied-on anchor's rate-invariance verdict; a claim resting on a rate_dependent
+    # anchor is allowed but flagged unless it says so
     relied = [a for a in (h.get("relies_on") or []) if a in verdicts]
     rate_map = {a: verdicts[a] for a in relied}
     depended_dependent = [a for a in relied if verdicts[a] == "rate_dependent"]
@@ -203,9 +192,8 @@ def validate_hypothesis(h: dict, verdicts: dict[str, str]) -> dict:
             "validation": {"ok": not reasons, "reasons": reasons, "warnings": warnings}}
 
 
-# validate all, write one JSONL line per hypothesis (verdict-annotated); the raw agent text is
-# kept alongside for audit. passers are also appended to the cross-run ledger when one is given
-# (run_id ties them back to this run's folder). returns (path, n_ok, n_flagged).
+# validate all, write one JSONL line per hypothesis; passers append to the cross-run ledger when one
+# is given. returns (path, n_ok, n_flagged).
 def write_hypotheses(out_dir: Path, hypotheses: list[dict] | None, verdicts: dict[str, str],
                      final_text: str, ledger_path: Path | None = None,
                      run_id: str = "") -> tuple[Path, int, int]:

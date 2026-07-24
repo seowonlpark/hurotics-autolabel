@@ -186,7 +186,7 @@ async def run_s2_cycle(run_dir: Path) -> None:
         print(f"[s2] not run (critic: {verdict}); champion unchanged")
         return
 
-    # approved -- run it, deterministic from here on
+    # deterministic from here
     try:
         spec = ExperimentSpec(
             name=proposal["name"], rationale=proposal["rationale"],
@@ -211,9 +211,8 @@ async def run_s2_cycle(run_dir: Path) -> None:
     print(f"[s2] cost: experimenter ${ex_cost:.4f} + critic ${cr_cost:.4f}")
 
 
-# S3 physics: deterministic core computes anchors + audit + plots, then the hypothesis agent
-# reads the figures and writes hypotheses. code enforces the provenance gate before recording
-# -- an agent's claim is kept only if it points at a real window (PLAN S3).
+# S3 physics: core computes anchors + audit + plots, then the hypothesis agent reads the figures and
+# writes hypotheses. code enforces the provenance gate: a claim is kept only if it points at a real window.
 async def run_s3_physics(run_dir: Path) -> None:
     from stages.s3_physics.run import S3_OUT_DIR, run as run_s3_core
     from agents import s3_physics
@@ -279,10 +278,8 @@ async def run_s4_fusion(run_dir: Path) -> None:
     prompt = s4_fusion.build_prompt(metrics, S3_OUT_DIR / "plots", prior)
     res = await run_agent(s4_fusion.S4_FUSION_AGENT, prompt, run_dir)
 
-    # 3. gate -- code keeps a finding only if it carries window-level provenance AND measures each
-    # against the labels on the windows it cites: its fusion_verdict is checked against ground
-    # truth, and a finding pointing at no scored window is dropped. passers go to the cross-run
-    # ledger, traceable to this run
+    # 3. gate: keep a finding only with window-level provenance, and measure each against the labels on
+    # the windows it cites (fusion_verdict checked vs ground truth); passers go to the cross-run ledger
     windows = fused_windows_lookup(pd.read_csv(S4_OUT_DIR / FUSED_CSV))
     findings = s4_fusion.parse_review(res.final_text)
     path, n_ok, n_flagged = s4_fusion.write_review(
@@ -293,18 +290,16 @@ async def run_s4_fusion(run_dir: Path) -> None:
     else:
         print(f"[s4] {n_ok} findings passed the provenance gate, {n_flagged} flagged "
               f"-> {path.name}")
-        # #4 made visible: how the agent's fusion_verdicts held up against the labels
+        # how the agent's fusion_verdicts held up against the labels
         checks = _tally(path, lambda r: r.get("measurement", {}).get("verdict_check"))
         if checks:
             print(f"[s4] fusion_verdict vs ground truth: {checks}")
     print(f"[s4] cost: ${res.cost_usd:.4f}, turns={res.num_turns}")
 
 
-# S4 new-class discovery: the deterministic core assembles the evidence bundle (the NEW_CLASS
-# curation spans + their physics profiles), then the agent PROPOSES classes the {stand, walk}
-# taxonomy misses. governed (DOMAIN_NOTES Section 11.2): code validates cluster mass + provenance and
-# routes every proposal to needs_human -- it never adds a class, never touches the model, the
-# swap rule, the fuser, or a label. read-only, orthogonal to the deployed algorithm.
+# S4 new-class discovery: the core assembles the evidence bundle, then the agent PROPOSES classes the
+# {stand, walk} taxonomy misses. governed (Section 11.2): code validates cluster mass + provenance and
+# routes every proposal to needs_human, never adds a class.
 async def run_s4_newclass(run_dir: Path) -> None:
     from stages.s4_fusion.newclass import CANDIDATES_JSON, build_bundle
     from stages.s4_fusion.run import FUSED_CSV, S4_OUT_DIR

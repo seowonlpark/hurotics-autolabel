@@ -1,20 +1,9 @@
-# clean-room end-to-end runner: fresh clone + data/raw -> full pipeline -> S4 fusion report,
-# in order, gated, with no manual intervention between stages.
-#
-# two modes:
-#   python run_pipeline.py                # deterministic spine only (free, no API key)
-#   python run_pipeline.py --with-agents  # + the paid agent steps (needs ANTHROPIC_API_KEY)
-#   python run_pipeline.py --s2-cycle     # also run one champion/challenger cycle (paid, opt-in)
-#   python run_pipeline.py --s2-cycles N  # run N champion/challenger cycles back to back (paid)
-#
-# each step runs as its own subprocess (a fresh process per stage is the "no manual
-# intervention" guarantee) and must produce its gate artifact before the next step starts;
-# a missing artifact or a nonzero exit stops the run. the one exception is the champion seed,
-# which runs in-process because there is no standalone CLI for it (see seed_champion).
-#
-# the lockbox (rev8/rev13) is SPENT -- opened once, at the end of the build (DOMAIN_NOTES
-# Section 12.5). this runner never invokes stages/s4_fusion/lockbox.py; a clean-room run must
-# not re-score a sealed rev.
+# clean-room end-to-end runner: fresh clone + data/raw -> full pipeline -> S4 fusion report, gated, no
+# manual intervention. each stage runs as its own subprocess and must produce its gate artifact before
+# the next starts. the lockbox is SPENT, so this never invokes lockbox.py (Section 12.5).
+
+# modes: (default) deterministic spine only; --with-agents adds paid agent steps; --s2-cycle[s N]
+# runs champion/challenger cycles. see --help.
 
 from __future__ import annotations
 
@@ -31,12 +20,9 @@ RAW_DIR = REPO_ROOT / "data" / "raw"
 RUNS = REPO_ROOT / "runs"
 PY = sys.executable  # the venv's python, so subprocesses use the same interpreter
 
-# the champion is defined by its spec + git_sha (the replayable revert unit, DOMAIN_NOTES
-# Section 11.3 / USE.md). runs/ is gitignored, so a fresh clone has no champion.json. the
-# forest is deterministic (BASE_MODEL_PARAMS random_state=0), so re-running the spec through
-# run_experiment reproduces the recorded champion (drop_static_offset_family, LORO 0.8977)
-# exactly. the spec lives in the git-tracked stages/s2_ml/champion_spec.json, which every
-# promotion rewrites automatically -- no hand-sync with champion.json, and no second copy here.
+# the champion is defined by its spec + git_sha. runs/ is gitignored, so a fresh clone has no
+# champion.json; the forest is deterministic, so re-running the spec reproduces the recorded champion.
+# the spec lives in the git-tracked champion_spec.json, which every promotion rewrites automatically.
 
 
 # one pipeline step. exactly one of cmd / fn is set
@@ -70,10 +56,8 @@ def seed_champion() -> None:
     print(f"  champion seeded: LORO macro-F1 {result.macro_f1:.4f}")
 
 
-# the ordered pipeline. deterministic cores are free; agent steps are marked agent=True.
-# order matters: OOF is written after any champion change so it reflects the latest champion,
-# the champion joblib/model_meta are refit after the cycle for the same reason (s2_refit, which
-# skips itself when the cycle promoted nothing), and S4 fuse joins the champion OOF with S3 anchors
+# the ordered pipeline. deterministic cores are free; agent steps are marked agent=True. order matters:
+# OOF and the champion model are refit after any champion change, and S4 fuse joins the OOF with S3.
 def build_steps() -> list[Step]:
     return [
         Step("s1_census", "S1 census (measure the corpus)",

@@ -54,10 +54,8 @@ def test_evaluate_per_rev_breakdown():
 
 
 def test_per_rev_single_class_is_capped_at_half():
-    # KNOWN QUIRK: macro_f1 always averages over {stand, walk}, so a rev (or subset) that
-    # contains only one class is capped at 0.5 even when every prediction is correct -- the
-    # absent class contributes F1=0. per_rev_macro_f1 is a diagnostic, not the promotion gate,
-    # but a single-class rev's per-rev score should be read with this in mind.
+    # KNOWN QUIRK: macro_f1 averages over {stand, walk}, so a single-class rev caps at 0.5 even when
+    # every prediction is correct (the absent class contributes F1=0). per_rev_macro_f1 is a diagnostic.
     y = np.array([STAND, STAND])
     r = evaluate(y, y.copy(), groups=np.array(["revA", "revA"]))
     assert r.per_rev_macro_f1["revA"] == pytest.approx(0.5)

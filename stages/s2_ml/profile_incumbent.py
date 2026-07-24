@@ -1,8 +1,6 @@
-# profile the legacy rule-based algorithm (`loco`) through OUR error taxonomy
-# tests the [reported] claim that the rule-based algo fails differently from our
-# classifier (few steady_confusion, many swallowed) -- if true, a mandate to build S3.
-# runs `loco` as a prediction against the same ground truth on the paired recordings.
-# does NOT resurrect loco (Section 4.5 severed it); measuring how it fails != trusting it. see README.
+# profile the legacy rule-based algorithm (`loco`) through OUR error taxonomy: runs it as a prediction
+# against the same ground truth on the paired recordings, to test whether it fails differently from our
+# classifier. does NOT resurrect loco (Section 4.5); measuring how it fails is not trusting it.
 
 from __future__ import annotations
 

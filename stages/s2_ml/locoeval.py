@@ -1,8 +1,6 @@
-# locoeval: the blind measure layer -- emits objective numbers, NO opinion (Section 7).
-# headline metric is macro-F1 (Section 5.4): the corpus is ~83% walk, so accuracy flatters a
-# "predict walk always" model. -1 (human-unknown) is excluded from metrics, share reported.
-# does NOT invent the full Section 7 taxonomy (its precedence semantics are unspecified here) --
-# only the unambiguous parts: per-class rates, confusion, transition timing. see README.
+# locoeval: the blind measure layer, emits objective numbers with NO opinion (Section 7). headline
+# metric is macro-F1 (the corpus is ~83% walk, so accuracy flatters "predict walk always"); -1 windows
+# are excluded. reports only the unambiguous parts: per-class rates, confusion, transition timing.
 
 from __future__ import annotations
 

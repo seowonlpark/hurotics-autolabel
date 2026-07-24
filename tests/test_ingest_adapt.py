@@ -93,7 +93,7 @@ def test_scaffold_lists_available_columns_and_label_values():
     assert "label_values" in sc  # labeled target draws out the distinct label words to encode
 
 
-# --- raw target: an unlabeled recording for scoring, validated through the feature bridge ----
+# raw target: an unlabeled recording for scoring, validated through the feature bridge
 
 def _foreign_raw_sheet() -> pd.DataFrame:
     n = 8

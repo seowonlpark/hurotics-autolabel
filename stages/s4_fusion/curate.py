@@ -1,10 +1,6 @@
-# S4 curation: turn the confidence signal into a data-collection director.
-# the pipeline's most honest remaining lever is not more macro-F1 in code -- it is better
-# GROUND TRUTH (Section 12). this ranks the windows worth a human's attention into a worklist, and
-# routes each: relabel it (physics contradicts the label), characterise it as a possible new
-# class (structure the 2-class taxonomy misses -- governed, Section 11.2), or collect more of the
-# condition (a systematically hard regime). reads artifacts only (fused table + S3 anchors);
-# it directs the data effort, it never changes a label. see DOMAIN_NOTES Section 12.
+# S4 curation: turn the confidence signal into a data-collection worklist. ranks the windows worth a
+# human's attention and routes each: relabel (physics contradicts the label), new-class candidate
+# (governed, Section 11.2), or collect more. reads artifacts only; never changes a label (Section 12).
 
 from __future__ import annotations
 
@@ -19,9 +15,8 @@ from stages.s3_physics.anchors import STANDING, WALKING, AMBIGUOUS
 from stages.s3_physics.run import ANCHORS_CSV, S3_OUT_DIR
 from stages.s4_fusion.run import FUSED_CSV, S4_OUT_DIR, JOIN_KEYS
 
-# grav_stab below this in a STAND-labeled window = the posture is moving, not quiet stance --
-# the motion-contaminated "standing" that caps steady_confusion (Section 12). not fitted; grav_stab is
-# a [0,1] steadiness score and 0.5 is its natural midpoint between still and sweeping.
+# grav_stab below this in a STAND-labeled window = posture is moving, not quiet stance (Section 12). not
+# fitted; grav_stab is a [0,1] steadiness score and 0.5 is its midpoint between still and sweeping.
 GRAV_MOVING = 0.5
 
 # routes, most-actionable first
@@ -30,14 +25,9 @@ NEW_CLASS = "new_class_candidate" # structure the {stand,walk} taxonomy misses -
 COLLECT = "collect_more" # a systematically hard condition -> collect more of it
 
 
-# the route for one window, or None if it needs no attention. label is the human ground truth,
-# s2 the learned prediction, s3 the physics verdict, conf the fusion confidence, grav steadiness.
-# RELABEL requires BOTH independent models to contradict the label -- one model disagreeing is
-# usually that model's own error (physics over-calling slow gait, Section 10.6), not a mislabel; two
-# independent methods rarely share a failure, so their agreement against the label is the
-# strongest signal available. still only a *candidate*: a human confirms, code never edits a
-# label (non-negotiable #1; the "error_rate 1.00" against the label is disagreement by
-# construction, not proof of wrongness -- Section 12.2).
+# route for one window, or None if it needs no attention. RELABEL requires BOTH models to contradict
+# the label (one disagreeing is usually that model's own error); still only a candidate, a human
+# confirms and code never edits a label (Section 12.2).
 def route_window(label: int, s2: int, s3: str, conf: str, grav: float) -> str | None:
     if label == STAND and s2 == WALK and s3 == WALKING:
         return RELABEL # both models say WALK, human says STAND -> strong mislabel candidate

@@ -1,8 +1,6 @@
-# dense-stride inference: turn a windowed classifier into per-row predictions
-# slides the window at a small stride and assigns each prediction to rows around its
-# centre, so prediction resolution is the stride, not the window -- otherwise the ms-scale
-# error taxonomy couldn't see flicker. centre (not leading-edge) keeps transitions
-# unbiased. inference-side only, training unaffected. see README.
+# dense-stride inference: turn a windowed classifier into per-row predictions. slides the window at a
+# small stride and assigns each prediction to rows around its centre, so resolution is the stride, not
+# the window. centre (not leading-edge) keeps transitions unbiased. inference-side only.
 
 from __future__ import annotations
 

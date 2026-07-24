@@ -1,7 +1,6 @@
-# the agent auto-mapper PROPOSES a column mapping; code VALIDATES it through the same gate a
-# hand-written mapping passes. these stub the agent call (no API key, no network) and lock the
-# contract that matters: a good proposal is accepted and persisted, a wrong one is rejected with
-# the same loud error a bad hand-mapping raises -- the agent can never push through a bad mapping.
+# the agent auto-mapper PROPOSES a column mapping; code VALIDATES it through the same gate a hand map
+# passes. these stub the agent call and lock the contract: a good proposal is accepted and persisted, a
+# wrong one is rejected with the same loud error a bad hand-mapping raises.
 
 import pandas as pd
 import pytest

@@ -1,7 +1,6 @@
-# the S2 critic's 'revise' verdict is acted on, not a dead end: the orchestrator feeds the
-# critic's reasons back to the experimenter for one bounded retry, writing each attempt to its
-# own file so nothing is overwritten. these tests pin the pure pieces that make that safe -- the
-# attempt-filename scheme and the revision prompt block -- without touching the API.
+# the S2 critic's 'revise' verdict is acted on: the orchestrator feeds the reasons back for one bounded
+# retry, writing each attempt to its own file. these tests pin the pure pieces that make that safe (the
+# attempt-filename scheme and the revision prompt block) without touching the API.
 
 from agents import s2_critic, s2_experimenter
 from orchestrator import MAX_PROPOSE_ATTEMPTS, _attempt_name

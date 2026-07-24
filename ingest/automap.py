@@ -1,15 +1,10 @@
-# ingest/automap.py -- let an agent PROPOSE the column mapping, then let code validate it.
-#
-# ingest/adapt.py needs a mapping (which of your columns is Time, which is the left angle, how
-# your label words encode to STAND/WALK). Writing it by hand is the honest default; this module
-# is the assisted path: it shows an agent the target contract, your sheet's headers, a sample of
-# rows, and the distinct values of each low-cardinality column, and asks for the mapping JSON.
-#
-# The agent only PROPOSES. Its reply is run through ingest.adapt.apply_mapping -- the exact same
-# deterministic gate a hand-written mapping passes -- so a wrong guess fails loudly (unmapped
-# label value, mis-pointed column) rather than writing a mislabeled file. Same rule as every
-# other agent here: the model judges, code decides. It never touches your data.
-#
+# ingest/automap.py: let an agent PROPOSE the column mapping (which column is Time, which the left
+# angle, how label words encode), from the target contract + headers + a row sample. the assisted path;
+# writing the map by hand is the default.
+
+# the agent only proposes; its reply runs through the same ingest.adapt gate a hand map passes, so a
+# wrong guess fails loudly rather than writing a mislabeled file. never touches your data.
+
 #   python -m ingest.automap my_sheet.csv --target raw            # print the proposed mapping
 #   python -m ingest.automap my_sheet.csv --target raw --write    # propose, validate, and write
 

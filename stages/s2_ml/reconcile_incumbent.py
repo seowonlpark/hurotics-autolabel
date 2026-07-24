@@ -1,9 +1,6 @@
-# reconcile our champion against the incumbent `loco` on a COMMON footing
-# the naive 0.888-vs-0.519 steady_confusion gap compares shares of each model's own errors
-# on almost-disjoint recordings (7/8 loco pairs are the sealed rev13 lockbox), so the full
-# comparison is deferred to lockbox-open. what's scorable now: both predictors on the one
-# shared non-lockbox recording, same canonical rows, rate over a common denominator --
-# directional only, NOT a finding. see README / POSTDAY2 Section 5.3.
+# reconcile our champion against the incumbent `loco` on a COMMON footing. most loco pairs are the
+# sealed lockbox, so the full comparison is deferred to lockbox-open. what's scorable now: both
+# predictors on the one shared non-lockbox recording, same rows and denominator. directional, not a finding.
 
 from __future__ import annotations
 

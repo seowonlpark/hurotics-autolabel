@@ -1,7 +1,6 @@
-# the agent-reply JSON extractor is the first gate every agent output crosses: a model that
-# wraps its answer in prose or a code fence, or emits a worked example before the real answer,
-# must still be parsed to the intended value -- and unparseable garbage must fail safe to None
-# (every caller reads None as "did not parse" and escalates). these cases pin that contract.
+# the agent-reply JSON extractor is the first gate every agent output crosses: an answer wrapped in
+# prose or a code fence (or after a worked example) must still parse to the intended value, and garbage
+# must fail safe to None. these cases pin that contract.
 
 from agents.base import (
     _balanced_spans,

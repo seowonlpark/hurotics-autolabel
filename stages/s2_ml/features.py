@@ -1,8 +1,6 @@
-# S2 windowing + feature extraction: the model-agnostic boundary
-# feature selection lives HERE, not in the clean layer (Section 9); this is the surface the S2
-# experimenter proposes changes to. rules: never window across a gap, a mixed window is
-# `transition` (excluded from training, not forced), window length is an open tradeoff
-# (Section 9 -- slow gait runs to 0.13 Hz). see README / DOMAIN_NOTES.
+# S2 windowing + feature extraction: the model-agnostic boundary, and the surface the S2 experimenter
+# proposes changes to (Section 9). rules: never window across a gap; a mixed window is `transition`
+# (excluded from training); window length is an open tradeoff.
 
 from __future__ import annotations
 

@@ -61,10 +61,8 @@ def test_creates_missing_out_dir(tmp_path):
     assert path.exists()
 
 
-# ---- cross-run analyst ledger ---------------------------------------------
-# the analyst agents share one cumulative ledger so a later run sees what earlier runs recorded.
-# gate_and_write appends ONLY the passers (by is_ok), each stamped with the run that produced it;
-# read_ledger reads it back. flagged items and empty runs must not pollute the ledger.
+# cross-run analyst ledger. gate_and_write appends ONLY the passers (by is_ok), each stamped with its
+# run; read_ledger reads it back. flagged items and empty runs must not pollute the ledger.
 
 def test_ledger_appends_only_passers_stamped_with_run(tmp_path):
     ledger = tmp_path / "ledger.jsonl"

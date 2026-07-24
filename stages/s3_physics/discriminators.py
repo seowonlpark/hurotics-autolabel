@@ -1,23 +1,13 @@
-# S3 discriminator registry: the seam that lets the physics view carry MORE than stand/walk.
-# a discriminator is a named physical test that maps a window's anchors to a verdict. today there
-# is exactly one -- the swap rule (Section 10) -- and it is registered here as a bespoke CALLABLE,
-# its implementation unchanged (it lives in anchors.py, this only catalogs it). the point of the
-# registry is the OTHER kind: a new class gets a physics second-opinion by declaring a
-# ThresholdRule over the EXISTING anchor vocabulary -- antiphase, grav_stab, periodicity, ... --
-# not by hand-writing a new verdict function. a declarative rule can be rate-audited and reviewed
-# exactly like an S2 challenger spec ([S2-3]): bounded ops, known anchors, no arbitrary code, so
-# code can measure it and a human still decides (the S4 governance contract, Section 11.2).
-#
-# this module is pure infrastructure -- it imports nothing from anchors.py, so anchors.py can
-# register the swap rule at import time without a cycle. see README / DOMAIN_NOTES Section 10, Section 13.
+# S3 discriminator registry: a discriminator is a named physical test mapping anchors to a verdict. the
+# swap rule is a bespoke callable; a new class declares a ThresholdRule over the anchor vocabulary, so its
+# test is auditable data. pure infrastructure, imports nothing from anchors.py to avoid a cycle (Section 13).
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable
 
-# the comparison ops a declarative rule may use -- bounded on purpose, the S2 validate_spec
-# discipline ([S2-3]): a discriminator spec is data, so its vocabulary is closed and reviewable.
+# comparison ops a declarative rule may use; bounded on purpose so a spec stays closed and reviewable
 _OPS: dict[str, Callable[[float, float], bool]] = {
     "<": lambda a, b: a < b,
     "<=": lambda a, b: a <= b,
@@ -27,8 +17,7 @@ _OPS: dict[str, Callable[[float, float], bool]] = {
 
 
 # a declarative discriminator body: ALL clauses must hold for the rule to fire. each clause is
-# (anchor, op, value), read over the flat anchor dict window_anchors already produces. no arbitrary
-# code -- this is why a proposed class's physics test can be audited instead of trusted.
+# (anchor, op, value), read over the flat anchor dict window_anchors produces.
 @dataclass(frozen=True)
 class ThresholdRule:
     clauses: tuple[tuple[str, str, float], ...]
@@ -41,11 +30,9 @@ class ThresholdRule:
         return True
 
 
-# one registered discriminator. verdict_of maps a window's anchor dict to a verdict string; a
-# bespoke `callable` (the swap rule) carries validated physics too subtle for a threshold, while a
-# `threshold` is built from a declarative spec via from_spec. origin marks provenance: `code` is a
-# built-in the pipeline trusts, `proposed` is an agent/human spec that -- like every S4 proposal --
-# still routes to a human before it can change a call (Section 11.2).
+# one registered discriminator. verdict_of maps a window's anchor dict to a verdict string; kind is
+# `callable` (bespoke physics) or `threshold` (declarative spec). origin marks provenance: `code` is a
+# trusted built-in, `proposed` still routes to a human before it can change a call (Section 11.2).
 @dataclass(frozen=True)
 class Discriminator:
     name: str                          # registry key
@@ -59,8 +46,7 @@ class Discriminator:
 _REGISTRY: dict[str, Discriminator] = {}
 
 
-# register a discriminator; a duplicate name is a bug (two classes fighting over one key), not a
-# silent overwrite -- fail loud, the [X-3] no-silent-mutation discipline applied to the catalog.
+# register a discriminator; a duplicate name fails loud rather than silently overwriting
 def register(d: Discriminator) -> Discriminator:
     if d.name in _REGISTRY:
         raise ValueError(f"discriminator {d.name!r} already registered")
@@ -77,10 +63,8 @@ def registry() -> dict[str, Discriminator]:
     return dict(_REGISTRY)
 
 
-# the gate a declarative spec must clear before it becomes a discriminator: a non-empty list of
-# {anchor, op, value} clauses, every anchor drawn from the known vocabulary, every op bounded, every
-# threshold a finite number. the S3 analogue of S2 validate_spec ([S2-3]) -- a proposed physics test
-# is data, and data that does not clear this gate never runs. raises ValueError on the first fault.
+# the gate a declarative spec must clear: a non-empty list of {anchor, op, value} clauses, every anchor
+# known, every op bounded, every threshold finite. raises ValueError on the first fault.
 def validate_spec(spec: object, known_anchors: set[str]) -> None:
     if not isinstance(spec, list) or not spec:
         raise ValueError("discriminator spec must be a non-empty list of clauses")
@@ -99,10 +83,8 @@ def validate_spec(spec: object, known_anchors: set[str]) -> None:
             raise ValueError(f"threshold value must be finite, got {c['value']!r}")
 
 
-# build a discriminator from a validated declarative spec. it emits `emits` when every clause holds
-# and `negative` (default "", i.e. abstain) otherwise. origin defaults to `proposed`: a spec that
-# came from outside the built-in physics is needs_human until a person adopts it (Section 11.2). this
-# is the whole extension path -- a new class's physics second-opinion, with no new verdict code.
+# build a discriminator from a validated declarative spec: emits `emits` when every clause holds,
+# else `negative` (default "", abstain). origin defaults to `proposed`, needs_human until adopted.
 def from_spec(name: str, emits: str, spec: list, known_anchors: set[str],
               negative: str = "", origin: str = "proposed") -> Discriminator:
     validate_spec(spec, known_anchors)

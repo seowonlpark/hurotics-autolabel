@@ -1,11 +1,6 @@
-# S4 new-class discovery agent: propose classes the {stand, walk} taxonomy misses -- and NOTHING
-# more. the deterministic core (stages/s4_fusion/newclass.py) already isolated the candidate
-# spans: STAND-labeled windows the physics reads as MOVING but not clean gait. this agent does
-# the one thing code cannot -- look at a span's physics profile + the S3 figure and say "these
-# look like the same THING, and here is what it is" (a ramp, a sit, a repositioning). it is a
-# PROPOSER under a hard governance contract (DOMAIN_NOTES Section 11.2): it never adds a class, never
-# edits a label, never touches the S2 model / S3 rule / fuser. code validates cluster mass and
-# provenance, then routes every proposal to needs_human. read-only (Read/Grep).
+# S4 new-class discovery agent (read-only): propose classes the {stand, walk} taxonomy misses, from
+# the candidate spans the core already isolated. a PROPOSER under a hard governance contract (Section
+# 11.2): never adds a class, never relabels. code validates cluster mass + provenance, routes to needs_human.
 
 from __future__ import annotations
 
@@ -15,8 +10,7 @@ from pathlib import Path
 from agents.base import MODEL_SMART, AgentSpec, extract_json_array, gate_and_write
 
 PROPOSALS_FILENAME = "new_class_proposals.jsonl"
-# cumulative cross-run record at the stable S4 dir; every run appends its supported proposals
-# and reads them back so a later run does not re-propose a class an earlier run already surfaced
+# cumulative cross-run record at the stable S4 dir; every run appends supported proposals and reads back
 NEWCLASS_LEDGER = "new_class_ledger.jsonl"
 
 CONFIDENCE_LEVELS = ("low", "medium", "high")
@@ -74,13 +68,12 @@ S4_NEWCLASS_AGENT = AgentSpec(
     allowed_tools=["Read", "Grep"], # Read renders the S3 PNGs + json; Grep slices the candidates
     model=MODEL_SMART,
     max_turns=30,
-    # labels + swap rule + methodology (incl. 11.2 invented-category) + fusion/new-class
+    # labels, swap rule, methodology (incl. 11.2 invented-category), fusion/new-class
     domain_sections=("5", "10", "11", "12"),
 )
 
 
-# classes earlier runs already proposed (and code found supported), compacted for the prompt;
-# empty string when there is no history, so the first run's prompt is unchanged
+# classes earlier runs proposed and code found supported, compacted for the prompt; empty when no history
 def _prior_block(prior: list[dict]) -> str:
     if not prior:
         return ""
@@ -94,8 +87,7 @@ def _prior_block(prior: list[dict]) -> str:
     )
 
 
-# assemble the prompt: the corpus signature, the top candidate spans, the files to read, and
-# the classes earlier runs already surfaced
+# assemble the prompt: corpus signature, top candidate spans, files to read, prior classes
 def build_prompt(bundle: dict, plot_dir: Path, prior: list[dict] | None = None) -> str:
     sig = bundle["corpus_signature"]
     top = bundle["spans"][:16]
@@ -120,10 +112,9 @@ def parse_proposals(final_text: str) -> list[dict] | None:
     return extract_json_array(final_text)
 
 
-# validate every proposal (cluster mass + provenance) and write one JSONL line each, plus the
-# raw text alongside. every line is needs_human. returns (path, n_supported, n_insufficient).
-# a proposal "passes" on cluster mass (validation.support == "supported"), not the plain
-# validation.ok the other stages use -- hence the is_ok override.
+# validate every proposal (cluster mass + provenance) and write one JSONL line each; every line is
+# needs_human. passes on validation.support == "supported", not plain validation.ok (hence the is_ok
+# override). returns (path, n_supported, n_insufficient).
 def write_proposals(out_dir: Path, proposals: list[dict] | None, spans: list[dict],
                     final_text: str, ledger_path: Path | None = None,
                     run_id: str = "") -> tuple[Path, int, int]:

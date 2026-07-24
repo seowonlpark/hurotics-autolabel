@@ -1,10 +1,6 @@
-# S3 plots: the multimodal surface the hypothesis agent reads
-# the agent cannot see the corpus; these figures ARE its evidence. each per-trial figure
-# stacks three views on one time axis -- the two leg angles under the HUMAN label band, the
-# interleg swap signal the swap rule reads (Section 10), and the anchor timeline -- so the agent can
-# point a hypothesis at a real window in seconds. the labels are drawn as the BACKGROUND, not
-# the truth: where the physics track disagrees with the band is exactly what S3 is for
-# (slow walking still labeled WALK, split-stance standing, Section 10.3). see README / PLAN S3.
+# S3 plots: the multimodal surface the hypothesis agent reads; the figures ARE its evidence. each
+# per-trial figure stacks three views on one time axis (leg angles, interleg swap signal, anchor
+# timeline). labels are drawn as the BACKGROUND, so physics-vs-label disagreement is visible (Section 10).
 
 from __future__ import annotations
 
@@ -52,8 +48,8 @@ def _shade_labels(ax, t_s: np.ndarray, labels: np.ndarray) -> None:
         ax.axvspan(t0, t1, facecolor=face, alpha=0.5, linewidth=0)
 
 
-# one 3-panel figure for a trial; returns the PNG path. segments are drawn separately so a
-# line never bridges a gap (Section 3.1).
+# one 3-panel figure for a trial; returns the PNG path. segments drawn separately so no line
+# bridges a gap (Section 3.1).
 def plot_trial(trial: Trial, out_dir: Path, spec: WindowSpec | None = None) -> Path:
     spec = spec or WindowSpec()
     frame = trial.frame
@@ -61,8 +57,7 @@ def plot_trial(trial: Trial, out_dir: Path, spec: WindowSpec | None = None) -> P
     anchors = trial_anchors(trial, spec)
     wt = (anchors["t_start_ms"] - t0_ms) / 1000.0 if not anchors.empty else np.array([])
 
-    # flag a poisoned rest zero: on the ~2/28 files that do not begin at rest the swap calls
-    # rest on a fallback span (Section 10.5), so the agent should discount this file's verdicts
+    # flag an untrusted rest zero (file does not begin at rest, Section 10.5) so the agent discounts it
     rest_note = ("  [!] rest zero untrusted (file does not begin at rest)"
                  if not anchors.empty and not bool(anchors["rest_offset_trusted"].iloc[0])
                  else "")
@@ -89,10 +84,8 @@ def plot_trial(trial: Trial, out_dir: Path, spec: WindowSpec | None = None) -> P
                 for c, n in LABEL_STYLE.values()]
     ax1.legend(handles=handles, loc="upper right", ncol=5, fontsize=8, framealpha=0.9)
 
-    # panel 2: the swap signal L_ang - R_ang with the +/-1 deg commit bands and the swap
-    # rule's STRIDE-ADAPTIVE verdict as dots at the top (Section 10.6 -- window sized to local cadence,
-    # so slow gait a fixed 2 s window can't resolve is not misread as STANDING). the physics
-    # call over the label band; this is the verdict the disagreement ranking is built on.
+    # panel 2: swap signal L_ang - R_ang with +/-1 deg commit bands and the stride-adaptive verdict
+    # as dots at the top (Section 10.6). this is the verdict the disagreement ranking is built on.
     ax2.axhline(SWAP_DELTA_DEG, color="#888", ls="--", lw=0.7)
     ax2.axhline(-SWAP_DELTA_DEG, color="#888", ls="--", lw=0.7)
     ax2.axhline(0, color="#bbb", lw=0.5)
@@ -106,7 +99,7 @@ def plot_trial(trial: Trial, out_dir: Path, spec: WindowSpec | None = None) -> P
                    title="swap verdict (stride-adaptive)")
     ax2.set_ylabel("L_ang - R_ang (deg)")
 
-    # panel 3: anchor timeline. the bounded anchors (gait_hz was dropped Section 10.8).
+    # panel 3: bounded anchor timeline
     if not anchors.empty:
         ax3.plot(wt, anchors["antiphase"], color="#9467bd", lw=1.0, label="antiphase")
         ax3.plot(wt, anchors["periodicity"], color="#2ca02c", lw=1.0, label="periodicity")
@@ -125,8 +118,7 @@ def plot_trial(trial: Trial, out_dir: Path, spec: WindowSpec | None = None) -> P
     return path
 
 
-# one corpus bar chart of the rate-invariance audit: per-anchor change vs the tolerance,
-# coloured by verdict. the visual companion to rate_audit.json.
+# corpus bar chart of the rate audit: per-anchor change vs tolerance, coloured by verdict
 def plot_rate_audit(report: dict[str, dict], out_dir: Path) -> Path:
     anchors = list(ANCHOR_NAMES)
     deltas = [report[a]["median_delta"] for a in anchors]

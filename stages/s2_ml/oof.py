@@ -1,9 +1,6 @@
-# S2 out-of-fold predictions as a stage artifact, so S4 fusion joins a file rather than
-# recomputing the model (filesystem is the interface, PLAN principle 2). reproduces the
-# CHAMPION exactly -- its full spec (dropped features, window/stride, model params via
-# champion_config), same leave-one-rev-out folds, so every window is scored only by a model
-# that never saw its rev -- and adds the class probability the hard-label CV path (train.loro)
-# discards. lockbox never enters: OOF is over training revs only.
+# S2 out-of-fold predictions as a stage artifact, so S4 fusion joins a file rather than recomputing the
+# model. reproduces the CHAMPION exactly (full spec, same leave-one-rev-out folds, so every window is
+# scored only by a model that never saw its rev) and adds the class probability. lockbox never enters.
 
 from __future__ import annotations
 
@@ -27,10 +24,8 @@ OOF_CSV = "oof_champion.csv"
 META_KEYS = ["rev", "trial", "segment", "t_start_ms", "label"]
 
 
-# leave-one-rev-out out-of-fold (prediction, max-class probability) for the FULL champion spec
-# -- its dropped features, window/stride, AND model params (champion_config), so oof_champion.csv
-# is the real champion's fusion input, not a default-window/default-param stand-in that would
-# silently describe a different model the moment a non-default champion is promoted.
+# leave-one-rev-out out-of-fold (prediction, max-class probability) for the FULL champion spec (features,
+# window/stride, model params), so oof_champion.csv is the real champion's fusion input, not a default stand-in.
 def champion_oof(out_dir: Path = S2_OUT_DIR, spec: WindowSpec | None = None) -> pd.DataFrame:
     wspec, params, drops = resolve_champion(out_dir, window_override=spec)
     windows = build_windows(load_dataset(), wspec)

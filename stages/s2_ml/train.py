@@ -1,13 +1,9 @@
-# S2 train: fit a model, score it honestly, write the artifacts
-# deterministic core of the champion/challenger loop (PLAN S2); reports numbers, never
-# decides "best". enforces in code: the lockbox is never touched, and validation is
-# leave-one-rev-out (one subject/day held out = the deployment question). see README.
-#
-# the persisted artifacts (champion.joblib, model_meta.json) honor the CHAMPION SPEC by
-# default: it loads stages/s2_ml/champion_spec.json (the git-tracked seed every promotion
-# rewrites) and applies its drop_features / window_s / model_params before fitting, so the
-# saved model is the real champion, not the full-feature baseline. --full ignores the spec
-# and trains on every feature (the baseline, for comparison); --spec PATH points elsewhere.
+# S2 train: fit a model, score it honestly, write the artifacts. deterministic core of the
+# champion/challenger loop; reports numbers, never decides "best". the lockbox is never touched, and
+# validation is leave-one-rev-out (one subject/day held out = the deployment question).
+
+# the persisted artifacts honor the CHAMPION SPEC by default (loads champion_spec.json and applies its
+# drops / window / params before fitting). --full trains on every feature; --spec PATH points elsewhere.
 
 from __future__ import annotations
 
@@ -74,10 +70,9 @@ def render_taxonomy(agg: dict, stride_s: float) -> str:
     return "\n".join(lines)
 
 
-# one leave-one-rev-out pass -> (y_true, y_pred, taxonomy|None). the fold that holds a rev
-# out scores that rev's windows (OOF) and, when taxonomy is asked, its rows via dense
-# inference -- one model per rev, used for both, so the identical LORO forests are never
-# refit a second time. a rev's rows are only ever scored by a model that never saw that rev.
+# one leave-one-rev-out pass -> (y_true, y_pred, taxonomy|None). the fold holding a rev out scores that
+# rev's windows (OOF) and, when taxonomy is asked, its rows via dense inference: one model per rev, used
+# for both. a rev's rows are only ever scored by a model that never saw that rev.
 def loro(trials, train_df: pd.DataFrame, feats: list[str], spec: WindowSpec,
          stride_s: float, taxonomy: bool,
          params: dict | None = None) -> tuple[np.ndarray, np.ndarray, dict | None]:

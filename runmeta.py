@@ -1,7 +1,5 @@
-# run provenance shared across the pipeline -- the single definition of git_sha(), which the
-# orchestrator (run_meta.json) and the s2 ledger/champion records both stamp. runs/ is
-# gitignored, so every recorded artifact carries the commit it was produced at; a lone helper
-# here keeps that one fact from drifting between two hand-copied definitions.
+# run provenance shared across the pipeline: the single definition of git_sha(), stamped by the
+# orchestrator and the s2 ledger/champion records so every recorded artifact carries its commit.
 
 from __future__ import annotations
 

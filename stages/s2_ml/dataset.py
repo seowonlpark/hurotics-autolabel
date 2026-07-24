@@ -1,7 +1,6 @@
-# S2 dataset: load the labeled rev* trials onto the canonical grid, split by rev
-# the rev2 view: 4 rotational features (L/R_ang_LPF, L/R_angvel_LPF) + Label (Section 5.7).
-# reuses S1's resampler (canonical 100 Hz grid) and groups by rev (one subject/day),
-# lockbox holds out whole revs so nothing leaks. does NOT window or train. see README.
+# S2 dataset: load the labeled rev* trials onto the canonical grid, split by rev. the rev2 view: 4
+# rotational features + Label (Section 5.7). reuses S1's resampler, groups by rev (one subject/day), and
+# the lockbox holds out whole revs so nothing leaks. does NOT window or train.
 
 from __future__ import annotations
 
