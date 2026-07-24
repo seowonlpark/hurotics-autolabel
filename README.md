@@ -232,7 +232,8 @@ being overwritten:
   overview.
 
 **The trained model (`.joblib`)** - `runs/s2_ml/champion.joblib`, the saved classifier itself, ready
-to score new data.
+to score new data. It is refit from the champion spec on every run (and right after a champion/challenger
+cycle), so it always matches the `champion.json` definition rather than drifting from it.
 
 **Per-run agent logs (agents)** - each agent step also writes a timestamped `runs/<date>_runN/` folder
 holding its prompt, tool log, and cost, so any AI decision can be traced back to exactly what it saw.
