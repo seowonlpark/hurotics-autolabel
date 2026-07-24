@@ -1,0 +1,388 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{enumitem}
+
+% ----- light notation helpers -----
+\newcommand{\Lang}{\theta_{L}}          % left leg angle
+\newcommand{\Rang}{\theta_{R}}          % right leg angle
+\newcommand{\Lvel}{\omega_{L}}          % left leg angular velocity
+\newcommand{\Rvel}{\omega_{R}}          % right leg angular velocity
+\newcommand{\ileg}{d}                   % interleg signal
+\newcommand{\degs}{^{\circ}}            % degree symbol (\degs is reserved in LaTeX)
+\newcommand{\sgn}{\operatorname{sgn}}
+\newcommand{\ptp}{\operatorname{ptp}}
+\newcommand{\corr}{\rho}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+\title{S3 Physics: The Model-Free View of a Gait Window}
+\author{h-care pipeline, stage S3}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Stage S3 turns a window of two-leg inertial data into a small set of physical
+claims about the body, computed with no fitted parameters. The centerpiece is the
+\emph{swap rule}: a walk/stand call built from the geometry of the legs alternating,
+not from a trained boundary. Around it sit four \emph{anchors} (periodicity,
+antiphase, gravitational stability, gyroscopic energy), each of which is then put
+through a rate-invariance audit that keeps only the anchors describing the body and
+discards the ones that secretly describe the sampling grid. This note states the
+physics and the exact quantities the code computes.
+\end{abstract}
+
+\section{Signals and windowing}
+
+Each recording provides four low-pass-filtered channels sampled at a canonical rate
+$f_s = 100~\text{Hz}$:
+\[
+\Lang(t),\quad \Rang(t) \quad[\degs], \qquad
+\Lvel(t),\quad \Rvel(t) \quad[\degs/\text{s}],
+\]
+the left/right leg tilt angles and their angular velocities. Analysis proceeds on
+non-overlapping windows of length $T = 2~\text{s}$, i.e. $N = \lfloor T f_s \rceil = 200$
+samples, and windows never straddle a recording gap.
+
+The single most informative construction is the \textbf{interleg signal}, the
+difference of the two leg angles:
+\begin{equation}
+\ileg(t) \;=\; \Lang(t) - \Rang(t).
+\label{eq:interleg}
+\end{equation}
+When the legs swing in opposition (walking), $\ileg$ oscillates through zero with
+large amplitude. When the body is still (standing), $\ileg$ sits near a constant.
+The plausible cadence band for this population is
+$[\,f_\text{lo}, f_\text{hi}\,] = [\,0.13, 3.0\,]~\text{Hz}$. Since the interleg signal
+completes one cycle per stride and a stride is two steps, that is about 16 to 360 steps
+per minute, a deliberately permissive bound. Every lag-based quantity below is restricted
+to periods inside this band.
+
+\section{The swap rule: a zero-parameter walk/stand call}
+
+Walking is the legs \emph{alternating}. The swap rule measures exactly that: how many
+times the interleg signal commits to one leg leading, then commits to the other. It
+uses one physically-motivated constant, the commit threshold
+\begin{equation}
+\delta = 1.0\degs,
+\end{equation}
+set at or just above five times the standing noise: five times the raw standing noise
+measured $0.76$ to $0.88\degs$ across files (so the raw floor is about $0.15$ to
+$0.18\degs$), and $\delta$ rounds that up to $1.0\degs$. It is a noise gate, not a tuned
+decision boundary: a commit must clear real motion, not jitter.
+
+\subsection{Committed crossings with hysteresis}
+
+Scan $\ileg$ sample by sample and maintain a committed side
+$s \in \{+1, -1, 0\}$ (start uncommitted, $s=0$). A new commit is recorded only when
+the signal clears the floor \emph{on the opposite side} to the last commit:
+\begin{equation}
+\text{record } +1 \text{ if } \ileg > +\delta \text{ and } s \neq +1;
+\qquad
+\text{record } -1 \text{ if } \ileg < -\delta \text{ and } s \neq -1,
+\end{equation}
+updating $s$ to the recorded side each time. Small wiggles that do not cross
+$\pm\delta$, and repeat excursions to the side already held, change nothing: this is
+hysteresis. By construction the recorded commits strictly alternate in sign, so the
+number of alternations (the \textbf{swap count}) is
+\begin{equation}
+K \;=\; \max\!\big(0,\; m - 1\big),
+\end{equation}
+where $m$ is the number of recorded commits.
+
+\subsection{The discrete verdict}
+
+The swap count maps to a three-way verdict:
+\begin{equation}
+\text{verdict}(K) =
+\begin{cases}
+\textsc{standing}, & K = 0,\\[2pt]
+\textsc{ambiguous}, & K = 1,\\[2pt]
+\textsc{walking}, & K \geq 2.
+\end{cases}
+\label{eq:verdict}
+\end{equation}
+The $K=1$ case is genuinely ambiguous rather than a fudge factor: one leg passing the
+other happens both when you take a step and when you shift your weight. Two full
+alternations ($K \geq 2$) is the smallest unambiguous signature of a stride.
+
+\section{The per-file rest zero}
+
+The raw interleg signal carries a constant per-subject offset from sensor mounting and
+zeroing. If that offset is large, $\ileg$ can stay above $-\delta$ through real gait,
+so the swap rule never commits to the second side and misreads walking as standing.
+The fix is to recenter $\ileg$ on the value it holds at rest.
+
+Let $c$ be the \textbf{rest zero}, estimated as the median of $\ileg$ over a still span,
+and used only inside the swap count:
+\begin{equation}
+K \;=\; \text{swap\_count}\big(\ileg - c\big).
+\end{equation}
+The posture descriptors of Section~\ref{sec:anchors} deliberately stay on raw $\ileg$,
+because there the offset \emph{is} the posture.
+
+\paragraph{Choosing the span, label-free.} A span qualifies as rest by the swap rule's
+own standing verdict, applied on its locally centered copy:
+\begin{equation}
+\text{is\_rest}(\text{span}) \iff
+\text{swap\_count}\big(\text{span} - \operatorname{median}(\text{span})\big) = 0.
+\end{equation}
+The estimator then chooses:
+\begin{enumerate}[leftmargin=2em, itemsep=2pt]
+  \item the opening $3~\text{s}$ if it is rest (recordings usually begin at rest); else
+  \item the median of the stillest true-rest span anywhere in the file, ranked by the
+        smallest peak-to-peak interleg range $\ptp(\ileg)$ (offset-free, so it ranks
+        stillness, not posture); else
+  \item the whole-file median, returned flagged as \emph{untrusted} (the recording
+        never rests).
+\end{enumerate}
+Reusing the validated standing verdict rather than inventing a new stillness threshold
+keeps this step parameter-free.
+
+\section{Stride-adaptive analysis span}
+
+A fixed $2~\text{s}$ window holds fewer than two strides once the stride period
+approaches $2~\text{s}$, so slow gait reads $K \in \{0,1\}$ and is under-called. Since
+the deployment population (assistive and rehab gait) lives in exactly this slow regime,
+the swap count is evaluated over a span sized to the local stride period.
+
+\subsection{Stride period by autocorrelation}
+
+For the centered interleg segment $x = \ileg - \operatorname{mean}$ of length $n$ (the
+same signal the swap rule reads; an in-phase non-gait motion leaves $\ileg$ flat and so
+yields no spurious period to grow the window on), form the normalized autocorrelation at
+lag $k$:
+\begin{equation}
+r(k) \;=\; \frac{\displaystyle\sum_{i} x_i\, x_{i+k}}{\displaystyle\sum_{i} x_i^2},
+\qquad r(0) = 1.
+\end{equation}
+Restrict the lag to the cadence band,
+$k \in [\,k_\text{lo}, k_\text{hi}\,]$ with
+$k_\text{lo} = \lfloor f_s / f_\text{hi} \rceil$ and
+$k_\text{hi} = \lfloor f_s / f_\text{lo} \rceil$. The stride period is the first
+\emph{local maximum after the autocorrelation first dips below zero}:
+\begin{equation}
+k^{\star} = \argmax_{k \,\geq\, k_0} r(k),
+\qquad
+k_0 = \min\{\,k : r(k) < 0\,\},
+\end{equation}
+accepted only if $r(k^{\star}) \geq 0.35$ (a rhythm strong enough to be gait). Skipping
+the lag-0 shoulder is essential: a plain $\argmax$ over all lags grabs the
+monotonic-decay shoulder at the shortest lag and reports the floor period, not the true
+one. If the ACF never dips (no full cycle resolved) or the peak is too weak, no period
+is returned and the base window is kept (standing has no detectable period).
+
+\subsection{Sizing the swap window}
+
+Let the base half-window be $N/2$ and the cap be
+$H_\text{max} = \lfloor H_{\max,s}\, f_s / 2 \rceil$ with $H_{\max,s} = 6~\text{s}$. Given a
+detected period $k^{\star}$, the half-span used for the swap count at a cell center is
+\begin{equation}
+h =
+\begin{cases}
+N/2, & \text{no period detected (standing),}\\[2pt]
+\operatorname{clip}\big(k^{\star},\; N/2,\; H_\text{max}\big), & \text{periodic (about two strides).}
+\end{cases}
+\end{equation}
+The verdict is then \eqref{eq:verdict} evaluated on $\ileg$ over
+$[\,c_\text{cell}-h,\; c_\text{cell}+h\,]$. Standing windows are never lengthened, so a
+still bout is not stretched into its walking neighbors.
+
+\section{The grow fallback}
+
+Some slow, large-amplitude strides defeat the period detector: it returns no period,
+the window stays at $2~\text{s}$, holds a single hump, and reads $K=1$. As a rescue,
+whenever the adaptive verdict is \emph{not} walking, the swap count is recomputed over
+the full $6~\text{s}$ cap and promoted to \textsc{walking} only if that span
+\emph{genuinely alternates}. Over halves $A$ (first) and $B$ (second) of the max span,
+all three conditions must hold:
+\begin{equation}
+\min\big(\ptp(d_A),\, \ptp(d_B)\big) \geq 8\degs,
+\qquad
+-\corr(\Lang, \Rang) \geq 0.5,
+\qquad
+K_{\text{max span}} \geq 2.
+\end{equation}
+The peak-to-peak gate requires a real swing on both sides of the window (not jitter or a
+one-sided excursion). The anti-correlation gate is the key discriminator: two stray
+standing weight-shifts can also produce $K=2$ over $6~\text{s}$, but their legs are not
+antiphase, so requiring leg anti-correlation prevents merging them into a false walk.
+This is a geometric test of alternation, not a second period detector, so it sidesteps
+the failure mode it is rescuing.
+
+\section{The four anchors}
+\label{sec:anchors}
+
+An anchor is a claim about the body. S3 reports four, each a scalar per window, and each
+required to carry a rate-invariance verdict (Section~\ref{sec:audit}).
+
+\paragraph{Antiphase.} The legs swing in opposition during gait. With Pearson
+correlation $\corr$,
+\begin{equation}
+\text{antiphase} \;=\; -\,\corr\big(\Lang, \Rang\big) \in [-1, 1],
+\end{equation}
+signed so that larger means more antiphase. This is \emph{necessary but not sufficient}
+for walking: gait requires the legs to alternate, so walking is antiphase; but non-gait
+alternating movements (weight shifts, rocking) are antiphase too, so antiphase alone
+cannot confirm gait. (In-phase motions such as a ramp or sit-to-stand are positively
+correlated, so a low or negative value here rules gait out.)
+
+\paragraph{Gravitational stability.} Steadiness of the gravity-referenced tilt. With
+$\sigma_L, \sigma_R$ the standard deviations of the two leg angles in the window,
+\begin{equation}
+\text{grav\_stab} \;=\; \frac{1}{1 + \tfrac{1}{2}\big(\sigma_L + \sigma_R\big)} \in (0, 1].
+\end{equation}
+It approaches $1$ when posture holds still (standing) and falls toward $0$ when the tilt
+sweeps (walking).
+
+\paragraph{Periodicity.} Rhythm \emph{strength}, amplitude-independent. Using the same
+normalized autocorrelation $r(k)$ per leg, take the tallest peak at a nonzero lag whose
+period is a plausible stride and short enough that at least two cycles fit in the window
+($k \leq n/2$):
+\begin{equation}
+p(x) \;=\; \operatorname{clip}\!\Big(\max_{k_\text{lo} \leq k \leq n/2} r(k),\; 0,\; 1\Big),
+\qquad
+\text{periodicity} \;=\; \tfrac{1}{2}\big(p(\Lang) + p(\Rang)\big).
+\end{equation}
+Here $1.0$ is perfectly periodic and $\approx 0$ is no rhythm. It is a within-window
+property (steady rhythm \emph{here}), and is known to drop at cadence changes rather than
+at true arrhythmia.
+
+The $k \leq n/2$ bound has a consequence worth stating: at the fixed $2~\text{s}$ window
+only rhythm at $\geq 1~\text{Hz}$ (stride period $\leq 1~\text{s}$) fits twice, and the slow
+assistive/rehab strides (down to $0.33~\text{Hz}$) that are exactly the deployment population
+do not. With fewer than two cycles in the window the $\max$ over $[k_\text{lo}, n/2]$ lands on
+the short-lag autocorrelation \emph{shoulder} rather than a resolved stride peak, so the anchor
+turns into a smoothness proxy that cannot tell rhythmic slow gait from a non-rhythmic smooth
+sweep: a $0.4~\text{Hz}$ stride and a plain linear ramp both read $\approx 0.5$ in a
+$2~\text{s}$ window. It is not near-zero, it is \emph{uninformative} there. So alongside this
+anchor S3 also
+reports \textbf{adaptive periodicity}, the same quantity measured over the stride-adaptive
+span the swap count already sizes to about two strides (up to the $6~\text{s}$ cap), which
+resolves rhythm down to $\approx 0.33~\text{Hz}$.
+For standing and non-periodic cells that span is the base window, so the two agree; it
+widens only where a stride is too slow to fit twice in $2~\text{s}$. Crucially, the
+\emph{audited} anchor stays the fixed-window one: the rate-invariance verdict of
+Section~\ref{sec:audit} and every downstream consumer read the fixed-window
+\text{periodicity}, and the adaptive version rides alongside as a descriptor, exactly as
+the stride-adaptive swap verdict rides beside the fixed one.
+
+\paragraph{Gyroscopic energy.} Total rotational energy in the window,
+\emph{summed} over samples:
+\begin{equation}
+\text{gyro\_energy} \;=\; \sum_{i} \big(\Lvel\big)_i^{\,2} \;+\; \sum_{i} \big(\Rvel\big)_i^{\,2}
+\qquad [\text{deg}^2/\text{s}^2].
+\end{equation}
+Because it is a sum rather than a mean, it scales with the sample count $N$, so it is
+really a claim about the sampling grid, not the body. It is defined this way on purpose:
+the audit below is expected to reject it, re-deriving a verdict this quantity has failed
+before.
+
+\section{The rate-invariance audit}
+\label{sec:audit}
+
+An anchor that describes the body should not change when the same bout is measured at a
+different sample rate. The audit tests this directly: decimate each window by a factor of
+two through the anti-aliasing FIR filter (a genuine bandwidth cut from
+$100~\text{Hz}$ to $50~\text{Hz}$, zero-phase so peaks do not move), recompute each
+anchor, and measure the change.
+
+\paragraph{Change on the right scale.} Each anchor is compared on its natural scale.
+Bounded scores and correlations use an absolute delta; ratio-scale magnitudes use a
+floored relative delta:
+\begin{equation}
+\Delta_a =
+\begin{cases}
+\big|\,a_\text{native} - a_\text{dec}\,\big|, & a \in \{\text{periodicity}, \text{antiphase}, \text{grav\_stab}\}\ (\text{absolute}),\\[6pt]
+\dfrac{\big|\,a_\text{native} - a_\text{dec}\,\big|}{\big|\,a_\text{native}\,\big| + \varepsilon_a}, & a = \text{gyro\_energy}\ (\text{relative},\ \varepsilon_a = 1.0).
+\end{cases}
+\end{equation}
+Mixing the two would distort the result: framing a bounded score of $0.60$ vs $0.55$ as a
+relative change exaggerates it near zero, while framing a genuine energy shift as an
+absolute one ignores that its size depends on the bout amplitude.
+
+\paragraph{Gated to the motion regime.} The audit is computed only on windows the swap
+rule calls \textsc{walking}. These four anchors are descriptors of locomotion; a standing
+window has no cadence and no rhythm, so comparing that silence to its decimated self
+measures decimation noise, not rate dependence, and would falsely condemn a good anchor.
+Gating on the independently validated swap rule keeps the audit label-free.
+
+\paragraph{Verdict.} Collect $\Delta_a$ over all walking windows and compare the median to
+a tolerance $\tau = 0.10$:
+\begin{equation}
+\text{verdict}(a) =
+\begin{cases}
+\text{invariant}, & \operatorname{median}(\Delta_a) \leq \tau,\\[2pt]
+\text{rate\_dependent}, & \operatorname{median}(\Delta_a) > \tau.
+\end{cases}
+\end{equation}
+The bounded anchors pass; gyroscopic energy fails, as intended, because its value tracks
+the number of samples rather than the moving body. A rate-dependent verdict is a finding,
+not an error: it tells any downstream reader (human or agent) that the anchor may be
+discussed but must never carry a load-bearing claim about the body.
+
+\section{The agent layer: from figures to hypotheses}
+
+Everything above is deterministic: the code computes the anchor table, runs the
+audit, and draws the figures with no model in the loop. A separate language-model
+agent then sits on top of that output. Its job is the one thing code cannot do, look
+at the physics and say what it means, but under strict provenance rules that keep it
+honest.
+
+\paragraph{The figures are the only evidence.} The agent cannot see the corpus. It is
+given read-only access to the rendered figures and the summary tables, and nothing
+else. Each per-trial figure stacks three panels on one time axis in seconds:
+\begin{enumerate}[leftmargin=2em, itemsep=2pt]
+  \item the two leg angles $\Lang, \Rang$, with the \emph{human label} drawn as a
+        background band;
+  \item the interleg swap signal $\ileg = \Lang - \Rang$ with the $\pm\delta$ commit
+        bands and the stride-adaptive swap verdict as colored markers along the top;
+  \item the anchor timeline (antiphase, periodicity, gravitational stability).
+\end{enumerate}
+The human label is drawn as the \emph{background}, not as ground truth. Where the
+physics track disagrees with the label band is exactly what the agent is asked to
+explain: slow walking still labeled as walking, a split-stance bout labeled standing,
+a moving ramp labeled standing.
+
+\paragraph{Reading order is precomputed.} To avoid reading every figure blind, the
+deterministic core ranks each trial by physics-vs-label disagreement. For a trial it
+reports the fraction of walk-labeled windows the swap rule does not call walking and
+the fraction of stand-labeled windows it does, and it histograms the physical
+\emph{cause} of each conflict (legs in phase, a single un-alternated hump, a
+sub-threshold swing, or a standing stretch the physics reads as gait). The agent is
+handed this ranking and the anchors' rate-invariance verdicts, and reads the audit
+figure and the top-conflict trials first.
+
+\paragraph{Output: falsifiable, window-anchored hypotheses.} The agent does not label
+windows and does not train. It performs rule \emph{discovery}, emitting a set of
+hypotheses about the body and the labels. Each hypothesis is a structured record with
+a one-sentence statement, a confidence level, the anchors it relies on, a caveat
+stating what would falsify it, and, crucially, a list of \emph{evidence windows}, each
+naming a recording, a trial, a real time interval, and the anchors it points at.
+
+\paragraph{A provenance gate re-checks every hypothesis in code.} After the agent
+replies, deterministic validation enforces two hard rules, and any hypothesis that
+breaks either is flagged rather than silently kept:
+\begin{enumerate}[leftmargin=2em, itemsep=2pt]
+  \item \textbf{Window-level provenance.} Every hypothesis must point at real windows
+        with a valid time interval ($t_\text{end} > t_\text{start}$) and at least one
+        named anchor. A general claim with no window is rejected.
+  \item \textbf{Respect the audit.} Every anchor the hypothesis leans on is
+        cross-referenced against its rate-invariance verdict. A claim resting on a
+        \emph{rate\_dependent} anchor (such as gyroscopic energy) is permitted only if
+        it explicitly acknowledges that verdict; otherwise it is flagged.
+\end{enumerate}
+Validated hypotheses are written one per line, each annotated with the rate-invariance
+verdict of its anchors and an ok-or-flagged status; the raw agent reply is kept
+alongside for audit. A hypothesis whose physics contradicts a region's human label
+sets a label-audit flag, routing that window to human review.
+
+In one line: the deterministic core turns physics into figures, the agent turns
+figures into falsifiable window-anchored hypotheses, and code re-checks their
+provenance before any hypothesis is recorded.
+
+\end{document}

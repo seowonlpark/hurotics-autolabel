@@ -12,9 +12,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agents.base import MODEL_SMART, AgentSpec, extract_json_array
+from agents.base import MODEL_SMART, AgentSpec, extract_json_array, gate_and_write
 
 PROPOSALS_FILENAME = "new_class_proposals.jsonl"
+# cumulative cross-run record at the stable S4 dir; every run appends its supported proposals
+# and reads them back so a later run does not re-propose a class an earlier run already surfaced
+NEWCLASS_LEDGER = "new_class_ledger.jsonl"
 
 CONFIDENCE_LEVELS = ("low", "medium", "high")
 
@@ -76,12 +79,29 @@ S4_NEWCLASS_AGENT = AgentSpec(
 )
 
 
-# assemble the prompt: the corpus signature, the top candidate spans, the files to read
-def build_prompt(bundle: dict, plot_dir: Path) -> str:
+# classes earlier runs already proposed (and code found supported), compacted for the prompt;
+# empty string when there is no history, so the first run's prompt is unchanged
+def _prior_block(prior: list[dict]) -> str:
+    if not prior:
+        return ""
+    seen = [{"class_name": p.get("class_name"), "description": p.get("description"),
+             "run": p.get("run")} for p in prior]
+    return (
+        "CLASSES ALREADY PROPOSED AND SUPPORTED BY EARLIER RUNS - do NOT re-propose these. "
+        "Propose only a class not already below, unless you are refining one with materially "
+        "new spans, in which case say which prior class you are refining and how:\n"
+        f"{json.dumps(seen, indent=2)}\n\n"
+    )
+
+
+# assemble the prompt: the corpus signature, the top candidate spans, the files to read, and
+# the classes earlier runs already surfaced
+def build_prompt(bundle: dict, plot_dir: Path, prior: list[dict] | None = None) -> str:
     sig = bundle["corpus_signature"]
     top = bundle["spans"][:16]
     return (
         "Propose the classes (if any) these candidate spans form.\n\n"
+        f"{_prior_block(prior or [])}"
         f"CORPUS SIGNATURE: {sig['n_spans']} spans / {sig['n_windows']} windows across "
         f"{sig['n_revs']} revs {sig['revs']}. Mean profile {sig['mean_profile']}. A class needs "
         f">= {sig['min_spans_for_support']} spans across >= {sig['min_revs_for_support']} revs "
@@ -102,21 +122,15 @@ def parse_proposals(final_text: str) -> list[dict] | None:
 
 # validate every proposal (cluster mass + provenance) and write one JSONL line each, plus the
 # raw text alongside. every line is needs_human. returns (path, n_supported, n_insufficient).
+# a proposal "passes" on cluster mass (validation.support == "supported"), not the plain
+# validation.ok the other stages use -- hence the is_ok override.
 def write_proposals(out_dir: Path, proposals: list[dict] | None, spans: list[dict],
-                    final_text: str) -> tuple[Path, int, int]:
+                    final_text: str, ledger_path: Path | None = None,
+                    run_id: str = "") -> tuple[Path, int, int]:
     from stages.s4_fusion.newclass import validate_proposal
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / PROPOSALS_FILENAME
-    (out_dir / "new_class_proposals_raw.txt").write_text(final_text or "", encoding="utf-8")
-
-    if not proposals:
-        path.write_text("", encoding="utf-8")
-        return path, 0, 0
-
-    validated = [validate_proposal(p, spans) for p in proposals]
-    n_supported = sum(1 for v in validated if v["validation"]["support"] == "supported")
-    with path.open("w", encoding="utf-8") as fh:
-        for v in validated:
-            fh.write(json.dumps(v, ensure_ascii=False) + "\n")
-    return path, n_supported, len(validated) - n_supported
+    return gate_and_write(
+        out_dir, proposals, lambda p: validate_proposal(p, spans), final_text,
+        out_name=PROPOSALS_FILENAME,
+        is_ok=lambda v: v.get("validation", {}).get("support") == "supported",
+        ledger_path=ledger_path, run_id=run_id)

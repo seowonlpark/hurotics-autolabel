@@ -13,27 +13,29 @@ import pandas as pd
 
 from stages.s1_clean.resample import resample_file
 
+# the data contract (schema, label codes, naming, subject splits) lives in one place so a new
+# corpus is a single edit there, not a scavenger hunt across stages. re-exported below so the
+# many `from stages.s2_ml.dataset import STAND, WALK, ...` call sites keep working unchanged.
+from dataset_profile import (
+    DEFAULT_LOCKBOX_REVS,
+    EXCLUDED_REVS,
+    FEATURES,
+    HUMAN_UNKNOWN,
+    LABEL_COL,
+    REV_PATTERN,
+    STAND,
+    TIME_COL,
+    TRAIN_CLASSES,
+    TRIAL_GLOB,
+    TRIAL_PATTERN,
+    WALK,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LABELED_DIR = REPO_ROOT / "data" / "labeled"
 
-# the rev2 derived view; names carry stray whitespace in some trials, normalized on read
-FEATURES = ("L_ang_LPF", "R_ang_LPF", "L_angvel_LPF", "R_angvel_LPF")
-LABEL_COL = "Label"
-TIME_COL = "Time"
-
-# label codes (Section 5.1/Section 5.2); -1 excluded from training targets, kept for eval
-STAND, WALK, HUMAN_UNKNOWN = 0, 10, -1
-TRAIN_CLASSES = (STAND, WALK)
-
-# lockbox: whole revs sealed until the very end (Section 7); rev8 balanced, rev13 walk-heavy
-DEFAULT_LOCKBOX_REVS = ("rev8", "rev13")
-
-_REV = re.compile(r"(rev\d+)")
-_TRIAL = re.compile(r"trial_(\d+)")
-
-# revs excluded entirely; rev14 confirmed anomalous 2026-07-21 (Section 6.4) -- low-amplitude
-# gait, no raw source to audit, dragged LORO macro-F1. not deleted from disk
-EXCLUDED_REVS = ("rev14",)
+_REV = re.compile(REV_PATTERN)
+_TRIAL = re.compile(TRIAL_PATTERN)
 
 
 # rev id from a path, e.g. 'rev13'
@@ -50,7 +52,7 @@ def trial_of(path: Path) -> int:
 
 # every labeled trial csv, excluded revs skipped
 def find_trials(labeled_dir: Path = LABELED_DIR) -> list[Path]:
-    return sorted(p for p in labeled_dir.rglob("annotated_loco_*_trial_*.csv")
+    return sorted(p for p in labeled_dir.rglob(TRIAL_GLOB)
                   if rev_of(p) not in EXCLUDED_REVS)
 
 

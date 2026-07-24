@@ -235,6 +235,10 @@ lockbox 결과는 의도적으로 단 한 번만 하는 실행에서만 생깁�
   (거부 기록이 같은 아이디어의 재제안을 막아 줍니다).
 - `runs/s3_physics/hypotheses.jsonl`, `runs/s4_fusion/fusion_review.jsonl`,
   `runs/s4_fusion/curation_queue.jsonl` **(에이전트)** - 에이전트가 남긴 추론과 분류 결정.
+- `runs/s3_physics/hypotheses_ledger.jsonl`, `runs/s4_fusion/fusion_findings_ledger.jsonl`,
+  `runs/s4_fusion/new_class_ledger.jsonl` **(에이전트)** - 각 분석 에이전트가 실행 전에 읽는 실행 간
+  누적 기록. 이후 실행이 이전 주장을 조용히 되풀이하지 않고 새 증거로 다듬거나 반박하게 합니다. 게이트를
+  통과한 항목마다 그것을 만든 실행이 함께 기록됩니다.
 
 **그래프 (`.png`)** - 물리 에이전트가 읽는 시각 자료입니다:
 
@@ -268,6 +272,69 @@ lockbox 결과는 의도적으로 단 한 번만 하는 실행에서만 생깁�
 | `python orchestrator.py s4_fusion` | AI: 의견이 갈리는 사례 검토 (요금 발생) |
 
 전체 목록은 [`PIPELINE.md`](PIPELINE.md)의 8번 항목(영어)을 참고하세요.
+
+---
+
+## 새 클래스 추가하기 (서 있기 / 걷기를 넘어서)
+
+이 파이프라인이 두 개의 클래스로 출발한 것은 라벨 데이터가 그만큼만 뒷받침했기 때문이지, 무언가가 두
+개에 묶여 있어서가 아닙니다. 세 번째 이동 상태(예를 들어 **스쿼트**나 **경사로 보행**)를 추가하는 일은,
+그 클래스에 대해 의견을 내는 각 단계마다 하나씩, 세 번의 작고 독립적인 수정입니다. 새로운 배관 작업은
+필요 없습니다. 아래의 장치들은 이미 존재합니다.
+
+**1. 분류기에 클래스를 가르치기 (S2).** 데이터 + 선언 변경입니다:
+
+- 새 `Label` 코드가 담긴 시험(trial)을 `data/labeled/rev*/` 아래, 같은 파일명 규칙으로 넣으세요. 모델이
+  학습에서 한 번도 보지 못한 클래스는 결코 예측할 수 없습니다.
+- [`dataset_profile.py`](dataset_profile.py)에서 코드를 `STAND` / `WALK` 옆에 추가하고 `TRAIN_CLASSES`를
+  늘리세요. 그리고 [`stages/s2_ml/locoeval.py`](stages/s2_ml/locoeval.py)의 `CLASS_NAMES`에 표시 이름을
+  추가하면 채점 표가 그 클래스를 알게 됩니다.
+
+S2의 나머지는 클래스에 특화되어 있지 않습니다. 포레스트와 그 macro-F1은 존재하는 클래스가 무엇이든 그에
+대해 이미 평균을 내므로, 다시 실행하면 새 클래스가 기존 클래스들과 나란히 채점됩니다. 창(window)이 너무
+적거나 너무 불순한 클래스는 오류가 아니라 낮은 재현율(recall)로 드러납니다.
+
+**2. 클래스에 물리적 2차 소견 주기 (S3).** 물리 단계는 각 창을 **판별기(discriminator)** - 창의 앵커
+측정값을 하나의 판정으로 매핑하는, 이름 붙은 검사 - 로 판단합니다. 서 있기-대-걷기 "스왑 규칙"은 그저 처음
+등록된 판별기일 뿐입니다([`stages/s3_physics/discriminators.py`](stages/s3_physics/discriminators.py)와
+[`stages/s3_physics/anchors.py`](stages/s3_physics/anchors.py)의 등록 부분 참고). 새 클래스에 자신만의
+판정을 주려면 하나를 더 등록하면 됩니다. 가장 단순한 형태는 선언적입니다 - 기존 앵커들에 대한 임계값
+규칙이며, 새 코드가 없습니다:
+
+```python
+from stages.s3_physics import discriminators as disc
+from stages.s3_physics.anchors import DISCRIMINATOR_ANCHORS
+
+# a bilateral squat: the legs bend TOGETHER (antiphase < 0, unlike walking) while the
+# posture sweeps (grav_stab low). expressed only over anchors the pipeline already measures.
+squat = disc.from_spec(
+    name="squat", emits="SQUAT",
+    spec=[{"anchor": "antiphase", "op": "<", "value": 0.0},
+          {"anchor": "grav_stab", "op": "<", "value": 0.5}],
+    known_anchors=DISCRIMINATOR_ANCHORS,
+)
+```
+
+선언적 규칙은 **코드가 아니라 데이터**이므로, 파이프라인은 모델 아이디어를 검사하듯 그것을 검사할 수
+있습니다: `validate_spec`은 알지 못하는 앵커나 잘못된 임계값을 거부하고, 레이트 불변성 감사는 그 판정이
+샘플링 레이트 변화를 견디는지 알려주며, 내장 물리에서 나오지 않은 규칙은 *제안됨(proposed)*으로 표시되어
+판정을 바꾸기 전에 사람에게 회부됩니다. 임계값으로 표현할 수 없는 물리가 정말로 필요하다면(스왑 규칙은
+히스테리시스와 보폭 적응형 창이 필요했습니다), 대신 맞춤형 콜러블(callable)을 등록하세요 - 같은 등록부,
+`kind="callable"`. 아직 손으로 해야 하는 유일한 일은 **새로운** 물리량을 발명하는 것입니다: 기존 앵커 중
+어느 것도 클래스를 분리하지 못한다면, 스왑 규칙이 처음 유도되었던 것처럼 누군가 그 앵커를 추가해야 합니다.
+
+**3. 신뢰도는 공짜로 따라옵니다 (S4).** 결합 신뢰도는 S2와 물리가 얼마나 자주 **일치**하는지에서 읽어냅니다
+- (라벨, 판정) 표의 칸마다 측정되며, 두 클래스에 손으로 묶여 있지 않습니다
+([`stages/s4_fusion/fuse.py`](stages/s4_fusion/fuse.py)의 `derive_policy` / `FusionPolicy` 참고). 새
+클래스가 S2 라벨과 S3 판정 양쪽에 나타나기만 하면, 그 칸들은 자동으로 그 표에 들어갑니다: 각 칸의 결합
+라벨은 그 칸에서 측정된 다수(majority)가 되고, 등급(tier)은 같은 구조적 규칙을 따릅니다(두 소견이 같은
+클래스를 가리키면 -> high; 물리가 판단을 보류하면 -> medium; 서로 다른 클래스를 가리키면 -> low). 유일한
+배선은 새 판정을 그 클래스로 `S3_TO_CLASS`에 매핑해 일치를 계산할 수 있게 하는 것뿐입니다. 창이 너무 적은
+칸은 잡음에서 판정을 지어내지 않고 분류기로 되돌아갑니다(fail passive). 정책은 학습 데이터에서 한 번 유도해
+배포용으로 고정하세요 - 보류된 lockbox에서는 절대 다시 유도하지 마세요. 그것은 단 한 번뿐인 정직한 시험을
+소모하는 일입니다.
+
+더 깊은 근거와 정확한 앵커 어휘는 [`PIPELINE.md`](PIPELINE.md)의 13번 항목(영어)을 참고하세요.
 
 ---
 
@@ -329,15 +396,18 @@ lockbox 결과는 의도적으로 단 한 번만 하는 실행에서만 생깁�
 | 5 | `s2_champion` - 스펙으로부터 챔피언 시딩 | det | 프로세스 내부 `seed_champion()` | `runs/s2_ml/champion.json` (게이트) |
 | 6 | `s2_cycle` - 챔피언/도전자 | agent, opt-in | `python orchestrator.py s2_cycle` | 아래 네 하위 단계 |
 | 6.1 | (실험자) 도전자 스펙 하나 제안 | agent | locoeval.md + 전체 원장 + 챔피언 + 피처 목록을 읽음; 이전 제안은 반복하지 않음 | `runs/<date>_runN/proposal.json` |
-| 6.2 | (비평가) 학습 전에 검증 | agent | 제안을 원장에 비추어 검토; 판정 approve / revise | `runs/<date>_runN/critic_review.json` |
+| 6.2 | (비평가) 학습 전에 검증 | agent | 제안을 원장에 비추어 검토; 판정 approve / revise / reject. `revise` 면 실험자가 비평가의 이유를 받아 한 번만 재시도한 뒤 다시 검토 | `runs/<date>_runN/critic_review.json` (수정 시 `_rev1` 추가) |
 | 6.3 | 실험 실행 | det | 비평가가 승인한 경우에만; 결정론적 LORO 학습 + 채점 | 원장 한 줄 |
 | 6.4 | 게이트 - 지표가 결정 | det | `decide(result, champion)` 가 측정된 macro-F1 으로 판정; 어느 에이전트도 승격할 수 없음 | `experiments.jsonl`, `proposals.jsonl`, 그리고 승격된 경우에만 `champion.json` |
 | 7 | `s2_refit` - 사이클 이후 챔피언 산출물 재학습 | opt-in | `python -m stages.s2_ml.train --out runs/s2_ml --taxonomy --skip-if-current` | `runs/s2_ml/champion.joblib` (게이트), `model_meta.json` |
 | 8 | `s2_oof` - out-of-fold 예측 (fusion 입력) | det | `python -m stages.s2_ml.oof --out runs/s2_ml` | `runs/s2_ml/oof_champion.csv` (게이트) |
 
-사이클은 다음의 경우 조기 종료합니다 - 제안을 기록하고 챔피언은 그대로 둡니다: 실험자 출력이
-파싱되지 않거나, 비평가 판정이 `approve` 가 아니거나, 스펙이 학습 전에 유효하지 않을 때. 실험자와
-비평가는 제안하고 검증할 뿐이며, 챔피언을 바꿀 수 있는 것은 코드의 `decide()` 뿐입니다.
+`revise` 판정은 막다른 길이 아닙니다: 비평가의 이유가 실험자에게 되돌아가 같은 스펙을 한 번만 고쳐
+다시 제출하게 하고, 그 수정된 스펙을 비평가가 한 번 더 검토합니다. 각 시도는 별도 파일에 기록되어
+어떤 제안이나 검토도 덮어써지지 않습니다. 사이클은 다음의 경우 조기 종료합니다 - 제안을 기록하고
+챔피언은 그대로 둡니다: 실험자 출력이 파싱되지 않거나, 비평가가 `reject` 하거나(또는 재시도 후에도
+`revise`), 스펙이 학습 전에 유효하지 않을 때. 실험자와 비평가는 제안하고 검증할 뿐이며, 챔피언을
+바꿀 수 있는 것은 코드의 `decide()` 뿐입니다.
 
 ### S3 - 물리(Physics)
 

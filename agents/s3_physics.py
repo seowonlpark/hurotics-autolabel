@@ -11,10 +11,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agents.base import MODEL_SMART, AgentSpec, extract_json_array
+from agents.base import MODEL_SMART, AgentSpec, extract_json_array, gate_and_write
 from stages.s3_physics.anchors import ANCHOR_NAMES
 
 HYPOTHESES_FILENAME = "hypotheses.jsonl"
+# cumulative cross-run record, at the stable S3 dir (not the per-run folder); every run appends
+# its passers here and reads it back so a later run does not restate an earlier hypothesis
+HYPOTHESES_LEDGER = "hypotheses_ledger.jsonl"
 
 CONFIDENCE_LEVELS = ("low", "medium", "high")
 
@@ -60,7 +63,9 @@ SYSTEM_PROMPT = (
     "routes it to the human label-review path. Precedent: labeled STANDING that included "
     "accel/decel ramps, not plateau-only ground truth.\n"
     "  - Prefer few, well-evidenced hypotheses over many thin ones. Confidence is one of "
-    f"{list(CONFIDENCE_LEVELS)}; earn 'high'.\n\n"
+    f"{list(CONFIDENCE_LEVELS)}; earn 'high'. Code measures the evidence behind it - a 'high' "
+    "resting on a single window from one subject is flagged as exceeding its evidence, so back a "
+    "strong claim with windows that RECUR across revs, not one vivid example.\n\n"
     "Output ONLY a JSON array of hypothesis objects, each with these fields:\n"
     '  {"name": snake_case, "statement": one sentence, "confidence": one of '
     f'{list(CONFIDENCE_LEVELS)}, '
@@ -81,13 +86,30 @@ S3_HYPOTHESIS_AGENT = AgentSpec(
 )
 
 
+# prior hypotheses earlier runs already recorded, compacted for the prompt; empty string when
+# there is no history, so the first run's prompt is unchanged
+def _prior_block(prior: list[dict]) -> str:
+    if not prior:
+        return ""
+    seen = [{"name": p.get("name"), "statement": p.get("statement"),
+             "confidence": p.get("confidence"), "run": p.get("run")} for p in prior]
+    return (
+        "HYPOTHESES ALREADY RECORDED BY EARLIER RUNS - do NOT restate these. You may sharpen "
+        "one with new window-level evidence, or contradict one, but if you contradict it say so "
+        "explicitly and cite the windows that overturn it:\n"
+        f"{json.dumps(seen, indent=2)}\n\n"
+    )
+
+
 # assemble the prompt: the rate-invariance verdicts, the disagreement ranking (which plots to
-# read first), and the full plot inventory
-def build_prompt(audit: dict, disagreement: list[dict], plot_paths: list[str]) -> str:
+# read first), the full plot inventory, and what earlier runs already claimed
+def build_prompt(audit: dict, disagreement: list[dict], plot_paths: list[str],
+                 prior: list[dict] | None = None) -> str:
     verdicts = {a: audit["anchors"][a]["verdict"] for a in ANCHOR_NAMES}
     top = disagreement[:8]
     return (
         "Write physics hypotheses for this corpus.\n\n"
+        f"{_prior_block(prior or [])}"
         f"RATE-INVARIANCE VERDICTS (from {audit['rate_hz']:.0f}->{audit['decimated_hz']:.0f} Hz "
         f"decimation; anchors called rate_dependent track the grid, not the body):\n"
         f"{json.dumps(verdicts, indent=2)}\n\n"
@@ -127,9 +149,30 @@ def _valid_evidence(ev: object) -> bool:
     return bool(ev.get("anchors"))
 
 
+# the corpus's honest bound is subject generalization over a thin pool (DOMAIN NOTES Section 11),
+# so a hypothesis that recurs across revs is worth more than one seen in a single subject. code
+# measures that strength from the evidence windows and flags a self-reported 'high' the evidence
+# does not carry -- the agent still states its confidence, but it never stands unchecked
+# (principle 4: measure, then state). the S3 analogue of new-class's code-side cluster mass.
+def _evidence_strength(h: dict) -> dict:
+    evidence = [e for e in (h.get("evidence") or []) if isinstance(e, dict)]
+    n_windows = len(evidence)
+    n_revs = len({e.get("rev") for e in evidence if e.get("rev")})
+    if n_revs >= 2 and n_windows >= 3:
+        tier = "strong"
+    elif n_windows >= 2:
+        tier = "moderate"
+    else:
+        tier = "weak"
+    # confidence outruns the evidence when 'high' rests on a single window (no recurrence at all)
+    exceeds = h.get("confidence") == "high" and tier == "weak"
+    return {"n_windows": n_windows, "n_revs": n_revs, "tier": tier, "exceeds_evidence": exceeds}
+
+
 # enforce the PLAN S3 gate on one hypothesis: window-level provenance, valid confidence, and
 # every relied-on anchor carries its rate-invariance verdict. returns the verdict-annotated
-# hypothesis; ok=False means it fails the gate (recorded, but flagged, never silently kept).
+# hypothesis, plus a code-measured evidence_strength block that grounds its self-reported
+# confidence; ok=False means it fails the gate (recorded, but flagged, never silently kept).
 def validate_hypothesis(h: dict, verdicts: dict[str, str]) -> dict:
     reasons: list[str] = []
     warnings: list[str] = []
@@ -156,25 +199,16 @@ def validate_hypothesis(h: dict, verdicts: dict[str, str]) -> dict:
             warnings.append(f"leans on rate_dependent anchor(s) {depended_dependent} "
                             "without acknowledging the verdict")
 
-    return {**h, "rate_invariance": rate_map,
+    return {**h, "rate_invariance": rate_map, "evidence_strength": _evidence_strength(h),
             "validation": {"ok": not reasons, "reasons": reasons, "warnings": warnings}}
 
 
-# validate all, write one JSONL line per hypothesis (verdict-annotated) + a header line; the
-# raw agent text is kept alongside for audit. returns (path, n_ok, n_flagged).
+# validate all, write one JSONL line per hypothesis (verdict-annotated); the raw agent text is
+# kept alongside for audit. passers are also appended to the cross-run ledger when one is given
+# (run_id ties them back to this run's folder). returns (path, n_ok, n_flagged).
 def write_hypotheses(out_dir: Path, hypotheses: list[dict] | None, verdicts: dict[str, str],
-                     final_text: str) -> tuple[Path, int, int]:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / HYPOTHESES_FILENAME
-    (out_dir / "hypotheses_raw.txt").write_text(final_text or "", encoding="utf-8")
-
-    if not hypotheses:
-        path.write_text("", encoding="utf-8")
-        return path, 0, 0
-
-    validated = [validate_hypothesis(h, verdicts) for h in hypotheses]
-    n_ok = sum(1 for v in validated if v["validation"]["ok"])
-    with path.open("w", encoding="utf-8") as fh:
-        for v in validated:
-            fh.write(json.dumps(v, ensure_ascii=False) + "\n")
-    return path, n_ok, len(validated) - n_ok
+                     final_text: str, ledger_path: Path | None = None,
+                     run_id: str = "") -> tuple[Path, int, int]:
+    return gate_and_write(
+        out_dir, hypotheses, lambda h: validate_hypothesis(h, verdicts), final_text,
+        out_name=HYPOTHESES_FILENAME, ledger_path=ledger_path, run_id=run_id)

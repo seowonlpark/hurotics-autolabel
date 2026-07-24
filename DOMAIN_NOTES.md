@@ -798,6 +798,27 @@ reintroduction path is to recompute cadence on the Section 10.7 grown span (up t
 resolution) where it would carry real information; not done speculatively. `GAIT_BAND_HZ` stays (used by
 `stride_period`/`_periodicity`).
 
+### 10.9 Stride-adaptive periodicity - the fixed-window anchor is blind to slow gait **[added 2026-07-24, not yet corpus-validated]**
+
+The `periodicity` anchor needs >=2 cycles in-window (`hi = n // 2`), so at the fixed 2 s / 200-sample
+window it only resolves rhythm at >=1 Hz (stride period <=1 s). But the deployment population strides to
+~2.9 s / 0.33 Hz (Section 10.6), which cannot fit twice in 2 s. With <2 cycles in-window the `max` over
+`[lo, n/2]` lands on the short-lag autocorrelation *shoulder*, not a resolved stride peak (unlike
+`stride_period`, `_periodicity` does not skip the shoulder) - so for slow gait the anchor reports a middling
+smoothness proxy that does **not** separate rhythmic slow gait from a non-rhythmic smooth sweep. It is not
+near-zero, it is *uninformative*: on a synthetic 0.4 Hz stride vs a linear ramp in a 2 s window it reads
+**0.53 vs 0.51** (indistinguishable).
+**Fix (mirrors Section 10.6): also measure periodicity over the same stride-adaptive span the swap count uses**
+(up to the 6 s cap -> resolves down to ~0.33 Hz strides; on the same stride-vs-ramp pair, with 8 s of
+context the adaptive value separates them **0.65 vs 0.51**). Emitted as `periodicity_adaptive` alongside the
+**untouched** fixed-window `periodicity` anchor: the rate audit and the S4 new-class profile keep reading
+the fixed-window value, whose **invariant** verdict is measured (Section 10.4 / audit table) - so this change
+adds a descriptor and disturbs no validated number. For standing / non-periodic cells the adaptive span is
+the base window, so `periodicity_adaptive == periodicity` there; it only widens for periodic cells.
+Code-side (`_adaptive_cell`, single span shared with the swap count); **not yet measured on the corpus** -
+the walk/stand separability of `periodicity_adaptive` vs the fixed anchor, and its own rate-invariance,
+still need a run before any claim rests on it.
+
 ---
 
 ## 11. Methodology warnings **[measured - each was hit in practice]**

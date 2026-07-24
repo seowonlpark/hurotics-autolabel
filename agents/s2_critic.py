@@ -91,14 +91,16 @@ def parse_review(final_text: str) -> dict | None:
     return extract_json_object(final_text)
 
 
-# persist the review; an unparseable review becomes a revise, never an approve
-def write_review(out_dir: Path, review: dict | None, final_text: str) -> Path:
+# persist the review; an unparseable review becomes a revise, never an approve. `name` lets a
+# second (post-revision) critique write to a distinct file so the first is not overwritten.
+def write_review(out_dir: Path, review: dict | None, final_text: str,
+                 name: str = REVIEW_FILENAME) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     payload = review if review else {
         "verdict": "revise",
         "reasons": ["critic output did not parse; refusing to approve by default"],
         "repeat_of": None, "confidence": 0.0, "unparsed": final_text,
     }
-    path = out_dir / REVIEW_FILENAME
+    path = out_dir / name
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return path

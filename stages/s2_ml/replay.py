@@ -7,9 +7,9 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
 from pathlib import Path
 
+from runmeta import git_sha
 from stages.s2_ml.dataset import load_dataset
 from stages.s2_ml.experiment import (
     ExperimentSpec,
@@ -23,16 +23,6 @@ S2_RUN_DIR = REPO_ROOT / "runs" / "s2_ml"
 # float-roundoff tolerance only, not "close enough"; above it on a same-sha entry is
 # genuine non-reproducibility, not noise
 EXACT_TOL = 1e-9
-
-
-# current HEAD short sha, or 'unknown'
-def head_sha() -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True
-        ).strip()
-    except Exception:
-        return "unknown"
 
 
 # rebuild the spec from a ledger entry -- all the entry stores about how the model was made
@@ -122,7 +112,7 @@ def main() -> None:
         if not rows:
             raise SystemExit(f"no ledger entry named {args.name!r}")
 
-    head = head_sha()
+    head = git_sha()
     print(f"HEAD is {head}. Deterministic code + fixed data => same-sha entries must "
           f"replay exactly (tol {args.tol:g}).\n")
 

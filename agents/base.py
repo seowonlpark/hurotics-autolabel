@@ -7,9 +7,11 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher
+
+from runmeta import git_sha
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOMAIN_NOTES_PATH = REPO_ROOT / "DOMAIN_NOTES.md"
@@ -254,3 +256,83 @@ def extract_json_object(text: str) -> dict | None:
 # the JSON array an agent was asked to emit; tolerant of fences and surrounding prose
 def extract_json_array(text: str) -> list | None:
     return _extract_json(text, "[", "]", list)
+
+
+# --- cross-run analyst ledger ------------------------------------------------
+# the S2 loop hands the experimenter the full experiments ledger, so it never re-proposes an
+# idea already tried. the read-only analysts (s3 hypotheses, s4 findings, s4 new-class) had no
+# equivalent: each run read the figures cold and wrote into its own timestamped folder, so a
+# second run could silently repeat, or contradict, what the first already recorded. these two
+# helpers give each analyst a stable, append-only ledger of what prior runs kept -- read into
+# the prompt so a later run must sharpen or contradict-with-reason rather than restate.
+
+
+# every record in a cumulative analyst ledger, in order; empty when the file is absent
+def read_ledger(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+# append validated items to the cumulative ledger, each stamped with the run that produced it
+# so a kept claim can be traced back to its timestamped run_dir. no-op on an empty list, so a
+# run that recorded nothing leaves the ledger untouched.
+def append_ledger(path: Path, items: list[dict], run_id: str) -> None:
+    if not items:
+        return
+    ts, sha = _now(), git_sha()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        for item in items:
+            fh.write(json.dumps({"ts": ts, "git_sha": sha, "run": run_id, **item},
+                                ensure_ascii=False) + "\n")
+
+
+# --- gate-and-write: the shared "code judges the agent" sink -----------------
+# every read-only agent (s3 hypotheses, s4 findings, s4 new-class proposals) ends the same
+# way: keep the raw reply for audit, run each item through a deterministic validator that
+# stamps a `validation` block, write one JSONL line per validated item, and report how many
+# passed. the gate is the safety boundary, so it lives in ONE place rather than being retyped
+# per stage. `validate` maps a raw item -> the item plus its validation block; `is_ok` reads
+# that block to decide whether an item passed (the default reads validation.ok; new-class
+# overrides it because its pass condition is validation.support == "supported").
+
+# an item passed the gate iff its validation block says ok
+def _validation_ok(validated: dict) -> bool:
+    return bool(validated.get("validation", {}).get("ok"))
+
+
+# validate every agent-emitted item, persist the raw reply + one JSONL line per item, and
+# return (path, n_passed, n_flagged). None/empty items writes an empty file and the raw reply,
+# so a non-parsing or empty reply still leaves an auditable trace. never raises on a bad item:
+# the validator is responsible for turning a malformed item into a flagged one. the raw reply
+# is written next to `out_name` as `<stem>_raw.txt`.
+def gate_and_write(
+    out_dir: Path,
+    items: list[dict] | None,
+    validate: Callable[[dict], dict],
+    final_text: str,
+    *,
+    out_name: str,
+    is_ok: Callable[[dict], bool] = _validation_ok,
+    ledger_path: Path | None = None,
+    run_id: str = "",
+) -> tuple[Path, int, int]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / out_name
+    (out_dir / f"{path.stem}_raw.txt").write_text(final_text or "", encoding="utf-8")
+
+    if not items:
+        path.write_text("", encoding="utf-8")
+        return path, 0, 0
+
+    validated = [validate(item) for item in items]
+    n_ok = sum(1 for v in validated if is_ok(v))
+    with path.open("w", encoding="utf-8") as fh:
+        for v in validated:
+            fh.write(json.dumps(v, ensure_ascii=False) + "\n")
+    # only the passers reach the cross-run ledger -- flagged items are not a claim the next run
+    # should treat as recorded (the raw reply above still preserves them for audit)
+    if ledger_path is not None:
+        append_ledger(ledger_path, [v for v in validated if is_ok(v)], run_id)
+    return path, n_ok, len(validated) - n_ok

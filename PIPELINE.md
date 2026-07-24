@@ -97,8 +97,10 @@ why (build log):
 - the row-level taxonomy needs dense inference (`[S2-7]`)
 
 the agent loop: an experimenter proposes one spec (`[A-2]`); a critic reviews it against the full
-ledger before any training is spent (`[A-3]`); code, not either agent, decides promotion. neither
-agent can change the champion.
+ledger before any training is spent (`[A-3]`); code, not either agent, decides promotion. a critic
+`revise` verdict is not a dead end - its reasons are fed back to the experimenter for one bounded
+retry on that same spec, then the revised spec is critiqued once more; `reject` (or a second
+`revise`) ends the cycle. neither agent can change the champion.
 
 artifacts + entry points: `stages/s2_ml/`. outputs in `runs/s2_ml/`: `champion.json`, the
 append-only `experiments.jsonl` ledger, `proposals.jsonl`, `locoeval.md`/`.json`, `taxonomy.json`,
@@ -125,7 +127,10 @@ why (build log):
 
 artifacts + entry points: `stages/s3_physics/` (`anchors.py`, `rate_audit.py`, `plots.py`, `run.py`).
 outputs in `runs/s3_physics/`: `anchors.csv`, `rate_audit.json`, `disagreement.json`, `plots/`. the
-hypothesis agent (`[A-5]`) then reads the figures under a provenance gate enforced in code.
+hypothesis agent (`[A-5]`) then reads the figures under a provenance gate enforced in code, and
+code measures the evidence behind each hypothesis - how many windows, across how many revs - so a
+self-reported `high` confidence resting on a single window is flagged as exceeding its evidence
+(principle 4: the agent states a confidence, code never lets it stand unchecked).
 
 ---
 
@@ -150,7 +155,11 @@ for provenance + mass, and routes every proposal to a human regardless of confid
 artifacts + entry points: `stages/s4_fusion/` (`fuse.py`, `run.py`, `curate.py`, `newclass.py`,
 `export.py`, and the single-use `lockbox.py`). outputs in `runs/s4_fusion/`: `fused_windows.csv`,
 `fusion.json`, `fusion_report.md`, `disagreements.json`. the judgement agent (`[A-6]`) then
-characterizes the disagreement cases.
+characterizes the disagreement cases, and code checks each finding against the labels on the
+windows it cites: a `fusion_verdict` of `s2_should_win` is stamped `corroborated` only if S2
+actually scored above the fused call there, `contradicted` otherwise, and a finding that lands on
+no scored window is dropped. the agent's verdict is thus measured against ground truth, not left
+as an unread opinion.
 
 ---
 
@@ -163,10 +172,20 @@ role prompt, an allowed-tool list, a model, and a turn cap (`[A-0]`). four prope
    agent's prompt, and the framework refuses to run without them. the exact prompt is saved per run,
    and passed to the model as a file (the notes outgrew the OS command-line length limit).
 2) effectively read-only - the only tools any agent gets are Read + Grep, so none can change data,
-   promote a model, or edit a label. a deterministic wrapper enforces the real gate in code (`[X-1]`).
+   promote a model, or edit a label. a deterministic wrapper enforces the real gate in code (`[X-1]`):
+   the three read-only analyst agents (S3 hypotheses, S4 findings, S4 new-class) share one sink,
+   `gate_and_write`, that stamps each item with a validation verdict, records only what passes, and
+   keeps the raw reply alongside for audit.
 3) bounded - a turn cap makes a stuck agent fail fast (for example 10 for the critic, 30 for the
    figure-reading agents).
 4) logged + costed - every tool call is appended to a per-run log, and each run's cost is recorded.
+
+the three read-only analysts also share a cumulative cross-run ledger: each run appends the items
+that passed its gate to a stable per-stage file (`hypotheses_ledger.jsonl`,
+`fusion_findings_ledger.jsonl`, `new_class_ledger.jsonl`), stamped with the run that produced them,
+and reads it back into the next run's prompt. this gives them the same institutional memory the S2
+loop already had through its experiment ledger, so a later run must sharpen or contradict an earlier
+claim with new evidence rather than silently restate it.
 
 most agents run on a sonnet-class model; the one cheap tagging job (`[A-1]`) runs on haiku-class. the
 seven agents are catalogued in the build log, `[A-1]` through `[A-7]`.
@@ -259,6 +278,13 @@ re-seeds it deterministically from the champion spec baked into `run_pipeline.py
 plus raw data reproduces the recorded champion with no manual step. same idea as replay, applied to
 the whole pipeline: the spec is the revert unit.
 
+the deterministic gates are unit-tested. `tests/` pins the logic the pipeline's safety rests on -
+the promotion rule (`decide`) and its fail-passive tiebreaker, the model-param whitelist
+(`validate_spec`), the agent-reply JSON extractor, the shared `gate_and_write` sink, the S1
+disposition matrix (`collapse`), the fusion policy (`fuse`), the S3/S4 provenance gates, and the
+`locoeval` metric arithmetic. none of them touch data or the API, so `python -m pytest` runs the
+whole suite in seconds (`pip install -r requirements-dev.txt` first).
+
 ---
 
 ## 11. Known limits and open questions
@@ -296,16 +322,40 @@ supported, not a limit of the code: the ML stage is multiclass-native (the fores
 already average over whatever classes exist), so the reach of the model is set by the labels and
 channels you feed it.
 
-to add a class (say a third locomotion state):
+to add a class (say a third locomotion state) - three edits, one per stage that has an opinion about
+the class:
+
+**S2 - teach the classifier (label + declare):**
 
 1) label it - put trials carrying the new `Label` code under `data/labeled/rev*/`, same filename
    pattern. a class the model never sees in training it can never predict.
-2) declare it - in `stages/s2_ml/dataset.py` add the code and extend `TRAIN_CLASSES`; in
-   `stages/s2_ml/locoeval.py` add its name to `CLASS_NAMES` (the report's confusion table keys off
-   the class set). nothing else in S2 is class-specific - windowing, features, training, and
-   promotion all read the class set.
+2) declare it - in `dataset_profile.py` add the code next to `STAND`/`WALK` and extend
+   `TRAIN_CLASSES`; in `stages/s2_ml/locoeval.py` add its name to `CLASS_NAMES` (the report's
+   confusion table keys off the class set). nothing else in S2 is class-specific - windowing,
+   features, training, and promotion all read the class set.
 3) re-run S2 - LORO macro-F1 now scores the new class alongside the old ones; a class with too few
    or too impure windows surfaces as weak recall, not a crash (`[X-4]`).
+
+**S3 - give it a physics second-opinion (register a discriminator):** the swap rule is no longer a
+special case - it is the first entry in a discriminator registry (`stages/s3_physics/discriminators.py`),
+and the per-window `swap_verdict` column is read back through it, so a new class rides the same seam.
+register another discriminator: a declarative `ThresholdRule` over the existing anchor vocabulary
+(`DISCRIMINATOR_ANCHORS`) via `from_spec`, or a bespoke callable (`kind="callable"`) when the physics
+needs more than a threshold - the swap rule's hysteresis + stride-adaptive window are why it is a
+callable. a declarative rule is *data, not code*: `validate_spec` gates it against the known anchors
+and bounded ops (the S2 `validate_spec` discipline, `[S2-3]`), the rate-invariance audit gives its
+verdict a verdict like any anchor (`[S3-2]`), and a rule that did not come from the built-in physics
+is `origin="proposed"` and routes to a human - the same governance every S4 proposal gets (Section 11.2).
+
+**S4 - the confidence generalizes for free:** the fuser is no longer a hand 2x2. `derive_policy` reads
+the fused label off the measured majority-true of each (S2 label, S3 verdict) cell, and `tier_of` sets
+the tier structurally - the two views naming the same class -> HIGH, S3 abstaining -> MED, the two
+naming different classes -> LOW (`stages/s4_fusion/fuse.py`). on the current corpus this reproduces the
+frozen 2-class policy exactly (locked by `test_fusion_policy` and a byte-identical golden diff), and a
+new class's cells enter the table automatically. the only wiring is `S3_TO_CLASS` - map the new S3
+verdict to its class so agreement can be computed; a cell too thin to trust fails passive to S2
+(`MIN_CELL_SUPPORT`). derive the policy once from train+val and freeze it - never re-derive on the
+lockbox, which would spend the one honest test (Section 12.5).
 
 to add input channels (beyond the four sagittal features):
 
@@ -317,9 +367,11 @@ to add input channels (beyond the four sagittal features):
 3) let the metric decide - a challenger spec can drop or keep the new features and the ledger scores
    it like any other experiment (`[S2-3]`). add channels wide, keep what the score justifies.
 
-where it stops being automatic: S3 and S4 are built around the binary stand/walk split. the swap
-rule is a stand-vs-walk physical test (`[S3-1]`), and the fusion policy + confidence tiers are read
-off two-class agreement (`[S4-2]`, `[S4-3]`). a new class rides on the ML label immediately, but it
-gets no independent physics second-opinion and no calibrated confidence until an anchor and a fusion
-rule are designed for it. so many-class *labeling* is an S2 change today; many-class *confidence* is
-new physics + fusion work - the honest boundary, not an oversight.
+where it stops being automatic: a genuinely new **anchor**. labeling (S2), the physics second-opinion
+(S3), and the calibrated confidence (S4) are all wired now - a class that existing anchors can
+separate needs only the edits above. but the discriminator registry composes *existing* anchors; if
+no anchor separates your class, someone has to design the physical quantity that does, the way the
+swap rule itself was first derived (`[S3-1]`) and given a rate-invariance verdict (`[S3-2]`). so
+many-class labeling, second-opinion, and confidence are S2/S3/S4 declarations today; inventing new
+physics is the residual, honest boundary - narrowed to exactly the step that needs human insight,
+not an oversight.

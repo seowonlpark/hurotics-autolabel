@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import platform
-import subprocess
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,13 +16,13 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 
+from runmeta import git_sha
 from stages.s2_ml.dataset import load_dataset
 from stages.s2_ml.features import TRANSITION, WindowSpec, build_windows, feature_columns
 from stages.s2_ml.locoeval import evaluate
 from stages.s2_ml.predict import DEFAULT_INFERENCE_STRIDE_S, dense_predict_trial
 from stages.s2_ml.taxonomy import aggregate, bucket_errors
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 LEDGER_FILENAME = "experiments.jsonl"
 CHAMPION_FILENAME = "champion.json"
 
@@ -84,15 +83,6 @@ class ExperimentResult:
                              "dominant": self.taxonomy["dominant"],
                              "fractions": self.taxonomy["fractions"]}
         return d
-
-
-# current HEAD short sha, or 'unknown'
-def git_sha() -> str:
-    try:
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
-                                       cwd=REPO_ROOT, text=True).strip()
-    except Exception:
-        return "unknown"
 
 
 # the hyperparameters a proposal may touch, with bounds -- a whitelist, so a stray
@@ -352,17 +342,19 @@ def record_proposal(out_dir: Path, proposal: dict, critic: dict, ran: bool,
     return entry
 
 
-# every logged proposal, in order
-def proposals(out_dir: Path) -> list[dict]:
-    path = out_dir / PROPOSALS_FILENAME
+# parse a JSONL file into a list of records; empty list when the file is absent, blank lines
+# skipped. the one reader for both the proposals log and the experiment ledger
+def _read_jsonl(path: Path) -> list[dict]:
     if not path.exists():
         return []
     return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+# every logged proposal, in order
+def proposals(out_dir: Path) -> list[dict]:
+    return _read_jsonl(out_dir / PROPOSALS_FILENAME)
 
 
 # every measured experiment, in order
 def ledger(out_dir: Path) -> list[dict]:
-    path = out_dir / LEDGER_FILENAME
-    if not path.exists():
-        return []
-    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return _read_jsonl(out_dir / LEDGER_FILENAME)

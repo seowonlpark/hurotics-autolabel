@@ -7,14 +7,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import subprocess
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from agents.base import run_agent
+from runmeta import git_sha
+from agents.base import read_ledger, run_agent
 from agents.s1_exception import (
     S1_EXCEPTION_AGENT,
     build_prompt,
@@ -28,16 +28,6 @@ REPO_ROOT = Path(__file__).resolve().parent
 RUNS_DIR = REPO_ROOT / "runs"
 CLEAN_RUN_DIR = RUNS_DIR / "s1_clean" # where the clean stage writes its ledgers
 S2_RUN_DIR = RUNS_DIR / "s2_ml" # champion.json + experiments.jsonl live here
-
-
-# current HEAD short sha; runs/ is gitignored, so each run records its commit
-def git_sha() -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True
-        ).strip()
-    except Exception:
-        return "unknown"
 
 
 # runs/YYYY-MM-DD_runN -- never overwrite a previous run
@@ -56,6 +46,22 @@ def new_run_dir() -> Path:
         encoding="utf-8",
     )
     return run_dir
+
+
+# tally a field across a written JSONL gate file, skipping rows where the extractor returns
+# None/empty -- used to surface the code-measured checks (verdict-vs-truth, evidence strength) as
+# a one-line run summary, so a paid agent's judgements are visible without opening the file
+def _tally(path: Path, key) -> dict[str, int]:
+    out: dict[str, int] = {}
+    if not path.exists():
+        return out
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        v = key(json.loads(line))
+        if v:
+            out[v] = out.get(v, 0) + 1
+    return out
 
 
 # S1 exception triage: code builds the queue and writes the review, the agent only judges
@@ -88,8 +94,24 @@ async def run_s1_exception(run_dir: Path) -> None:
         print("[s1-exc] WARNING: agent output did not parse - all items marked needs_human")
 
 
-# S2 champion/challenger: experimenter proposes, critic reviews before any training,
-# code decides. promotion is never an agent's call -- decide() gates on measured macro-F1
+# a critic 'revise' verdict is not a dead end: the experimenter gets ONE bounded retry with the
+# critic's reasons, then a fresh critique. 2 = one initial proposal + one revision. 'reject' and
+# an unparseable proposal stay terminal -- only 'revise' (the idea is sound, the spec is not) retries.
+MAX_PROPOSE_ATTEMPTS = 2
+
+
+# attempt 1 keeps the canonical filename (backward compatible); a revision attempt gets a suffix
+# so every proposal/critique the cycle produced stays on disk, none silently overwritten
+def _attempt_name(base: str, attempt: int) -> str:
+    if attempt == 1:
+        return base
+    stem, _, ext = base.rpartition(".")
+    return f"{stem}_rev{attempt - 1}.{ext}"
+
+
+# S2 champion/challenger: experimenter proposes, critic reviews before any training, code
+# decides. a critic 'revise' feeds its reasons back for one bounded retry; promotion is still
+# never an agent's call -- decide() gates on measured macro-F1
 async def run_s2_cycle(run_dir: Path) -> None:
     from stages.s2_ml.experiment import (
         ExperimentSpec, decide, ledger, load_champion, proposals,
@@ -111,36 +133,60 @@ async def run_s2_cycle(run_dir: Path) -> None:
     trials = load_dataset()
     feats = feature_columns(build_windows(trials, WindowSpec()))
 
-    # 1. propose
-    ex_prompt = s2_experimenter.build_prompt(report_md, rows, champion, feats)
+    base_ex_prompt = s2_experimenter.build_prompt(report_md, rows, champion, feats)
     if prior:
-        ex_prompt += ("\nPROPOSALS ALREADY RAISED (some never ran - do not repeat "
-                      f"these either):\n{json.dumps([p['proposal'] for p in prior], indent=2)}\n")
-    ex = await run_agent(s2_experimenter.S2_EXPERIMENTER_AGENT, ex_prompt, run_dir)
-    proposal = s2_experimenter.parse_proposal(ex.final_text)
-    s2_experimenter.write_proposal(run_dir, proposal, ex.final_text)
-    if proposal is None:
-        print("[s2-exp] proposal did not parse - nothing run")
-        record_proposal(S2_RUN_DIR, {"unparsed": ex.final_text[:500]},
-                        {"verdict": "revise"}, ran=False, note="proposal did not parse")
-        return
-    print(f"[s2-exp] proposed '{proposal.get('name')}': {proposal.get('rationale')}")
+        base_ex_prompt += ("\nPROPOSALS ALREADY RAISED (some never ran - do not repeat "
+                           f"these either):\n{json.dumps([p['proposal'] for p in prior], indent=2)}\n")
 
-    # 2. critique, before spending a training run
-    cr_prompt = s2_critic.build_prompt(proposal, rows, report_md, champion)
-    cr = await run_agent(s2_critic.S2_CRITIC_AGENT, cr_prompt, run_dir)
-    review = s2_critic.parse_review(cr.final_text)
-    s2_critic.write_review(run_dir, review, cr.final_text)
-    verdict = (review or {}).get("verdict", "revise")
-    print(f"[s2-critic] {verdict}: {'; '.join((review or {}).get('reasons', [])[:3])}")
+    # propose -> critique, with one bounded revision if the critic asks for it. costs accumulate
+    # across attempts so the printed spend is the whole cycle's, not just the last attempt's.
+    proposal = review = None
+    ex_cost = cr_cost = 0.0
+    revise_reasons: list[str] | None = None
+    for attempt in range(1, MAX_PROPOSE_ATTEMPTS + 1):
+        # 1. propose (a revision attempt carries the critic's reasons on the prior spec)
+        ex_prompt = base_ex_prompt
+        if revise_reasons is not None:
+            ex_prompt += s2_experimenter.revision_block(proposal, revise_reasons)
+        ex = await run_agent(s2_experimenter.S2_EXPERIMENTER_AGENT, ex_prompt, run_dir)
+        ex_cost += ex.cost_usd
+        proposal = s2_experimenter.parse_proposal(ex.final_text)
+        s2_experimenter.write_proposal(
+            run_dir, proposal, ex.final_text,
+            name=_attempt_name(s2_experimenter.PROPOSAL_FILENAME, attempt))
+        if proposal is None:
+            print("[s2-exp] proposal did not parse - nothing run")
+            record_proposal(S2_RUN_DIR, {"unparsed": ex.final_text[:500]},
+                            {"verdict": "revise"}, ran=False, note="proposal did not parse")
+            return
+        print(f"[s2-exp] {'proposed' if attempt == 1 else 'revised'} "
+              f"'{proposal.get('name')}': {proposal.get('rationale')}")
 
-    if verdict != "approve":
+        # 2. critique, before spending a training run
+        cr_prompt = s2_critic.build_prompt(proposal, rows, report_md, champion)
+        cr = await run_agent(s2_critic.S2_CRITIC_AGENT, cr_prompt, run_dir)
+        cr_cost += cr.cost_usd
+        review = s2_critic.parse_review(cr.final_text)
+        s2_critic.write_review(run_dir, review, cr.final_text,
+                               name=_attempt_name(s2_critic.REVIEW_FILENAME, attempt))
+        verdict = (review or {}).get("verdict", "revise")
+        reasons = (review or {}).get("reasons", [])
+        print(f"[s2-critic] {verdict}: {'; '.join(reasons[:3])}")
+
+        if verdict == "approve":
+            break
+        if verdict == "revise" and attempt < MAX_PROPOSE_ATTEMPTS:
+            revise_reasons = reasons or ["(the critic gave no specific reason)"]
+            print(f"[s2] critic asked to revise; one bounded retry "
+                  f"(attempt {attempt + 1}/{MAX_PROPOSE_ATTEMPTS})")
+            continue
+        # reject, or revise with no attempts left -> terminal, champion untouched
         record_proposal(S2_RUN_DIR, proposal, review or {}, ran=False,
-                        note=f"critic said {verdict}")
+                        note=f"critic said {verdict} after {attempt} attempt(s)")
         print(f"[s2] not run (critic: {verdict}); champion unchanged")
         return
 
-    # 3. run it -- deterministic from here on
+    # approved -- run it, deterministic from here on
     try:
         spec = ExperimentSpec(
             name=proposal["name"], rationale=proposal["rationale"],
@@ -155,14 +201,14 @@ async def run_s2_cycle(run_dir: Path) -> None:
         print(f"[s2] spec rejected before training: {exc}")
         return
 
-    # 4. gate -- the metric decides, not the agents
+    # gate -- the metric decides, not the agents
     promote, why = decide(result, champion)
     record(S2_RUN_DIR, result, promote, why, critic=review)
     record_proposal(S2_RUN_DIR, proposal, review or {}, ran=True, note=why)
 
     print(f"[s2] macro-F1 {result.macro_f1:.4f} vs champion {champion['macro_f1']:.4f}")
     print(f"[s2] {'PROMOTED' if promote else 'rejected'}: {why}")
-    print(f"[s2] cost: experimenter ${ex.cost_usd:.4f} + critic ${cr.cost_usd:.4f}")
+    print(f"[s2] cost: experimenter ${ex_cost:.4f} + critic ${cr_cost:.4f}")
 
 
 # S3 physics: deterministic core computes anchors + audit + plots, then the hypothesis agent
@@ -182,19 +228,29 @@ async def run_s3_physics(run_dir: Path) -> None:
     disagreement = [{**d, "plot": str((S3_OUT_DIR / d["plot"]).resolve())}
                     for d in audit["disagreement"]]
 
-    # 2. the agent reads the figures and proposes hypotheses (read-only)
-    prompt = s3_physics.build_prompt(audit, disagreement, plot_paths)
+    # 2. the agent reads the figures and proposes hypotheses (read-only), told what earlier
+    # runs already recorded so it does not restate a prior hypothesis
+    ledger_path = S3_OUT_DIR / s3_physics.HYPOTHESES_LEDGER
+    prior = read_ledger(ledger_path)
+    prompt = s3_physics.build_prompt(audit, disagreement, plot_paths, prior)
     res = await run_agent(s3_physics.S3_HYPOTHESIS_AGENT, prompt, run_dir)
 
-    # 3. gate -- code keeps a hypothesis only if it carries window-level provenance
+    # 3. gate -- code keeps a hypothesis only if it carries window-level provenance; passers are
+    # appended to the cross-run ledger, traceable to this run
     hyps = s3_physics.parse_hypotheses(res.final_text)
-    path, n_ok, n_flagged = s3_physics.write_hypotheses(run_dir, hyps, verdicts, res.final_text)
+    path, n_ok, n_flagged = s3_physics.write_hypotheses(
+        run_dir, hyps, verdicts, res.final_text, ledger_path=ledger_path, run_id=run_dir.name)
 
     if hyps is None:
         print("[s3] hypotheses did not parse - nothing recorded")
     else:
         print(f"[s3] {n_ok} hypotheses passed the provenance gate, {n_flagged} flagged "
               f"-> {path.name}")
+        # confidence grounded in code: how many 'high' claims rest on a single-window evidence base
+        n_over = sum(1 for h in (hyps or [])
+                     if s3_physics._evidence_strength(h)["exceeds_evidence"])
+        if n_over:
+            print(f"[s3] {n_over} hypotheses rated 'high' beyond their evidence (single window)")
     print(f"[s3] cost: ${res.cost_usd:.4f}, turns={res.num_turns}")
 
 
@@ -202,7 +258,10 @@ async def run_s3_physics(run_dir: Path) -> None:
 # agent characterises the disagreement (LOW-confidence) cases. code makes every call; the agent
 # only judges what the abstentions are made of (PLAN S5).
 async def run_s4_fusion(run_dir: Path) -> None:
-    from stages.s4_fusion.run import S4_OUT_DIR, run as run_s4_core
+    import pandas as pd
+
+    from stages.s4_fusion.run import (
+        FUSED_CSV, S4_OUT_DIR, fused_windows_lookup, run as run_s4_core)
     from stages.s3_physics.run import S3_OUT_DIR
     from agents import s4_fusion
 
@@ -213,18 +272,31 @@ async def run_s4_fusion(run_dir: Path) -> None:
           f"{metrics['s2_alone']['macro_f1']}); acting on HIGH+MED: coverage {a['coverage']} "
           f"at accuracy {a['accuracy']}")
 
-    # 2. the agent judges the disagreements (read-only; physics figures are S3's, lockbox-sealed)
-    prompt = s4_fusion.build_prompt(metrics, S3_OUT_DIR / "plots")
+    # 2. the agent judges the disagreements (read-only; physics figures are S3's, lockbox-sealed),
+    # told which windows earlier runs already characterised so it spends turns on the rest
+    ledger_path = S4_OUT_DIR / s4_fusion.FINDINGS_LEDGER
+    prior = read_ledger(ledger_path)
+    prompt = s4_fusion.build_prompt(metrics, S3_OUT_DIR / "plots", prior)
     res = await run_agent(s4_fusion.S4_FUSION_AGENT, prompt, run_dir)
 
-    # 3. gate -- code keeps a finding only if it carries window-level provenance
+    # 3. gate -- code keeps a finding only if it carries window-level provenance AND measures each
+    # against the labels on the windows it cites: its fusion_verdict is checked against ground
+    # truth, and a finding pointing at no scored window is dropped. passers go to the cross-run
+    # ledger, traceable to this run
+    windows = fused_windows_lookup(pd.read_csv(S4_OUT_DIR / FUSED_CSV))
     findings = s4_fusion.parse_review(res.final_text)
-    path, n_ok, n_flagged = s4_fusion.write_review(run_dir, findings, res.final_text)
+    path, n_ok, n_flagged = s4_fusion.write_review(
+        run_dir, findings, res.final_text, ledger_path=ledger_path, run_id=run_dir.name,
+        windows=windows)
     if findings is None:
         print("[s4] review did not parse - nothing recorded")
     else:
         print(f"[s4] {n_ok} findings passed the provenance gate, {n_flagged} flagged "
               f"-> {path.name}")
+        # #4 made visible: how the agent's fusion_verdicts held up against the labels
+        checks = _tally(path, lambda r: r.get("measurement", {}).get("verdict_check"))
+        if checks:
+            print(f"[s4] fusion_verdict vs ground truth: {checks}")
     print(f"[s4] cost: ${res.cost_usd:.4f}, turns={res.num_turns}")
 
 
@@ -255,14 +327,19 @@ async def run_s4_newclass(run_dir: Path) -> None:
         print("[s4-nc] no candidate spans - nothing to propose")
         return
 
-    # 2. the agent proposes classes (read-only; physics figures are S3's, lockbox-sealed)
-    prompt = s4_newclass.build_prompt(bundle, S3_OUT_DIR / "plots")
+    # 2. the agent proposes classes (read-only; physics figures are S3's, lockbox-sealed), told
+    # which classes earlier runs already surfaced so it does not re-propose them
+    ledger_path = S4_OUT_DIR / s4_newclass.NEWCLASS_LEDGER
+    prior = read_ledger(ledger_path)
+    prompt = s4_newclass.build_prompt(bundle, S3_OUT_DIR / "plots", prior)
     res = await run_agent(s4_newclass.S4_NEWCLASS_AGENT, prompt, run_dir)
 
-    # 3. gate -- code keeps cluster mass + provenance; every proposal is needs_human either way
+    # 3. gate -- code keeps cluster mass + provenance; every proposal is needs_human either way.
+    # supported proposals are appended to the cross-run ledger, traceable to this run
     proposals = s4_newclass.parse_proposals(res.final_text)
-    path, n_ok, n_weak = s4_newclass.write_proposals(run_dir, proposals, bundle["spans"],
-                                                     res.final_text)
+    path, n_ok, n_weak = s4_newclass.write_proposals(
+        run_dir, proposals, bundle["spans"], res.final_text,
+        ledger_path=ledger_path, run_id=run_dir.name)
     if proposals is None:
         print("[s4-nc] proposals did not parse - nothing recorded")
     else:

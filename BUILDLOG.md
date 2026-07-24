@@ -450,6 +450,43 @@ every survivor routes to human adjudication regardless of the agent's confidence
 class and never edits a label - read-only, orthogonal to the deployed classifier: discovery that
 surfaces work for a human, not a taxonomy the system rewrites for itself.
 
+### [S4-7] The spent lockbox, reused as a regression lock - not a tuning target
+
+once opened, the sealed set is spent (`[S4-5]`): no number can honestly be optimized toward it. but
+that forbids only *tuning* - the recorded result can still be pinned to the code, and the windows can
+still be read to characterize error. both were done from the recorded artifact, without re-opening the
+lockbox, and neither crosses the tuning line.
+
+error characterization (reference-corpus): the residual fused error is a single mode, not many - almost
+every miss is a true standing window called walking, the `[S2-9]` ceiling. on the never-seen rev the
+harm traces to the physics veto flipping a few true stands to walking (`[S4-5]`); on the spent-on-axis
+rev the model already calls every miss walking at high probability, so fusion changes nothing and
+abstention cannot reach it - the two views agree, and the gate acts only on disagreement. the abstain
+gate is far more error-prone on the windows it holds than on the windows it acts on, so the `[S4-3]`
+confidence signal is doing real work out of sample. nothing here is a code defect; it is the data
+ceiling `[S2-9]` already states.
+
+regression lock: the recorded fused inputs for the sealed revs are frozen as a static fixture
+(`tests/fixtures/lockbox_windows.csv`, regenerated only by a deliberate re-derivation), and a test
+re-applies the deterministic fuser + scorer and asserts the `[S4-5]` numbers still reproduce. this
+locks the fusion policy and the scoring against the data's real shape - a synthetic unit test
+(`test_fuse.py`) cannot catch a veto quietly inverted on the actual distribution. the fixture pins the
+deterministic layers, not the model refit (slow and float-fragile across library versions); the model
+outputs are frozen into the fixture, so regenerating it is the one deliberate act that moves the
+recorded numbers.
+
+why it is safe: freezing a result as a guard is the opposite of optimizing toward it. the test fails if
+the number *changes*, so it defends the record rather than chasing it - the exact discipline `[X-4]`
+asks for.
+
+one source of truth for the rev status: writing this guard surfaced that a held-out rev's status lived
+in four hand-maintained tuples across two files (`DEFAULT_LOCKBOX_REVS` in the dataset, `SEALED` /
+`SPENT` / `OPENED` in the lockbox), which the "seal a NEW rev" procedure relied on a human keeping in
+sync. consolidated to one authored registry (`lockbox.LOCKBOX`, each rev a role + opened flag) with the
+three tuples *derived* from it, and an import-time check that refuses to load if the registry and the
+dataset's membership disagree. membership stays in the dataset (the S2 split layer cannot import S4) and
+status stays in the lockbox - two authored facts cross-checked, not four kept in step by hand.
+
 ---
 
 ## Cross-cutting principles
@@ -694,3 +731,4 @@ aliases (`[X-5]`).
 | 2026-07-22 | 5 | **LOCKBOX OPENED - final number, revG spent (Section 12.5 NEW).** Built `stages/s4_fusion/lockbox.py` (guarded one-way open, `--confirm OPEN-LOCKBOX`; scores the FUSED model - S2 fit on every non-lockbox rev predicting revG unseen, S3 verdicts on revG, fuse) and corrected it to headline **revG alone** (revH already spent on the axis decision, reported reference-only). Opened once. **The raw fused label did NOT beat S2 alone out-of-sample** (revG 0.798 vs 0.822; revH identical) - the S3 WALKING-veto flipped ~4 true stands to walk, so the train+val fusion advantage (0.921>0.898) did not replicate. **But the confidence signal generalized and is the real product**: acting-on-confidence (abstain LOW) scored macro-F1 0.845 / acc 0.898 / stand-recall 0.659 at 94% coverage, above S2, with a calibrated LOW tier (0.27 acc). Generalization gap is stand-recall on unseen subjects (0.56/0.38 vs ~0.90 LORO) = the Section 12.2 data ceiling, not a code defect. Deployable artifact is the confidence-GATED system, not the raw relabel. 2-class model FINAL at these numbers; no sealed rev left to spend. |
 | 2026-07-24 | 6 | **Deployment artifact reconciled to the champion spec (`[S2-4]`).** `train.py` persisted `champion.joblib` / `model_meta.json` on the FULL feature set, so the saved classifier was the 23-feature baseline while the promoted champion (`drop_static_offset_family`) is 18 features - a blob silently disagreeing with `champion.json`. **Fixed:** `train.py` now loads `champion_spec.json` and applies its `drop_features` / `window_s` / `model_params` before the final refit (`--full` restores the all-feature baseline, `--spec PATH` points elsewhere); `model_meta.json` records the spec name, drops, and resolved params. The refit reproduces `champion.json` exactly (LORO macro-F1 0.8977, 18-feat, taxonomy bit-for-bit). Only the blob was ever stale - `oof.py` and `lockbox.py` already reconstruct the champion from `champion.json`'s drops, so no scored number was affected. **Added `s2_refit`** to `run_pipeline.py`: since a `--s2-cycle` promotion rewrites `champion_spec.json`, refit the deployment artifacts right after the cycle so they track the newly promoted champion (deterministic, idempotent when nothing was promoted). |
 | 2026-07-22 | 6 | **Governed new-class discovery built + run live (Section 11.2, Section 12.2).** `stages/s4_fusion/newclass.py` (evidence core: 28 `new_class_candidate` spans / 347 windows across 6 revs into per-span physics profiles) + `agents/s4_newclass.py` (proposer, Read/Grep, provenance + cluster-mass gate: >=4 spans across >=2 revs) + `orchestrator.py s4_newclass`. Read-only, orthogonal to the deployed algorithm - never touches the model/rule/fuser/labels; every proposal is `needs_human`. Run live (`runs/2026-07-22_run4`, $0.99, 15 turns): 2 proposals, both cluster-mass supported - `bilateral_transition_maneuver` (10 spans/4 revs, medium: brief in-phase bilateral swing bracketing STAND/WALK, candidate sit-to-stand/squat/turn, with the honest caveat that gravity-referenced thigh sensors cannot distinguish a body turn from a sit-to-stand) and `standing_shifting` (8 spans/2 revs, low: restless stance, the Section 10.3 hypothesis recurring with mass). Both to `needs_human`. Also added `curate.py` two-vote relabel (BOTH S2 and physics must contradict a label - corrected the earlier overstated "error_rate 1.00 = precise mislabel detector"; it is disagreement by construction, Section 12.2). |
+| 2026-07-24 | 6 | **Spent lockbox reused as a regression lock, not a tuning target (`[S4-7]`).** Characterized the residual fused error on the opened sealed revs from the recorded artifact (read-only, no re-open): a single failure mode - true standing called walking (`[S2-9]`) - the never-seen rev's harm being the S3 veto flipping a few true stands (`[S4-5]`), the spent-on-axis rev's misses all high-probability S2 calls that fusion never touches; the abstain gate stays far more error-prone on the windows it holds than the ones it acts on, so the `[S4-3]` confidence signal holds out of sample. Froze the recorded fused inputs as a static fixture (`tests/fixtures/lockbox_windows.csv` + `make_lockbox_fixture.py`) and a regression test (`tests/test_lockbox_regression.py`) that re-applies the deterministic fuser/scorer and asserts the `[S4-5]` numbers reproduce - locking the policy against the real distribution where `test_fuse.py`'s synthetic cases cannot. Freezing a result as a guard defends the record; it never optimizes toward it (`[X-4]`). **Follow-through:** consolidated the held-out rev status from four hand-maintained tuples across two files into one authored registry (`lockbox.LOCKBOX`) with `SEALED`/`SPENT`/`OPENED` derived from it and an import-time check tying it to `dataset.DEFAULT_LOCKBOX_REVS` - so a future edit that adds a rev to one place and forgets another refuses to load rather than scoring the wrong set silently. |

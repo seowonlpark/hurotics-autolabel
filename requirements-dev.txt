@@ -1,0 +1,3 @@
+# dev/test dependencies -- not needed to run the pipeline, only to run `python -m pytest`.
+-r requirements.txt
+pytest>=8

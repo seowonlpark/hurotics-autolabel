@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -42,21 +43,46 @@ CONFIRM_TOKEN = "OPEN-LOCKBOX"
 RESULT_JSON = "lockbox_result.json"
 RESULT_MD = "lockbox_result.md"
 
-# the lockbox is TWO revs (both held out of training), but only one is an unbiased final test.
-# rev13 was already scored on the Y-vs-X axis decision (DOMAIN_NOTES axis note: "This experiment
-# scored the lockbox rev13, so rev13 is spent"), so its number is no longer blind -- it is
-# reported for reference, never blended into the headline. rev8 is the clean, never-seen rev, so
-# the honest generalization number is rev8 ALONE.
-SEALED_REVS = ("rev8",)   # unspent -- the honest one-shot final test
-SPENT_REVS = ("rev13",)   # already scored on the axis decision -- reference only, not the headline
+# --- the lockbox rev registry: ONE authored source for each held-out rev's eval status ----------
+# membership (which revs are the lockbox, held out of training) is dataset.DEFAULT_LOCKBOX_REVS --
+# S2 owns the split and S4 cannot invert that dependency. this registry adds, for each of those
+# revs, its role in the final eval and whether it is spent. the SEALED/SPENT/OPENED tuples below
+# are DERIVED from it, never edited by hand, so the four can no longer drift apart; an import-time
+# check ties the registry to the dataset membership and fails loudly if they disagree.
+#
+# to seal a genuinely NEW rev for a FUTURE model (DOMAIN_NOTES Section 12.5): add it to
+# dataset.DEFAULT_LOCKBOX_REVS AND register a LockboxRev(..., HEADLINE, opened=False) here.
 
-# revs whose lockbox value has ALREADY been spent (opened once, number recorded in DOMAIN_NOTES
-# Section 12.5). the harness stays here because it is the reusable tool for a FUTURE sealed rev,
-# but a rev in this set must never be re-scored and called an unbiased test again: the model was
-# finalized knowing it, so a second number is not blind. main() refuses to open a spent rev even
-# with --confirm; to evaluate a new model, seal a genuinely NEW rev (add it to dataset's
-# DEFAULT_LOCKBOX_REVS and to SEALED_REVS) that is not in this set.
-OPENED_REVS = ("rev8", "rev13")
+HEADLINE, REFERENCE = "headline", "reference"
+
+
+@dataclass(frozen=True)
+class LockboxRev:
+    name: str      # the rev id, must match an entry in dataset.DEFAULT_LOCKBOX_REVS
+    role: str      # HEADLINE = the honest never-seen final test; REFERENCE = already spent elsewhere
+    opened: bool   # True once its lockbox value has been spent (opened for a number acted on)
+
+
+# rev8 is the clean, never-seen rev -> HEADLINE, the honest one-shot generalization number. rev13
+# was already scored on the Y-vs-X axis decision (DOMAIN_NOTES axis note: "scored the lockbox
+# rev13, so rev13 is spent") -> REFERENCE, reported but never blended into the headline. both were
+# opened once on 2026-07-22 (Section 12.5), so both are spent: main() refuses to re-score either.
+LOCKBOX = (
+    LockboxRev("rev8", HEADLINE, opened=True),
+    LockboxRev("rev13", REFERENCE, opened=True),
+)
+
+# derived views -- computed from LOCKBOX, so they cannot disagree with it or with each other
+SEALED_REVS = tuple(r.name for r in LOCKBOX if r.role == HEADLINE)
+SPENT_REVS = tuple(r.name for r in LOCKBOX if r.role == REFERENCE)
+OPENED_REVS = tuple(r.name for r in LOCKBOX if r.opened)
+
+# tie the eval registry to the dataset's membership: fail loudly at import if they drift apart
+if {r.name for r in LOCKBOX} != set(DEFAULT_LOCKBOX_REVS):
+    raise RuntimeError(
+        "lockbox registry disagrees with dataset.DEFAULT_LOCKBOX_REVS on which revs are the "
+        f"lockbox: registry {sorted(r.name for r in LOCKBOX)} vs "
+        f"{sorted(DEFAULT_LOCKBOX_REVS)}")
 
 
 # score one subframe: fused vs S2-alone at full coverage, acting-on-confidence, tier calibration
@@ -215,7 +241,8 @@ def main() -> None:
               "signal generalized). Re-scoring is NOT a valid unbiased test - the model was "
               "finalized knowing it.")
         print("[lockbox] to evaluate a future model, seal a genuinely NEW rev (add it to "
-              "dataset.DEFAULT_LOCKBOX_REVS and SEALED_REVS, outside OPENED_REVS), then open that.")
+              "dataset.DEFAULT_LOCKBOX_REVS and register a LockboxRev(HEADLINE, opened=False) in "
+              "lockbox.LOCKBOX), then open that.")
         return
 
     args.out.mkdir(parents=True, exist_ok=True)

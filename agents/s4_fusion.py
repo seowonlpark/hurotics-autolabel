@@ -11,9 +11,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agents.base import MODEL_SMART, AgentSpec, extract_json_array
+from agents.base import MODEL_SMART, AgentSpec, extract_json_array, gate_and_write
 
 REVIEW_FILENAME = "fusion_review.jsonl"
+# cumulative cross-run record at the stable S4 dir; every run appends its passers and reads it
+# back so a later run does not re-characterise a disagreement an earlier one already settled
+FINDINGS_LEDGER = "fusion_findings_ledger.jsonl"
 
 CONFIDENCE_LEVELS = ("low", "medium", "high")
 # what a disagreement window turns out to be -- the classification the agent must choose from
@@ -45,8 +48,13 @@ SYSTEM_PROMPT = (
     "  - If a labeled region's physics contradicts its label, set `label_audit` true - that "
     "routes it to the human label-review path (precedent: labeled STANDING that was a ramp).\n"
     "  - Judge whether the fuser did the right thing: `fusion_verdict` is 'abstain_correct' "
-    "(disagreement is genuine, abstaining is right), 's2_should_win', or 's3_should_win'.\n"
-    "  - Prefer few, well-evidenced findings over many thin ones. Earn 'high' confidence.\n\n"
+    "(disagreement is genuine, abstaining is right), 's2_should_win', or 's3_should_win'. Code "
+    "CHECKS this against the labels on the windows you cite - if you say 's2_should_win', the "
+    "labels there had better show S2 scoring above the fused call, or your verdict is stamped "
+    "'contradicted'. A finding that cites no scored window is dropped. Point at real disagreement "
+    "windows and let the ground truth back you.\n"
+    "  - Prefer few, well-evidenced findings over many thin ones. Earn 'high' confidence - a "
+    "'high' the labels contradict is flagged.\n\n"
     "Output ONLY a JSON array of objects, each with:\n"
     '  {"rev","trial","t_start_s","t_end_s","classification": one of '
     f'{list(CLASSES)}, '
@@ -68,11 +76,30 @@ S4_FUSION_AGENT = AgentSpec(
 )
 
 
-# assemble the prompt: the fusion headline, the ranked disagreement cases, the files to read
-def build_prompt(metrics: dict, plot_dir: Path) -> str:
+# prior findings earlier runs already recorded, compacted for the prompt; empty string when
+# there is no history, so the first run's prompt is unchanged
+def _prior_block(prior: list[dict]) -> str:
+    if not prior:
+        return ""
+    seen = [{"rev": p.get("rev"), "trial": p.get("trial"),
+             "t_start_s": p.get("t_start_s"), "t_end_s": p.get("t_end_s"),
+             "classification": p.get("classification"), "statement": p.get("statement"),
+             "run": p.get("run")} for p in prior]
+    return (
+        "DISAGREEMENT WINDOWS ALREADY CHARACTERISED BY EARLIER RUNS - do NOT re-characterise "
+        "these same windows. Spend your turns on cases not below, or overturn one only with new "
+        "window-level evidence and say what changed:\n"
+        f"{json.dumps(seen, indent=2)}\n\n"
+    )
+
+
+# assemble the prompt: the fusion headline, the ranked disagreement cases, the files to read,
+# and the windows earlier runs already characterised
+def build_prompt(metrics: dict, plot_dir: Path, prior: list[dict] | None = None) -> str:
     top = metrics["disagreement_cases"][:8]
     return (
         "Characterise the fusion's disagreement cases.\n\n"
+        f"{_prior_block(prior or [])}"
         f"FUSION SUMMARY: fused macro-F1 {metrics['fused']['macro_f1']} vs S2 alone "
         f"{metrics['s2_alone']['macro_f1']}; acting on HIGH+MED confidence covers "
         f"{metrics['acting_on_confidence']['coverage']} of windows at accuracy "
@@ -92,9 +119,67 @@ def parse_review(final_text: str) -> list[dict] | None:
     return extract_json_array(final_text)
 
 
+# which of two accuracies-on-truth is higher; the primitive under a checked fusion_verdict
+def _cmp(alt: float, fused: float) -> str:
+    if alt > fused:
+        return "corroborated"
+    if alt < fused:
+        return "contradicted"
+    return "inconclusive"
+
+
+# check the agent's fusion_verdict against what the labels actually say on the cited windows.
+# 's2_should_win'/'s3_should_win' are corroborated only if that model really scored higher than
+# the fused label there; 'abstain_correct' is corroborated only if NO alternative call beat the
+# fused label -- i.e. abstaining lost nothing. this is #4's route: the verdict is no longer an
+# inert opinion, it is measured against ground truth and stamped.
+def _check_verdict(verdict: str | None, s2_acc: float, s3_acc: float | None,
+                   fused_acc: float) -> str:
+    if verdict == "s2_should_win":
+        return _cmp(s2_acc, fused_acc)
+    if verdict == "s3_should_win":
+        return "unverifiable" if s3_acc is None else _cmp(s3_acc, fused_acc)
+    if verdict == "abstain_correct":
+        better = s2_acc > fused_acc or (s3_acc is not None and s3_acc > fused_acc)
+        return "contradicted" if better else "corroborated"
+    return "unverifiable"
+
+
+# measure a finding against the fused windows it cites (plain row dicts: t_start_s, s2_pred, true,
+# fused_label, s3_class (int|None), is_low). code does the arithmetic the agent asserted about --
+# how the models actually scored on those windows -- so the agent's confidence and verdict rest on
+# a measured base, not self-report (principle 4). n_matched=0 means the finding cites no scored
+# window at all: unverifiable, and the caller fails such a finding out of the record.
+def measure_finding(finding: dict, rows: list[dict]) -> dict:
+    try:
+        t0, t1 = float(finding["t_start_s"]), float(finding["t_end_s"])
+    except (KeyError, TypeError, ValueError):
+        return {"n_matched": 0, "verdict_check": "unverifiable",
+                "note": "finding has no usable time window"}
+    sel = [r for r in rows if t0 <= r["t_start_s"] < t1]
+    n = len(sel)
+    if n == 0:
+        return {"n_matched": 0, "verdict_check": "unverifiable",
+                "note": "cites no scored window in this trial"}
+    s2_acc = round(sum(r["s2_pred"] == r["true"] for r in sel) / n, 3)
+    fused_acc = round(sum(r["fused_label"] == r["true"] for r in sel) / n, 3)
+    s3_rows = [r for r in sel if r["s3_class"] is not None]
+    s3_acc = (round(sum(r["s3_class"] == r["true"] for r in s3_rows) / len(s3_rows), 3)
+              if s3_rows else None)
+    return {
+        "n_matched": n,
+        "n_disagreement": sum(1 for r in sel if r["is_low"]),
+        "s2_accuracy": s2_acc, "s3_accuracy": s3_acc, "fused_accuracy": fused_acc,
+        "verdict_check": _check_verdict(finding.get("fusion_verdict"), s2_acc, s3_acc, fused_acc),
+    }
+
+
 # enforce the provenance gate on one finding: real window + valid classification/confidence.
-# returns the finding with a validation block; ok=False means flagged, never silently kept.
-def validate_finding(f: dict) -> dict:
+# when `rows` (the fused windows for this finding's trial) is given, also measure the finding
+# against ground truth: attach the measurement, fail a finding that cites no scored window, and
+# flag a 'high' confidence the labels contradict. returns the finding with a validation block;
+# ok=False means flagged, never silently kept.
+def validate_finding(f: dict, rows: list[dict] | None = None) -> dict:
     reasons: list[str] = []
     if not isinstance(f, dict) or not f.get("statement"):
         reasons.append("no statement")
@@ -109,24 +194,43 @@ def validate_finding(f: dict) -> dict:
             reasons.append("t_end_s not after t_start_s")
     except (KeyError, TypeError, ValueError):
         reasons.append("missing/invalid time window")
-    return {**f, "validation": {"ok": not reasons, "reasons": reasons}}
+
+    out = {**f}
+    if rows is not None:
+        m = measure_finding(f, rows)
+        out["measurement"] = m
+        flags: list[str] = []
+        if m["n_matched"] == 0:
+            # a finding that lands on no scored window is not grounded; keep it out of the record
+            reasons.append("cites no scored window (finding not grounded in the fused table)")
+        if m.get("verdict_check") == "contradicted" and f.get("confidence") == "high":
+            flags.append("high confidence contradicted by ground truth")
+        out["confidence_flags"] = flags
+
+    out["validation"] = {"ok": not reasons, "reasons": reasons}
+    return out
 
 
-# validate all, write one JSONL line per finding + the raw text alongside. returns (path, n_ok,
+# validate all, write one JSONL line per finding + the raw text alongside; passers also go to
+# the cross-run ledger when one is given. `windows` maps (rev, trial) -> the fused row dicts for
+# that trial; when given, each finding is measured against ground truth. returns (path, n_ok,
 # n_flagged).
-def write_review(out_dir: Path, findings: list[dict] | None,
-                 final_text: str) -> tuple[Path, int, int]:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / REVIEW_FILENAME
-    (out_dir / "fusion_review_raw.txt").write_text(final_text or "", encoding="utf-8")
+def write_review(out_dir: Path, findings: list[dict] | None, final_text: str,
+                 ledger_path: Path | None = None, run_id: str = "",
+                 windows: dict | None = None) -> tuple[Path, int, int]:
+    def validate(f: dict) -> dict:
+        rows = None if windows is None else windows.get((f.get("rev"), _trial_key(f.get("trial"))))
+        return validate_finding(f, [] if rows is None else rows)
 
-    if not findings:
-        path.write_text("", encoding="utf-8")
-        return path, 0, 0
+    return gate_and_write(
+        out_dir, findings, validate if windows is not None else validate_finding, final_text,
+        out_name=REVIEW_FILENAME, ledger_path=ledger_path, run_id=run_id)
 
-    validated = [validate_finding(f) for f in findings]
-    n_ok = sum(1 for v in validated if v["validation"]["ok"])
-    with path.open("w", encoding="utf-8") as fh:
-        for v in validated:
-            fh.write(json.dumps(v, ensure_ascii=False) + "\n")
-    return path, n_ok, len(validated) - n_ok
+
+# normalise a trial identifier to an int key when possible, so a finding's "trial": 1 and the
+# fused table's trial 1 land in the same bucket regardless of int/str/float spelling
+def _trial_key(trial: object) -> object:
+    try:
+        return int(trial)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return trial

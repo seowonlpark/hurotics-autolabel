@@ -1,5 +1,10 @@
 # S1 constants -- everything tunable lives here, nothing buried in logic
 
+# the label codes are defined once in the top-level dataset_profile (the data contract) and
+# aliased below under S1's names, so the raw layer and the labeled layer share one definition.
+from dataset_profile import HUMAN_UNKNOWN as LABEL_UNKNOWN_HUMAN
+from dataset_profile import MACHINE_UNKNOWN as LABEL_UNKNOWN_MACHINE
+
 # column naming
 # raw headers carry a positional prefix ("47_loco"), NOT a stable id -- same index is
 # `loco` at that index in some files, `Step` in others. resolve by name. this regex strips it
@@ -45,9 +50,8 @@ FAMILY_UNKNOWN = "unknown"
 LEGACY_ALGO_COLUMNS = ("loco",)
 
 # label encoding
-# two unknowns, opposite in kind -- never merge them
-LABEL_UNKNOWN_MACHINE = 255 # data error: nothing was measured properly
-LABEL_UNKNOWN_HUMAN = -1 # valid annotation: a human looked and could not call it
+# two unknowns, opposite in kind -- never merge them. LABEL_UNKNOWN_HUMAN (-1) and
+# LABEL_UNKNOWN_MACHINE (255) are imported from dataset_profile at the top of this file.
 
 # time / rate
 TIME_UNIT_MS = 1.0 # Time column is a device uptime counter in ms

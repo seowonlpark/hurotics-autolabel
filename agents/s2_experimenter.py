@@ -83,15 +83,32 @@ def build_prompt(report_md: str, ledger_rows: list[dict], champion: dict | None,
     )
 
 
+# a revision request appended to the experimenter's prompt when the critic returned 'revise':
+# the exact spec the critic held back and the changes it asked for. the experimenter fixes THAT
+# spec rather than starting over, so a 'revise' verdict is acted on instead of ending the cycle.
+def revision_block(prev_proposal: dict, critic_reasons: list[str]) -> str:
+    return (
+        "\nREVISION REQUESTED - the critic did NOT reject your idea. It wants this same "
+        "proposal run, but the spec must be fixed first. Your previous proposal was:\n"
+        f"{json.dumps(prev_proposal, indent=2)}\n"
+        "The critic asked you to revise it for these reasons:\n"
+        f"{json.dumps(critic_reasons, indent=2)}\n"
+        "Output the corrected spec. Keep the same core idea and, unless a reason forces it, the "
+        "same name. Change only what the critic flagged - do not start a different experiment.\n"
+    )
+
+
 # pull the JSON object out of the agent's reply; tolerant of fences and prose
 def parse_proposal(final_text: str) -> dict | None:
     return extract_json_object(final_text)
 
 
-# persist the proposal (or the raw text when it did not parse) for audit
-def write_proposal(out_dir: Path, proposal: dict | None, final_text: str) -> Path:
+# persist the proposal (or the raw text when it did not parse) for audit. `name` lets a revision
+# attempt write to a distinct file so no earlier attempt in the same run is overwritten.
+def write_proposal(out_dir: Path, proposal: dict | None, final_text: str,
+                   name: str = PROPOSAL_FILENAME) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / PROPOSAL_FILENAME
+    path = out_dir / name
     path.write_text(json.dumps(proposal if proposal else {"unparsed": final_text},
                                indent=2, ensure_ascii=False), encoding="utf-8")
     return path

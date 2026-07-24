@@ -118,7 +118,8 @@ training* and never looked at until the very end - this is the lockbox. It is ho
 the model really generalizes to a new person, rather than just memorizing the people it trained on.
 
 You choose which revs are the lockbox by editing one line in
-[`stages/s2_ml/dataset.py`](stages/s2_ml/dataset.py):
+[`dataset_profile.py`](dataset_profile.py) - the single file that holds the data contract
+(label codes, column schema, file naming, and subject splits):
 
 ```python
 DEFAULT_LOCKBOX_REVS = ("rev8", "rev13")   # the revs held out until the final test
@@ -225,6 +226,10 @@ being overwritten:
 - `runs/s3_physics/hypotheses.jsonl`, `runs/s4_fusion/fusion_review.jsonl`,
   `runs/s4_fusion/curation_queue.jsonl` **(agents)** - the agents' logged reasoning and routing
   decisions.
+- `runs/s3_physics/hypotheses_ledger.jsonl`, `runs/s4_fusion/fusion_findings_ledger.jsonl`,
+  `runs/s4_fusion/new_class_ledger.jsonl` **(agents)** - the cumulative cross-run record each
+  analyst agent reads before it runs, so a later run sharpens or contradicts an earlier claim
+  rather than silently restating it. Each passing item is stamped with the run that produced it.
 
 **Plots (`.png`)** - the visual companions the physics agent reads:
 
@@ -257,6 +262,72 @@ The one command above is usually all you need. For finer control, each stage can
 | `python orchestrator.py s4_fusion` | AI: review the disagreements (spends credit) |
 
 See [`PIPELINE.md`](PIPELINE.md) section 8 for the complete list.
+
+---
+
+## Adding a new class (beyond standing / walking)
+
+The pipeline ships with two classes because that is what the labeled data supported, not because
+anything is wired to two. Adding a third locomotion state (say a **squat**, or a **ramp**) is three
+small, independent edits - one per stage that has an opinion about the class. Nothing here needs new
+plumbing; the mechanisms below already exist.
+
+**1. Teach the classifier the class (S2).** This is a data + declaration change:
+
+- Put trials carrying the new `Label` code under `data/labeled/rev*/`, same filename pattern. A class
+  the model never sees in training it can never predict.
+- Declare the code in [`dataset_profile.py`](dataset_profile.py) - add it next to `STAND` / `WALK` and
+  extend `TRAIN_CLASSES` - and add its display name to `CLASS_NAMES` in
+  [`stages/s2_ml/locoeval.py`](stages/s2_ml/locoeval.py) so the scoring tables know it.
+
+Nothing else in S2 is class-specific: the forest and its macro-F1 already average over whatever
+classes exist, so a re-run scores the new class alongside the old ones. A class with too few or too
+impure windows shows up as weak recall, not a crash.
+
+**2. Give the class a physics second-opinion (S3).** The physics stage judges each window with a
+**discriminator** - a named test that maps a window's anchor measurements to a verdict. The
+stand-vs-walk "swap rule" is simply the first one registered (see
+[`stages/s3_physics/discriminators.py`](stages/s3_physics/discriminators.py) and its registration in
+[`stages/s3_physics/anchors.py`](stages/s3_physics/anchors.py)). To give a new class its own verdict,
+register another. The simplest form is declarative - a threshold rule over the existing anchors, no
+new code:
+
+```python
+from stages.s3_physics import discriminators as disc
+from stages.s3_physics.anchors import DISCRIMINATOR_ANCHORS
+
+# a bilateral squat: the legs bend TOGETHER (antiphase < 0, unlike walking) while the
+# posture sweeps (grav_stab low). expressed only over anchors the pipeline already measures.
+squat = disc.from_spec(
+    name="squat", emits="SQUAT",
+    spec=[{"anchor": "antiphase", "op": "<", "value": 0.0},
+          {"anchor": "grav_stab", "op": "<", "value": 0.5}],
+    known_anchors=DISCRIMINATOR_ANCHORS,
+)
+```
+
+A declarative rule is **data, not code**, so the pipeline can check it the way it checks a model idea:
+`validate_spec` rejects any anchor it does not know or any malformed threshold, the rate-invariance
+audit tells you whether the verdict survives a change of sampling rate, and a rule that did not come
+from the built-in physics is marked *proposed* and routed to a human before it can change a call. If
+the class genuinely needs physics a threshold cannot express (the swap rule needed hysteresis and a
+stride-adaptive window), register a bespoke callable instead - same registry, `kind="callable"`. The
+one thing still done by hand is inventing a **new** physical quantity: if no existing anchor separates
+your class, someone has to add the anchor, the way the swap rule was first derived.
+
+**3. The confidence comes for free (S4).** The fused confidence is read off how often S2 and the
+physics **agree**, measured per cell of the (label, verdict) table - not hand-wired to two classes
+(see `derive_policy` / `FusionPolicy` in [`stages/s4_fusion/fuse.py`](stages/s4_fusion/fuse.py)). Once
+the new class appears in both the S2 labels and an S3 verdict, its cells enter that table
+automatically: the fused label for each cell becomes its measured majority, and the tier follows the
+same structural rule (the two views name the same class -> high; the physics abstains -> medium; they
+name different classes -> low). The only wiring is to map the new verdict to its class in `S3_TO_CLASS`
+so agreement can be computed. A cell with too few windows is left to fall back on the classifier
+rather than invent a call from noise. Derive the policy once from your training data and keep it fixed
+for deployment - never re-derive it on the held-out lockbox, which would spend the one honest test.
+
+For the deeper rationale and the exact anchor vocabulary, see
+[`PIPELINE.md`](PIPELINE.md) section 13.
 
 ---
 
@@ -317,16 +388,19 @@ beneath each agent step (for example 3.1 - 3.3), and the per-run agent outputs l
 | 5 | `s2_champion` - seed champion from spec | det | in-process `seed_champion()` | `runs/s2_ml/champion.json` (gate) |
 | 6 | `s2_cycle` - champion/challenger | agent, opt-in | `python orchestrator.py s2_cycle` | the four phases below |
 | 6.1 | (experimenter) propose one challenger spec | agent | reads locoeval.md + the full ledger + champion + feature list; never repeats a prior proposal | `runs/<date>_runN/proposal.json` |
-| 6.2 | (critic) vet it before any training | agent | reviews the proposal against the ledger; verdict approve / revise | `runs/<date>_runN/critic_review.json` |
+| 6.2 | (critic) vet it before any training | agent | reviews the proposal against the ledger; verdict approve / revise / reject. on `revise`, the experimenter gets one bounded retry with the critic's reasons, then a fresh critique | `runs/<date>_runN/critic_review.json` (+ `_rev1` if revised) |
 | 6.3 | run the experiment | det | only if the critic approved; deterministic LORO train + score | ledger row |
 | 6.4 | gate - the metric decides | det | `decide(result, champion)` gates on measured macro-F1; neither agent can promote | `experiments.jsonl`, `proposals.jsonl`, and `champion.json` only if promoted |
 | 7 | `s2_refit` - refit champion artifacts after the cycle | opt-in | `python -m stages.s2_ml.train --out runs/s2_ml --taxonomy --skip-if-current` | `runs/s2_ml/champion.joblib` (gate), `model_meta.json` |
 | 8 | `s2_oof` - out-of-fold predictions (fusion input) | det | `python -m stages.s2_ml.oof --out runs/s2_ml` | `runs/s2_ml/oof_champion.csv` (gate) |
 
-The cycle exits early - recording the proposal and leaving the champion untouched - if the
-experimenter output does not parse, the critic verdict is not `approve`, or the spec is invalid
-before training. The experimenter and critic only propose and vet; `decide()` in code is the only
-thing that can change the champion.
+A `revise` verdict is not a dead end: the critic's reasons are fed back to the experimenter for
+one bounded retry (it fixes that same spec rather than starting over), then the revised spec is
+critiqued once more. Each attempt is written to its own file, so no proposal or review is
+overwritten. The cycle exits early - recording the proposal and leaving the champion untouched -
+if the experimenter output does not parse, the critic `reject`s (or still says `revise` after the
+retry), or the spec is invalid before training. The experimenter and critic only propose and vet;
+`decide()` in code is the only thing that can change the champion.
 
 ### S3 - Physics
 
