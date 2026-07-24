@@ -14,6 +14,7 @@ from pathlib import Path
 import pandas as pd
 
 from stages.s2_ml.dataset import STAND, WALK, Trial, load_dataset
+from stages.s2_ml.experiment import champion_config, champion_spec_from_json
 from stages.s2_ml.features import WindowSpec
 from stages.s3_physics.anchors import ANCHOR_NAMES, WALKING, trial_anchors
 from stages.s3_physics.plots import plot_all
@@ -23,6 +24,16 @@ from stages.s3_physics.rate_audit import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 S3_OUT_DIR = REPO_ROOT / "runs" / "s3_physics"
+S2_RUN_DIR = REPO_ROOT / "runs" / "s2_ml"
+
+
+# the champion's window, so S3's per-window grid matches the S2 OOF grid the fusion joins on
+# (JOIN_KEYS include t_start_ms; a mismatched window would collapse the inner join). S3's physics
+# stays model-free -- this only aligns the sampling grid the two stages must share. defaults to
+# the plain WindowSpec() when no champion exists yet or its window is already the default.
+def champion_windowspec(s2_dir: Path = S2_RUN_DIR) -> WindowSpec:
+    csp = champion_spec_from_json(s2_dir)
+    return champion_config(csp)[0] if csp else WindowSpec()
 
 ANCHORS_CSV = "anchors.csv"
 AUDIT_JSON = "rate_audit.json"
@@ -97,7 +108,7 @@ def load_analysis_trials() -> list[Trial]:
 
 # run the whole deterministic core into out_dir; returns the audit report
 def run(out_dir: Path = S3_OUT_DIR, spec: WindowSpec | None = None) -> dict:
-    spec = spec or WindowSpec()
+    spec = spec or champion_windowspec()  # match the champion/OOF grid the fusion joins on
     out_dir.mkdir(parents=True, exist_ok=True)
     trials = load_analysis_trials() # lockbox sealed (Section 7)
 
@@ -145,7 +156,7 @@ def main() -> None:
                         help="window length in seconds (default: champion window)")
     args = parser.parse_args()
 
-    spec = WindowSpec(window_s=args.window_s) if args.window_s else WindowSpec()
+    spec = WindowSpec(window_s=args.window_s) if args.window_s else None  # None => champion window
     audit = run(args.out, spec)
 
     n_rows = sum(1 for _ in (args.out / ANCHORS_CSV).open(encoding="utf-8")) - 1

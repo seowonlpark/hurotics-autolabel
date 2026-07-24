@@ -216,6 +216,34 @@ def save_champion_spec(spec: dict, path: Path = CHAMPION_SPEC_PATH) -> None:
     path.write_text(json.dumps(spec, indent=2) + "\n", encoding="utf-8")
 
 
+# a spec dict -> ExperimentSpec, tolerant of an older/newer schema (unknown keys dropped)
+def _spec_from_dict(data: dict) -> ExperimentSpec:
+    valid = {f.name for f in fields(ExperimentSpec)}
+    return ExperimentSpec(**{k: v for k, v in data.items() if k in valid})
+
+
+# the CURRENT champion's spec, read from the runtime champion.json (which a within-session
+# promotion may have advanced past the git-tracked seed). None when no champion exists yet.
+# this is the source the serve path (oof / lockbox / s3 grid / export) must reconstruct from,
+# so the deployed model is the champion in full -- not just its dropped features.
+def champion_spec_from_json(out_dir: Path) -> ExperimentSpec | None:
+    champ = load_champion(out_dir)
+    return _spec_from_dict(champ["spec"]) if champ else None
+
+
+# resolve a spec to the concrete (WindowSpec, model_params, drop_features) it is fit with --
+# the SAME resolution train.main uses, so every serve-path reconstruction (oof, lockbox, the
+# S3 join grid, export's row mapping) matches train.py's persisted champion exactly. a default
+# champion (window_s/stride_s null, model_params {}) resolves to the plain WindowSpec() default,
+# so nothing changes until a non-default window/params champion is actually promoted.
+def champion_config(spec: ExperimentSpec) -> tuple[WindowSpec, dict, list[str]]:
+    default = WindowSpec()
+    win = spec.window_s or default.window_s
+    stride = spec.stride_s or spec.window_s or default.stride_s
+    return (WindowSpec(window_s=win, stride_s=stride),
+            spec.resolved_params(), list(spec.drop_features))
+
+
 # secondary criterion, applied ONLY on a macro-F1 tie: at equal accuracy prefer lower
 # steady_confusion -- a sustained wrong call becomes a sustained wrong ACTION on a powered
 # device, whereas swallowed/omission are fail-passive. wrong action beats no action

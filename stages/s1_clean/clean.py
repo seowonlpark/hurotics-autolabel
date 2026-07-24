@@ -117,7 +117,15 @@ def main() -> None:
     all_rows, written, failed, observations, quarantined = [], 0, [], [], []
     for i, p in enumerate(paths, 1):
         rel = str(p.relative_to(REPO_ROOT))
-        dest, rows, err, trust = clean_one(p)
+        try:
+            dest, rows, err, trust = clean_one(p)
+        except Exception as exc:
+            # an UNEXPECTED failure (a ragged CSV pandas can't parse, a parquet write error, a
+            # trust-detection edge) must not abort the whole run -- that is the one way the
+            # partition gate below could break. quarantine it like any other whole-file reject,
+            # with the exception as the reason. known failures already come back as `err`; this
+            # only catches what clean_one did not anticipate.
+            dest, rows, err, trust = None, [], f"unexpected error: {type(exc).__name__}: {exc}", None
         all_rows += rows
         if err:
             failed.append((rel, err))

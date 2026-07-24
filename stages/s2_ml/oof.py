@@ -1,13 +1,13 @@
 # S2 out-of-fold predictions as a stage artifact, so S4 fusion joins a file rather than
 # recomputing the model (filesystem is the interface, PLAN principle 2). reproduces the
-# CHAMPION exactly -- same feature drops, same leave-one-rev-out folds, so every window is
-# scored only by a model that never saw its rev -- and adds the class probability the hard-label
-# CV path (train.cross_validate) discards. lockbox never enters: OOF is over training revs only.
+# CHAMPION exactly -- its full spec (dropped features, window/stride, model params via
+# champion_config), same leave-one-rev-out folds, so every window is scored only by a model
+# that never saw its rev -- and adds the class probability the hard-label CV path (train.loro)
+# discards. lockbox never enters: OOF is over training revs only.
 
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +15,7 @@ import pandas as pd
 from sklearn.model_selection import LeaveOneGroupOut
 
 from stages.s2_ml.dataset import load_dataset
+from stages.s2_ml.experiment import champion_config, champion_spec_from_json, select_features
 from stages.s2_ml.features import WindowSpec, build_windows, feature_columns
 from stages.s2_ml.train import build_model, trainable
 
@@ -27,18 +28,23 @@ CHAMPION_JSON = "champion.json"
 META_KEYS = ["rev", "trial", "segment", "t_start_ms", "label"]
 
 
-# champion feature set = all window features minus the champion's logged drops
-def champion_features(all_feats: list[str], champion_path: Path) -> list[str]:
-    drops = set(json.loads(champion_path.read_text(encoding="utf-8"))["spec"]["drop_features"])
-    return [f for f in all_feats if f not in drops]
-
-
-# leave-one-rev-out out-of-fold (prediction, max-class probability) for the champion feature set
+# leave-one-rev-out out-of-fold (prediction, max-class probability) for the FULL champion spec
+# -- its dropped features, window/stride, AND model params (champion_config), so oof_champion.csv
+# is the real champion's fusion input, not a default-window/default-param stand-in that would
+# silently describe a different model the moment a non-default champion is promoted.
 def champion_oof(out_dir: Path = S2_OUT_DIR, spec: WindowSpec | None = None) -> pd.DataFrame:
-    spec = spec or WindowSpec()
-    windows = build_windows(load_dataset(), spec)
+    csp = champion_spec_from_json(out_dir)
+    if csp is None:
+        raise FileNotFoundError(
+            f"no {CHAMPION_JSON} in {out_dir}; establish a champion first "
+            f"(python -m stages.s2_ml.train --out {out_dir.name}, or run_pipeline.py).")
+    wspec, params, drops = champion_config(csp)
+    if spec is not None:
+        wspec = spec  # explicit window override (rare); params/drops stay the champion's
+
+    windows = build_windows(load_dataset(), wspec)
     df = trainable(windows, "train").copy()
-    feats = champion_features(feature_columns(windows), out_dir / CHAMPION_JSON)
+    feats = select_features(feature_columns(windows), drops)
 
     X = df[feats].to_numpy(float)
     y = df["label"].to_numpy(int)
@@ -47,7 +53,7 @@ def champion_oof(out_dir: Path = S2_OUT_DIR, spec: WindowSpec | None = None) -> 
     pred = np.empty_like(y)
     proba = np.zeros(len(y))
     for tr, te in LeaveOneGroupOut().split(X, y, groups):
-        model = build_model()
+        model = build_model(params)
         model.fit(X[tr], y[tr])
         p = model.predict_proba(X[te])
         pred[te] = model.classes_[p.argmax(1)]

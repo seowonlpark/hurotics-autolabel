@@ -52,17 +52,27 @@ def apply_fusion(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# per-class recall on the kept subset; None when the class is absent -- recall is undefined
+# then, not zero, and reporting 0 (or a bare nan) would misstate a rev/tier that simply holds
+# no windows of that class
+def _recall(t: np.ndarray, p: np.ndarray, cls: int) -> float | None:
+    mask = t == cls
+    return round(float((p[mask] == cls).mean()), 4) if mask.any() else None
+
+
 # macro-F1 / accuracy / per-class recall / coverage for pred against true, over an optional
-# keep mask (the windows a controller would actually act on)
+# keep mask (the windows a controller would actually act on). metrics are None on an empty
+# subset (e.g. a tier where everything abstained) rather than nan
 def score(true: np.ndarray, pred: np.ndarray, keep: np.ndarray | None = None) -> dict:
     keep = np.ones(len(true), bool) if keep is None else keep
     t, p = true[keep], pred[keep]
     return {
-        "coverage": round(float(keep.mean()), 4),
-        "macro_f1": round(float(f1_score(t, p, labels=[STAND, WALK], average="macro")), 4),
-        "accuracy": round(float((t == p).mean()), 4),
-        "stand_recall": round(float((p[t == STAND] == STAND).mean()), 4),
-        "walk_recall": round(float((p[t == WALK] == WALK).mean()), 4),
+        "coverage": round(float(keep.mean()), 4) if len(keep) else 0.0,
+        "macro_f1": (round(float(f1_score(t, p, labels=[STAND, WALK], average="macro",
+                                          zero_division=0)), 4) if t.size else None),
+        "accuracy": round(float((t == p).mean()), 4) if t.size else None,
+        "stand_recall": _recall(t, p, STAND),
+        "walk_recall": _recall(t, p, WALK),
     }
 
 

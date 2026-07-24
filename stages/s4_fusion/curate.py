@@ -83,7 +83,7 @@ def prioritise(spans: list[dict]) -> list[dict]:
         out.append({
             "route": s["route"],
             "rev": s["rev"], "trial": s["trial"],
-            "t_start_s": round((s["t_start_ms"] - 0) / 1000, 1),  # ms are trial-absolute
+            "t_start_s": round(s["t_start_ms"] / 1000, 1),  # ms are trial-absolute
             "t_end_s": round(s["t_end_ms"] / 1000, 1),
             "n_windows": s["n_windows"],
             "human_label": "STAND" if s["label"] == STAND else "WALK",

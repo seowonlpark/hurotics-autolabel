@@ -5,6 +5,7 @@
 #   python run_pipeline.py                # deterministic spine only (free, no API key)
 #   python run_pipeline.py --with-agents  # + the paid agent steps (needs ANTHROPIC_API_KEY)
 #   python run_pipeline.py --s2-cycle     # also run one champion/challenger cycle (paid, opt-in)
+#   python run_pipeline.py --s2-cycles N  # run N champion/challenger cycles back to back (paid)
 #
 # each step runs as its own subprocess (a fresh process per stage is the "no manual
 # intervention" guarantee) and must produce its gate artifact before the next step starts;
@@ -21,7 +22,7 @@ import argparse
 import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -90,9 +91,6 @@ def build_steps() -> list[Step]:
              fn=seed_champion, gate=RUNS / "s2_ml" / "champion.json"),
         Step("s2_cycle", "S2 champion/challenger cycle (experimenter + critic)",
              cmd=[PY, "orchestrator.py", "s2_cycle"], agent=True, opt_in=True),
-        # the cycle may have rewritten champion_spec.json; refit the deployment artifacts
-        # (champion.joblib, model_meta.json, locoeval.md, taxonomy.json) so they track the
-        # promoted champion. deterministic and idempotent -- a no-op if nothing was promoted.
         Step("s2_refit", "S2 refit champion artifacts (after the cycle may have promoted)",
              cmd=[PY, "-m", "stages.s2_ml.train", "--out", "runs/s2_ml", "--taxonomy"],
              gate=RUNS / "s2_ml" / "champion.joblib", opt_in=True),
@@ -114,13 +112,20 @@ def build_steps() -> list[Step]:
     ]
 
 
-# which steps to run given the flags
-def select(steps: list[Step], with_agents: bool, s2_cycle: bool) -> list[Step]:
+# which steps to run given the flags. n_cycles is how many champion/challenger rounds to run
+# (0 = none); each round is a fresh subprocess that sees the ledger + champion the last one left,
+# and one s2_refit at the end brings the deployment artifacts to the final champion
+def select(steps: list[Step], with_agents: bool, n_cycles: int) -> list[Step]:
     out = []
     for s in steps:
         if s.opt_in:
-            # the cycle and its follow-on refit are gated behind the same --s2-cycle flag
-            if s.key in ("s2_cycle", "s2_refit") and s2_cycle:
+            if n_cycles <= 0:
+                continue
+            if s.key == "s2_cycle":  # expand into one step per round
+                for i in range(1, n_cycles + 1):
+                    title = s.title if n_cycles == 1 else f"{s.title} [round {i}/{n_cycles}]"
+                    out.append(replace(s, title=title))
+            elif s.key == "s2_refit":  # once, after the last round
                 out.append(s)
             continue
         if s.agent and not with_agents:
@@ -189,11 +194,19 @@ def main() -> None:
                     help="also run the paid agent steps (needs the API key)")
     ap.add_argument("--s2-cycle", action="store_true",
                     help="also run one champion/challenger cycle (paid, nondeterministic)")
+    ap.add_argument("--s2-cycles", type=int, metavar="N",
+                    help="run N champion/challenger cycles back to back (implies --s2-cycle); "
+                         "each round sees the ledger and champion the previous one left")
     ap.add_argument("--list", action="store_true",
                     help="print the selected steps and exit")
     ap.add_argument("--dry-run", action="store_true",
                     help="print each command without running it")
     args = ap.parse_args()
+
+    # --s2-cycles N wins if given; otherwise --s2-cycle means one round, absent means none
+    n_cycles = args.s2_cycles if args.s2_cycles is not None else (1 if args.s2_cycle else 0)
+    if n_cycles < 0:
+        ap.error("--s2-cycles must be >= 0")
 
     # agent text carries characters the cp949 console can't encode; never let a stray print
     # crash a run (DOMAIN_NOTES Section 8)
@@ -202,7 +215,7 @@ def main() -> None:
             stream.reconfigure(errors="replace")
 
     steps = build_steps()
-    selected = select(steps, args.with_agents, args.s2_cycle)
+    selected = select(steps, args.with_agents, n_cycles)
 
     if args.list:
         print("selected steps:")

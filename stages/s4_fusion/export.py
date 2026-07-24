@@ -12,15 +12,19 @@ from pathlib import Path
 import pandas as pd
 
 from stages.s2_ml.dataset import LABELED_DIR, TIME_COL, rev_of, trial_of
+from stages.s2_ml.experiment import champion_config, champion_spec_from_json
 from stages.s2_ml.features import DEFAULT_WINDOW_S
+from stages.s2_ml.oof import S2_OUT_DIR
 from stages.s4_fusion.run import FUSED_CSV, S4_OUT_DIR, run as run_s4
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_DIR = REPO_ROOT / "results"
 
-# the S2 OOF windows the fusion joins on are the default fixed length; a window owns the
-# original rows whose Time falls in [t_start, t_start + WINDOW) on the same device clock
-WINDOW_MS = DEFAULT_WINDOW_S * 1000.0
+# a fused window owns the original rows whose Time falls in [t_start, t_start + window) on the
+# same device clock. the span is the CHAMPION window (export() reads it from the champion spec so
+# the mapping matches the grid the fused table was computed on); this is only the fallback used
+# when no champion is present.
+DEFAULT_WINDOW_MS = DEFAULT_WINDOW_S * 1000.0
 FUSED_COLS = ("fused_label", "confidence")
 
 
@@ -33,7 +37,8 @@ def all_labeled_trials(labeled_dir: Path = LABELED_DIR) -> list[Path]:
 # attach fused_label + confidence to each original row via the window that covers its Time.
 # windows = this trial's slice of the fused table (may be empty). backward as-of match to the
 # window that starts at/before the row, kept only if the row falls inside that window's span
-def annotate(orig: pd.DataFrame, windows: pd.DataFrame) -> pd.DataFrame:
+def annotate(orig: pd.DataFrame, windows: pd.DataFrame,
+             window_ms: float = DEFAULT_WINDOW_MS) -> pd.DataFrame:
     out = orig.copy()
     for c in FUSED_COLS:
         out[c] = pd.NA
@@ -42,7 +47,7 @@ def annotate(orig: pd.DataFrame, windows: pd.DataFrame) -> pd.DataFrame:
     w = windows[["t_start_ms", *FUSED_COLS]].sort_values("t_start_ms").reset_index(drop=True)
     left = out.reset_index()[["index", TIME_COL]].sort_values(TIME_COL)
     m = pd.merge_asof(left, w, left_on=TIME_COL, right_on="t_start_ms", direction="backward")
-    m = m[m[TIME_COL] < m["t_start_ms"] + WINDOW_MS].set_index("index")
+    m = m[m[TIME_COL] < m["t_start_ms"] + window_ms].set_index("index")
     for c in FUSED_COLS:
         out.loc[m.index, c] = m[c].to_numpy()
     return out
@@ -50,19 +55,24 @@ def annotate(orig: pd.DataFrame, windows: pd.DataFrame) -> pd.DataFrame:
 
 # write every labeled trial to results/<same name>.csv with the fused columns appended.
 # returns (files_written, rows_with_a_fused_label). regenerates the fused table if absent.
-def export(out_dir: Path = RESULTS_DIR, s4_dir: Path = S4_OUT_DIR) -> tuple[int, int]:
+def export(out_dir: Path = RESULTS_DIR, s4_dir: Path = S4_OUT_DIR,
+           s2_dir: Path = S2_OUT_DIR) -> tuple[int, int]:
     fused_path = s4_dir / FUSED_CSV
     if not fused_path.exists():
         run_s4(s4_dir)
     fused = pd.read_csv(fused_path)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # the fused windows are gridded to the champion window; map rows over that same span
+    csp = champion_spec_from_json(s2_dir)
+    window_ms = (champion_config(csp)[0].window_s if csp else DEFAULT_WINDOW_S) * 1000.0
+
     written, labeled_rows = 0, 0
     for p in all_labeled_trials():
         orig = pd.read_csv(p)
         orig.columns = [c.strip() for c in orig.columns] # some trials carry stray whitespace
         w = fused[(fused["rev"] == rev_of(p)) & (fused["trial"] == trial_of(p))]
-        annotated = annotate(orig, w)
+        annotated = annotate(orig, w, window_ms)
         annotated.to_csv(out_dir / p.name, index=False)
         written += 1
         labeled_rows += int(annotated["fused_label"].notna().sum())

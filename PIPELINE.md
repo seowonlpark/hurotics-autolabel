@@ -184,6 +184,7 @@ the next runs, and never touches the single-use held-out set):
 python run_pipeline.py                # free deterministic spine -> the fusion report
 python run_pipeline.py --with-agents  # also run the four paid agent steps
 python run_pipeline.py --s2-cycle     # also run one champion/challenger cycle (paid)
+python run_pipeline.py --s2-cycles N  # run N champion/challenger cycles back to back (paid)
 python run_pipeline.py --list         # print the selected steps and exit
 python run_pipeline.py --dry-run      # print each command without running it
 ```

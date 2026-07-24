@@ -28,8 +28,9 @@ from pathlib import Path
 import pandas as pd
 
 from stages.s2_ml.dataset import STAND, WALK, DEFAULT_LOCKBOX_REVS, load_dataset
+from stages.s2_ml.experiment import champion_config, champion_spec_from_json, select_features
 from stages.s2_ml.features import WindowSpec, build_windows, feature_columns
-from stages.s2_ml.oof import CHAMPION_JSON, S2_OUT_DIR, champion_features
+from stages.s2_ml.oof import S2_OUT_DIR
 from stages.s2_ml.train import build_model, trainable
 from stages.s3_physics.run import S3_OUT_DIR, build_anchor_table
 from stages.s4_fusion.fuse import HIGH, LOW, MED
@@ -77,14 +78,20 @@ def _score_block(g: pd.DataFrame) -> dict:
 # lockbox. this is the only place lockbox windows are ever fed to the model.
 def lockbox_aligned(spec: WindowSpec | None = None, s2_dir: Path = S2_OUT_DIR,
                     s3_dir: Path = S3_OUT_DIR) -> pd.DataFrame:
-    spec = spec or WindowSpec()
+    csp = champion_spec_from_json(s2_dir)
+    if csp is None:
+        raise FileNotFoundError(
+            f"no champion.json in {s2_dir}; establish a champion before opening the lockbox.")
+    wspec, params, drops = champion_config(csp)  # full spec: features, window/stride, params
+    if spec is not None:
+        wspec = spec  # explicit window override (rare); params/drops stay the champion's
     trials = load_dataset() # includes the lockbox trials (split == "lockbox")
-    windows = build_windows(trials, spec)
-    feats = champion_features(feature_columns(windows), s2_dir / CHAMPION_JSON)
+    windows = build_windows(trials, wspec)
+    feats = select_features(feature_columns(windows), drops)
 
     # deployment fit: every non-lockbox, label-pure window (train.py's final refit)
     fit = trainable(windows, "train")
-    model = build_model()
+    model = build_model(params)
     model.fit(fit[feats].to_numpy(float), fit["label"].to_numpy(int))
 
     # predict the sealed revs the model has never seen
@@ -95,9 +102,10 @@ def lockbox_aligned(spec: WindowSpec | None = None, s2_dir: Path = S2_OUT_DIR,
     lb["s2_proba"] = proba.max(1)
 
     # S3 verdicts on the lockbox trials (physics is model-free -- no fit, nothing leaks by
-    # computing it; it simply was not computed until this deliberate open)
+    # computing it; it simply was not computed until this deliberate open). SAME window grid as
+    # the S2 half so the join lines up if the champion window is ever non-default.
     lb_trials = [t for t in trials if t.split == "lockbox"]
-    anchors = build_anchor_table(lb_trials, spec)[JOIN_KEYS + ["swap_verdict_adaptive"]]
+    anchors = build_anchor_table(lb_trials, wspec)[JOIN_KEYS + ["swap_verdict_adaptive"]]
 
     m = (lb[JOIN_KEYS + ["label", "s2_pred", "s2_proba"]]
          .merge(anchors, on=JOIN_KEYS, how="inner")
