@@ -281,3 +281,87 @@ Before feeding in a new batch of CSVs, you can check they are well-formed with t
   `data/raw/<date>/` first.
 - **PowerShell won't run the activate script** - run
   `Set-ExecutionPolicy -Scope Process RemoteSigned` once, then activate again.
+
+---
+
+## The full pipeline, step by step
+
+`python run_pipeline.py` runs the stages below in this fixed order, checking each step's gate
+artifact before the next one starts. This is the run-order view of the outputs listed above.
+
+Legend: **[det]** free deterministic step; **[agent]** paid, needs the API key (runs only with
+`--with-agents`); **[opt-in]** runs only with `--s2-cycle` / `--s2-cycles N`. "Gate" is the file
+that must exist afterward, or the run stops.
+
+Every agent step has the same internal shape: a deterministic core does the work, the agent judges
+at one point, and a gate in code records only what passes. Those internal phases are numbered
+beneath each agent step (for example 3.1 - 3.3), and the per-run agent outputs land in a timestamped
+`runs/<date>_runN/` folder.
+
+### S1 - Clean
+
+| # | step | type | command / action | writes / gate |
+|---|---|---|---|---|
+| 1 | `s1_census` - measure the corpus | det | `python -m stages.s1_clean.run --out runs/s1_census` | `runs/s1_census/census.md` (gate) |
+| 2 | `s1_clean` - resample to 100 Hz, quarantine | det | `python -m stages.s1_clean.clean --out runs/s1_clean` | `runs/s1_clean/clean_report.md` (gate), manifest / segments / observations / quarantine `.jsonl` |
+| 3 | `s1_exception` - triage the exception queue | agent | `python orchestrator.py s1_exception` | the three phases below |
+| 3.1 | (code) build the exception queue | det | reads the S1 clean ledgers; an empty queue means nothing to triage | - |
+| 3.2 | (agent) triage each queued item | agent | assigns a disposition per item | - |
+| 3.3 | (code) write the review | det | if the agent output does not parse, every item is marked needs_human | `runs/<date>_runN/exceptions_review.jsonl` |
+
+### S2 - ML
+
+| # | step | type | command / action | writes / gate |
+|---|---|---|---|---|
+| 4 | `s2_train` - train + locoeval (leave-one-rev-out) | det | `python -m stages.s2_ml.train --out runs/s2_ml --taxonomy` | `runs/s2_ml/locoeval.md` (gate), `locoeval.json`, `taxonomy.json` |
+| 5 | `s2_champion` - seed champion from spec | det | in-process `seed_champion()` | `runs/s2_ml/champion.json` (gate) |
+| 6 | `s2_cycle` - champion/challenger | agent, opt-in | `python orchestrator.py s2_cycle` | the four phases below |
+| 6.1 | (experimenter) propose one challenger spec | agent | reads locoeval.md + the full ledger + champion + feature list; never repeats a prior proposal | `runs/<date>_runN/proposal.json` |
+| 6.2 | (critic) vet it before any training | agent | reviews the proposal against the ledger; verdict approve / revise | `runs/<date>_runN/critic_review.json` |
+| 6.3 | run the experiment | det | only if the critic approved; deterministic LORO train + score | ledger row |
+| 6.4 | gate - the metric decides | det | `decide(result, champion)` gates on measured macro-F1; neither agent can promote | `experiments.jsonl`, `proposals.jsonl`, and `champion.json` only if promoted |
+| 7 | `s2_refit` - refit champion artifacts after the cycle | opt-in | `python -m stages.s2_ml.train --out runs/s2_ml --taxonomy --skip-if-current` | `runs/s2_ml/champion.joblib` (gate), `model_meta.json` |
+| 8 | `s2_oof` - out-of-fold predictions (fusion input) | det | `python -m stages.s2_ml.oof --out runs/s2_ml` | `runs/s2_ml/oof_champion.csv` (gate) |
+
+The cycle exits early - recording the proposal and leaving the champion untouched - if the
+experimenter output does not parse, the critic verdict is not `approve`, or the spec is invalid
+before training. The experimenter and critic only propose and vet; `decide()` in code is the only
+thing that can change the champion.
+
+### S3 - Physics
+
+| # | step | type | command / action | writes / gate |
+|---|---|---|---|---|
+| 9 | `s3_core` - anchors, rate audit, plots | det | `python -m stages.s3_physics.run` | `runs/s3_physics/anchors.csv` (gate), `rate_audit.json`, `disagreement.json`, `plots/` |
+| 10 | `s3_physics` - hypothesis agent | agent | `python orchestrator.py s3_physics` | the three phases below |
+| 10.1 | (det) regenerate the core | det | re-runs anchors + rate audit + figures (the same core as step 9) | refreshes `runs/s3_physics/` |
+| 10.2 | (agent) read the figures, propose hypotheses | agent | reads the plots under a provenance gate | - |
+| 10.3 | (gate) provenance check | det | keeps a hypothesis only if it points at a real window | `runs/<date>_runN/hypotheses.jsonl` |
+
+### S4 - Fusion
+
+| # | step | type | command / action | writes / gate |
+|---|---|---|---|---|
+| 11 | `s4_fuse` - fuse S2 + S3 into call + confidence | det | `python -m stages.s4_fusion.run` | `runs/s4_fusion/fusion_report.md` (gate), `fused_windows.csv`, `fusion.json`, `disagreements.json` |
+| 12 | `s4_fusion` - judge the disagreement cases | agent | `python orchestrator.py s4_fusion` | the three phases below |
+| 12.1 | (det) regenerate the core | det | re-runs the fused table + metrics + disagreement ranking (the same core as step 11) | refreshes `runs/s4_fusion/` |
+| 12.2 | (agent) judge the disagreement (LOW-confidence) cases | agent | characterises what the abstentions are made of | - |
+| 12.3 | (gate) provenance check | det | keeps a finding only if it points at a real window | `runs/<date>_runN/fusion_review.jsonl` |
+| 13 | `s4_newclass` - governed new-class discovery | agent | `python orchestrator.py s4_newclass` | the three phases below |
+| 13.1 | (det) assemble the evidence bundle | det | gathers the NEW_CLASS curation spans + their physics profiles | `runs/s4_fusion/` candidate bundle |
+| 13.2 | (agent) propose classes the taxonomy misses | agent | proposes classes the {stand, walk} taxonomy may be missing | - |
+| 13.3 | (gate) mass + provenance | det | validates cluster mass + provenance; every proposal is routed to needs_human | `runs/<date>_runN/new_class_proposals.jsonl` |
+
+**What each run mode selects:**
+
+- `python run_pipeline.py` - the deterministic steps only: 1, 2, 4, 5, 8, 9, 11 (free, no key).
+- `--with-agents` - adds the agent steps 3, 10, 12, 13.
+- `--s2-cycle` / `--s2-cycles N` - adds the opt-in steps 6 and 7; step 6 expands into one round
+  per N, and `s2_refit` runs once at the end and no-ops if nothing was promoted.
+
+**Ordering.** `s2_oof` (8) runs after the champion may have changed, so it reflects the latest
+champion; `s2_refit` (7) refreshes the deployment `.joblib` / `model_meta` after a cycle; `s4_fuse`
+(11) needs both the champion OOF and the S3 anchors, so it comes last.
+
+The single-use lockbox (`stages/s4_fusion/lockbox.py`) is deliberately not in this list - the runner
+never invokes it.
