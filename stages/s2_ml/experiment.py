@@ -151,11 +151,7 @@ def run_experiment(spec: ExperimentSpec, trials=None, *, taxonomy: bool = False,
                    stride_s: float = DEFAULT_INFERENCE_STRIDE_S) -> ExperimentResult:
     validate_spec(spec)
     trials = trials if trials is not None else load_dataset()
-    default = WindowSpec()
-    wspec = WindowSpec(
-        window_s=spec.window_s if spec.window_s else default.window_s,
-        stride_s=spec.stride_s if spec.stride_s else (spec.window_s or default.stride_s),
-    )
+    wspec, params, _ = champion_config(spec)
     windows = build_windows(trials, wspec)
 
     train_df = windows[(windows["split"] == "train") &
@@ -171,7 +167,6 @@ def run_experiment(spec: ExperimentSpec, trials=None, *, taxonomy: bool = False,
     # that rev's windows (OOF) and, when asked, its rows (taxonomy) -- so train it once and use
     # it for both, rather than refitting the identical LORO forests a second time. deterministic
     # (fixed random_state), and the oof array is filled by mask, so fold order does not matter.
-    params = spec.resolved_params()
     oof = np.empty_like(y)
     per_run: list = []
     for rev in sorted(pd.unique(groups)):
@@ -201,12 +196,10 @@ def load_champion(out_dir: Path) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
-# the tracked champion spec as an ExperimentSpec, for the clean-room re-seed. filtered to the
-# dataclass fields so a spec written by an older/newer schema is not fatal
+# the tracked champion spec as an ExperimentSpec, for the clean-room re-seed. tolerant of an
+# older/newer schema (unknown keys dropped) via _spec_from_dict
 def load_champion_spec(path: Path = CHAMPION_SPEC_PATH) -> ExperimentSpec:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    valid = {f.name for f in fields(ExperimentSpec)}
-    return ExperimentSpec(**{k: v for k, v in data.items() if k in valid})
+    return _spec_from_dict(json.loads(path.read_text(encoding="utf-8")))
 
 
 # rewrite the tracked champion spec; called on every promotion so the git-tracked seed always
@@ -242,6 +235,25 @@ def champion_config(spec: ExperimentSpec) -> tuple[WindowSpec, dict, list[str]]:
     stride = spec.stride_s or spec.window_s or default.stride_s
     return (WindowSpec(window_s=win, stride_s=stride),
             spec.resolved_params(), list(spec.drop_features))
+
+
+# resolve the CURRENT champion (runtime champion.json) to the (WindowSpec, params, drops) the
+# serve path fits with -- the single entry point oof / lockbox / s3 grid / export share, so they
+# can never disagree on how a champion is rebuilt. window_override forces the sampling grid (a
+# rare, explicit --window-s) while keeping the champion's params/drops. require=True raises when
+# no champion exists (the deployment fits, which cannot proceed without one); require=False falls
+# back to the plain defaults (the model-free stages that can still run standalone).
+def resolve_champion(out_dir: Path, *, window_override: WindowSpec | None = None,
+                     require: bool = True) -> tuple[WindowSpec, dict, list[str]]:
+    csp = champion_spec_from_json(out_dir)
+    if csp is None:
+        if require:
+            raise FileNotFoundError(
+                f"no {CHAMPION_FILENAME} in {out_dir}; establish a champion first "
+                f"(python -m stages.s2_ml.train --out {out_dir.name}, or run_pipeline.py).")
+        return window_override or WindowSpec(), dict(BASE_MODEL_PARAMS), []
+    wspec, params, drops = champion_config(csp)
+    return window_override or wspec, params, drops
 
 
 # secondary criterion, applied ONLY on a macro-F1 tie: at equal accuracy prefer lower

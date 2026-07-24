@@ -22,7 +22,7 @@ import argparse
 import os
 import sys
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -72,8 +72,8 @@ def seed_champion() -> None:
 
 # the ordered pipeline. deterministic cores are free; agent steps are marked agent=True.
 # order matters: OOF is written after any champion change so it reflects the latest champion,
-# the champion joblib/model_meta are refit after the cycle for the same reason (s2_refit),
-# and S4 fuse joins the champion OOF with the S3 anchors
+# the champion joblib/model_meta are refit after the cycle for the same reason (s2_refit, which
+# skips itself when the cycle promoted nothing), and S4 fuse joins the champion OOF with S3 anchors
 def build_steps() -> list[Step]:
     return [
         Step("s1_census", "S1 census (measure the corpus)",
@@ -92,7 +92,8 @@ def build_steps() -> list[Step]:
         Step("s2_cycle", "S2 champion/challenger cycle (experimenter + critic)",
              cmd=[PY, "orchestrator.py", "s2_cycle"], agent=True, opt_in=True),
         Step("s2_refit", "S2 refit champion artifacts (after the cycle may have promoted)",
-             cmd=[PY, "-m", "stages.s2_ml.train", "--out", "runs/s2_ml", "--taxonomy"],
+             cmd=[PY, "-m", "stages.s2_ml.train", "--out", "runs/s2_ml", "--taxonomy",
+                  "--skip-if-current"],  # a no-op when the cycle promoted nothing
              gate=RUNS / "s2_ml" / "champion.joblib", opt_in=True),
         Step("s2_oof", "S2 out-of-fold predictions (fusion input)",
              cmd=[PY, "-m", "stages.s2_ml.oof", "--out", "runs/s2_ml"],

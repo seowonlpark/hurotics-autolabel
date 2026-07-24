@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,7 @@ from stages.s2_ml.dataset import load_dataset
 from stages.s2_ml.experiment import (
     CHAMPION_SPEC_PATH,
     ExperimentSpec,
+    champion_config,
     load_champion_spec,
     select_features,
 )
@@ -105,7 +107,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="runs/s2_ml")
     ap.add_argument("--window-s", type=float, default=None,
-                    help="window length in seconds; overrides the spec (Section 9 open tradeoff)")
+                    help="window length in seconds; overrides the spec window only, stride "
+                         "unchanged (Section 9 open tradeoff)")
     ap.add_argument("--taxonomy", action="store_true",
                     help="also run the row-level error taxonomy via dense inference (slow)")
     ap.add_argument("--stride-s", type=float, default=DEFAULT_INFERENCE_STRIDE_S,
@@ -115,22 +118,36 @@ def main() -> None:
                          "defaults to the git-tracked champion_spec.json")
     ap.add_argument("--full", action="store_true",
                     help="ignore the spec and train on every feature (the baseline)")
+    ap.add_argument("--skip-if-current", action="store_true",
+                    help="skip the (re)fit when champion.joblib/model_meta already reflect this "
+                         "exact spec/window/stride -- the post-cycle refit is then a no-op when "
+                         "nothing was promoted (avoids a redundant LORO CV + dense taxonomy)")
     args = ap.parse_args()
 
     out_dir = (REPO_ROOT / args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # the champion spec drives which features/window/params the persisted model uses; --full
-    # opts out to the all-feature baseline. an explicit --window-s always wins over the spec.
+    # the champion spec drives which features/window/params the persisted model uses (the SAME
+    # champion_config resolution the serve path uses, so the joblib matches the OOF/lockbox refit);
+    # --full opts out to the all-feature baseline. an explicit --window-s overrides the spec window.
     champ_spec: ExperimentSpec | None = None if args.full else load_champion_spec(Path(args.spec))
-    default = WindowSpec()
-    win = args.window_s or (champ_spec.window_s if champ_spec else None) or default.window_s
-    stride = ((champ_spec.stride_s if champ_spec else None)
-              or args.window_s or (champ_spec.window_s if champ_spec else None)
-              or default.stride_s)
-    spec = WindowSpec(window_s=win, stride_s=stride)
-    params = champ_spec.resolved_params() if champ_spec else dict(MODEL_PARAMS)
-    drops = champ_spec.drop_features if champ_spec else []
+    if champ_spec:
+        spec, params, drops = champion_config(champ_spec)
+    else:
+        spec, params, drops = WindowSpec(), dict(MODEL_PARAMS), []
+    if args.window_s:  # override the window ONLY; stride is independent (its own Section 9
+        spec = replace(spec, window_s=args.window_s)  # tradeoff), so it never rides on window_s
+
+    # a refit after a cycle that promoted nothing is redundant work: the persisted model_meta +
+    # joblib already describe this exact champion. skip the whole LORO CV + dense taxonomy then.
+    if args.skip_if_current and champ_spec is not None:
+        meta = out_dir / "model_meta.json"
+        if (out_dir / "champion.joblib").exists() and meta.exists():
+            prev = json.loads(meta.read_text(encoding="utf-8"))
+            if (prev.get("spec"), prev.get("window_s"), prev.get("stride_s")) == \
+                    (champ_spec.name, spec.window_s, spec.stride_s):
+                print(f"[s2] champion '{champ_spec.name}' artifacts already current; skipping refit")
+                return
 
     trials = load_dataset()
     windows = build_windows(trials, spec)

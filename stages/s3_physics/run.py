@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 
 from stages.s2_ml.dataset import STAND, WALK, Trial, load_dataset
-from stages.s2_ml.experiment import champion_config, champion_spec_from_json
+from stages.s2_ml.experiment import resolve_champion
 from stages.s2_ml.features import WindowSpec
 from stages.s3_physics.anchors import ANCHOR_NAMES, WALKING, trial_anchors
 from stages.s3_physics.plots import plot_all
@@ -32,8 +32,7 @@ S2_RUN_DIR = REPO_ROOT / "runs" / "s2_ml"
 # stays model-free -- this only aligns the sampling grid the two stages must share. defaults to
 # the plain WindowSpec() when no champion exists yet or its window is already the default.
 def champion_windowspec(s2_dir: Path = S2_RUN_DIR) -> WindowSpec:
-    csp = champion_spec_from_json(s2_dir)
-    return champion_config(csp)[0] if csp else WindowSpec()
+    return resolve_champion(s2_dir, require=False)[0]
 
 ANCHORS_CSV = "anchors.csv"
 AUDIT_JSON = "rate_audit.json"

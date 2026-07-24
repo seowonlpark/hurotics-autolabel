@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 from stages.s2_ml.dataset import LABELED_DIR, TIME_COL, rev_of, trial_of
-from stages.s2_ml.experiment import champion_config, champion_spec_from_json
+from stages.s2_ml.experiment import resolve_champion
 from stages.s2_ml.features import DEFAULT_WINDOW_S
 from stages.s2_ml.oof import S2_OUT_DIR
 from stages.s4_fusion.run import FUSED_CSV, S4_OUT_DIR, run as run_s4
@@ -64,8 +64,9 @@ def export(out_dir: Path = RESULTS_DIR, s4_dir: Path = S4_OUT_DIR,
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # the fused windows are gridded to the champion window; map rows over that same span
-    csp = champion_spec_from_json(s2_dir)
-    window_ms = (champion_config(csp)[0].window_s if csp else DEFAULT_WINDOW_S) * 1000.0
+    # (DEFAULT_WINDOW_S fallback when no champion exists yet)
+    wspec, _, _ = resolve_champion(s2_dir, require=False)
+    window_ms = wspec.window_s * 1000.0
 
     written, labeled_rows = 0, 0
     for p in all_labeled_trials():

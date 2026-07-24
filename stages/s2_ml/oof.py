@@ -15,14 +15,13 @@ import pandas as pd
 from sklearn.model_selection import LeaveOneGroupOut
 
 from stages.s2_ml.dataset import load_dataset
-from stages.s2_ml.experiment import champion_config, champion_spec_from_json, select_features
+from stages.s2_ml.experiment import resolve_champion, select_features
 from stages.s2_ml.features import WindowSpec, build_windows, feature_columns
 from stages.s2_ml.train import build_model, trainable
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 S2_OUT_DIR = REPO_ROOT / "runs" / "s2_ml"
 OOF_CSV = "oof_champion.csv"
-CHAMPION_JSON = "champion.json"
 
 # the keys S4 joins on, plus the ground-truth label carried through for scoring
 META_KEYS = ["rev", "trial", "segment", "t_start_ms", "label"]
@@ -33,15 +32,7 @@ META_KEYS = ["rev", "trial", "segment", "t_start_ms", "label"]
 # is the real champion's fusion input, not a default-window/default-param stand-in that would
 # silently describe a different model the moment a non-default champion is promoted.
 def champion_oof(out_dir: Path = S2_OUT_DIR, spec: WindowSpec | None = None) -> pd.DataFrame:
-    csp = champion_spec_from_json(out_dir)
-    if csp is None:
-        raise FileNotFoundError(
-            f"no {CHAMPION_JSON} in {out_dir}; establish a champion first "
-            f"(python -m stages.s2_ml.train --out {out_dir.name}, or run_pipeline.py).")
-    wspec, params, drops = champion_config(csp)
-    if spec is not None:
-        wspec = spec  # explicit window override (rare); params/drops stay the champion's
-
+    wspec, params, drops = resolve_champion(out_dir, window_override=spec)
     windows = build_windows(load_dataset(), wspec)
     df = trainable(windows, "train").copy()
     feats = select_features(feature_columns(windows), drops)
