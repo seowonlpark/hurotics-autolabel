@@ -293,3 +293,86 @@ lockbox 결과는 의도적으로 단 한 번만 하는 실행에서만 생깁�
   `data/raw/<날짜>/` 아래에 녹화 파일을 넣으세요.
 - **PowerShell이 활성화 스크립트를 실행하지 못함** -
   `Set-ExecutionPolicy -Scope Process RemoteSigned` 을 한 번 실행한 뒤 다시 켜세요.
+
+---
+
+## 파이프라인 전체, 단계별로
+
+`python run_pipeline.py` 는 아래 단계들을 이 고정된 순서로 돌리며, 다음 단계가 시작되기 전에 각
+단계의 게이트 산출물이 있는지 확인합니다. 위의 결과물 목록을 "실행 순서" 관점에서 본 것입니다.
+
+범례: **[det]** 무료 결정론적 단계; **[agent]** 유료, API 키 필요(`--with-agents` 일 때만 실행);
+**[opt-in]** `--s2-cycle` / `--s2-cycles N` 일 때만 실행. "게이트"는 실행 후 반드시 존재해야 하는
+파일이며, 없으면 실행이 멈춥니다.
+
+에이전트 단계는 모두 같은 내부 구조를 가집니다: 결정론적 코어가 일을 하고, 에이전트가 한 지점에서
+판단하며, 코드의 게이트가 통과한 것만 기록합니다. 그 내부 하위 단계는 각 에이전트 단계 아래에
+번호로 표시했으며(예: 3.1 - 3.3), 실행별 에이전트 결과물은 타임스탬프 폴더 `runs/<date>_runN/` 에
+생깁니다.
+
+### S1 - 정제(Clean)
+
+| # | 단계 | 종류 | 명령어 / 동작 | 생성물 / 게이트 |
+|---|---|---|---|---|
+| 1 | `s1_census` - 코퍼스 측정 | det | `python -m stages.s1_clean.run --out runs/s1_census` | `runs/s1_census/census.md` (게이트) |
+| 2 | `s1_clean` - 100 Hz 로 리샘플, 격리 | det | `python -m stages.s1_clean.clean --out runs/s1_clean` | `runs/s1_clean/clean_report.md` (게이트), manifest / segments / observations / quarantine `.jsonl` |
+| 3 | `s1_exception` - 예외 대기열 분류 | agent | `python orchestrator.py s1_exception` | 아래 세 하위 단계 |
+| 3.1 | (코드) 예외 대기열 구성 | det | S1 정제 원장을 읽음; 대기열이 비면 분류할 것이 없음 | - |
+| 3.2 | (에이전트) 대기열 항목별 분류 | agent | 항목마다 처리 방침(disposition) 부여 | - |
+| 3.3 | (코드) 리뷰 기록 | det | 에이전트 출력이 파싱되지 않으면 모든 항목을 needs_human 으로 표시 | `runs/<date>_runN/exceptions_review.jsonl` |
+
+### S2 - 머신러닝(ML)
+
+| # | 단계 | 종류 | 명령어 / 동작 | 생성물 / 게이트 |
+|---|---|---|---|---|
+| 4 | `s2_train` - 학습 + locoeval (leave-one-rev-out) | det | `python -m stages.s2_ml.train --out runs/s2_ml --taxonomy` | `runs/s2_ml/locoeval.md` (게이트), `locoeval.json`, `taxonomy.json` |
+| 5 | `s2_champion` - 스펙으로부터 챔피언 시딩 | det | 프로세스 내부 `seed_champion()` | `runs/s2_ml/champion.json` (게이트) |
+| 6 | `s2_cycle` - 챔피언/도전자 | agent, opt-in | `python orchestrator.py s2_cycle` | 아래 네 하위 단계 |
+| 6.1 | (실험자) 도전자 스펙 하나 제안 | agent | locoeval.md + 전체 원장 + 챔피언 + 피처 목록을 읽음; 이전 제안은 반복하지 않음 | `runs/<date>_runN/proposal.json` |
+| 6.2 | (비평가) 학습 전에 검증 | agent | 제안을 원장에 비추어 검토; 판정 approve / revise | `runs/<date>_runN/critic_review.json` |
+| 6.3 | 실험 실행 | det | 비평가가 승인한 경우에만; 결정론적 LORO 학습 + 채점 | 원장 한 줄 |
+| 6.4 | 게이트 - 지표가 결정 | det | `decide(result, champion)` 가 측정된 macro-F1 으로 판정; 어느 에이전트도 승격할 수 없음 | `experiments.jsonl`, `proposals.jsonl`, 그리고 승격된 경우에만 `champion.json` |
+| 7 | `s2_refit` - 사이클 이후 챔피언 산출물 재학습 | opt-in | `python -m stages.s2_ml.train --out runs/s2_ml --taxonomy --skip-if-current` | `runs/s2_ml/champion.joblib` (게이트), `model_meta.json` |
+| 8 | `s2_oof` - out-of-fold 예측 (fusion 입력) | det | `python -m stages.s2_ml.oof --out runs/s2_ml` | `runs/s2_ml/oof_champion.csv` (게이트) |
+
+사이클은 다음의 경우 조기 종료합니다 - 제안을 기록하고 챔피언은 그대로 둡니다: 실험자 출력이
+파싱되지 않거나, 비평가 판정이 `approve` 가 아니거나, 스펙이 학습 전에 유효하지 않을 때. 실험자와
+비평가는 제안하고 검증할 뿐이며, 챔피언을 바꿀 수 있는 것은 코드의 `decide()` 뿐입니다.
+
+### S3 - 물리(Physics)
+
+| # | 단계 | 종류 | 명령어 / 동작 | 생성물 / 게이트 |
+|---|---|---|---|---|
+| 9 | `s3_core` - 앵커, 레이트 감사, 그래프 | det | `python -m stages.s3_physics.run` | `runs/s3_physics/anchors.csv` (게이트), `rate_audit.json`, `disagreement.json`, `plots/` |
+| 10 | `s3_physics` - 가설 에이전트 | agent | `python orchestrator.py s3_physics` | 아래 세 하위 단계 |
+| 10.1 | (det) 코어 재생성 | det | 앵커 + 레이트 감사 + 그림 재실행 (9번과 같은 코어) | `runs/s3_physics/` 갱신 |
+| 10.2 | (에이전트) 그림을 읽고 가설 제안 | agent | 프로버넌스 게이트 아래에서 그래프를 읽음 | - |
+| 10.3 | (게이트) 프로버넌스 확인 | det | 실제 구간을 가리키는 가설만 유지 | `runs/<date>_runN/hypotheses.jsonl` |
+
+### S4 - 결합(Fusion)
+
+| # | 단계 | 종류 | 명령어 / 동작 | 생성물 / 게이트 |
+|---|---|---|---|---|
+| 11 | `s4_fuse` - S2 + S3 를 판정 + 신뢰도로 결합 | det | `python -m stages.s4_fusion.run` | `runs/s4_fusion/fusion_report.md` (게이트), `fused_windows.csv`, `fusion.json`, `disagreements.json` |
+| 12 | `s4_fusion` - 의견이 갈리는 사례 판단 | agent | `python orchestrator.py s4_fusion` | 아래 세 하위 단계 |
+| 12.1 | (det) 코어 재생성 | det | 결합 표 + 지표 + 불일치 순위 재실행 (11번과 같은 코어) | `runs/s4_fusion/` 갱신 |
+| 12.2 | (에이전트) 불일치(LOW 신뢰도) 사례 판단 | agent | 판단 보류가 무엇으로 이루어졌는지 규명 | - |
+| 12.3 | (게이트) 프로버넌스 확인 | det | 실제 구간을 가리키는 findings 만 유지 | `runs/<date>_runN/fusion_review.jsonl` |
+| 13 | `s4_newclass` - 통제된 새 클래스 발견 | agent | `python orchestrator.py s4_newclass` | 아래 세 하위 단계 |
+| 13.1 | (det) 증거 번들 조립 | det | NEW_CLASS 큐레이션 구간 + 그 물리 프로파일 수집 | `runs/s4_fusion/` 후보 번들 |
+| 13.2 | (에이전트) 분류 체계가 놓친 클래스 제안 | agent | {stand, walk} 분류 체계가 놓쳤을 수 있는 클래스 제안 | - |
+| 13.3 | (게이트) 질량 + 프로버넌스 | det | 클러스터 질량 + 프로버넌스 검증; 모든 제안은 needs_human 으로 라우팅 | `runs/<date>_runN/new_class_proposals.jsonl` |
+
+**실행 모드별로 선택되는 단계:**
+
+- `python run_pipeline.py` - 결정론적 단계만: 1, 2, 4, 5, 8, 9, 11 (무료, 키 불필요).
+- `--with-agents` - 에이전트 단계 3, 10, 12, 13 추가.
+- `--s2-cycle` / `--s2-cycles N` - opt-in 단계 6, 7 추가; 6번은 N 라운드만큼 펼쳐지고, `s2_refit` 은
+  마지막에 한 번 실행되며 승격된 것이 없으면 아무 일도 하지 않습니다.
+
+**순서.** `s2_oof` (8) 는 챔피언이 바뀌었을 수 있는 다음에 실행되어 최신 챔피언을 반영합니다;
+`s2_refit` (7) 은 사이클 이후 배포용 `.joblib` / `model_meta` 를 갱신합니다; `s4_fuse` (11) 는 챔피언
+OOF 와 S3 앵커가 둘 다 필요하므로 맨 마지막에 옵니다.
+
+한 번만 쓰는 lockbox (`stages/s4_fusion/lockbox.py`) 는 의도적으로 이 목록에 없습니다 - 러너는
+절대 이를 호출하지 않습니다.
