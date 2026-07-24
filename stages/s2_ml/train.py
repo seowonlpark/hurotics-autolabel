@@ -2,6 +2,12 @@
 # deterministic core of the champion/challenger loop (PLAN S2); reports numbers, never
 # decides "best". enforces in code: the lockbox is never touched, and validation is
 # leave-one-rev-out (one subject/day held out = the deployment question). see README.
+#
+# the persisted artifacts (champion.joblib, model_meta.json) honor the CHAMPION SPEC by
+# default: it loads stages/s2_ml/champion_spec.json (the git-tracked seed every promotion
+# rewrites) and applies its drop_features / window_s / model_params before fitting, so the
+# saved model is the real champion, not the full-feature baseline. --full ignores the spec
+# and trains on every feature (the baseline, for comparison); --spec PATH points elsewhere.
 
 from __future__ import annotations
 
@@ -14,6 +20,12 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 
 from stages.s2_ml.dataset import load_dataset
+from stages.s2_ml.experiment import (
+    CHAMPION_SPEC_PATH,
+    ExperimentSpec,
+    load_champion_spec,
+    select_features,
+)
 from stages.s2_ml.features import TRANSITION, WindowSpec, build_windows, feature_columns
 from stages.s2_ml.locoeval import evaluate, render, save, transition_report
 from stages.s2_ml.predict import DEFAULT_INFERENCE_STRIDE_S, dense_predict_trial
@@ -32,9 +44,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MODEL_PARAMS = dict(n_estimators=300, random_state=0, n_jobs=-1, class_weight="balanced")
 
 
-# fresh model at the fixed params
-def build_model() -> RandomForestClassifier:
-    return RandomForestClassifier(**MODEL_PARAMS)
+# fresh model at the fixed params, or a spec's resolved overrides. default keeps the baseline
+# params, so oof.py / lockbox.py (which call build_model()) are unaffected.
+def build_model(params: dict | None = None) -> RandomForestClassifier:
+    return RandomForestClassifier(**(params or MODEL_PARAMS))
 
 
 # label-pure windows of one split; transitions excluded from targets (Section 5.2)
@@ -64,7 +77,8 @@ def render_taxonomy(agg: dict, stride_s: float) -> str:
 # inference -- one model per rev, used for both, so the identical LORO forests are never
 # refit a second time. a rev's rows are only ever scored by a model that never saw that rev.
 def loro(trials, train_df: pd.DataFrame, feats: list[str], spec: WindowSpec,
-         stride_s: float, taxonomy: bool) -> tuple[np.ndarray, np.ndarray, dict | None]:
+         stride_s: float, taxonomy: bool,
+         params: dict | None = None) -> tuple[np.ndarray, np.ndarray, dict | None]:
     X = train_df[feats].to_numpy(float)
     y = train_df["label"].to_numpy(int)
     groups = train_df["rev"].to_numpy()
@@ -73,7 +87,7 @@ def loro(trials, train_df: pd.DataFrame, feats: list[str], spec: WindowSpec,
     per_run: list = []
     for rev in sorted(train_df["rev"].unique()):
         te = groups == rev
-        model = build_model()
+        model = build_model(params)
         model.fit(X[~te], y[~te])
         oof[te] = model.predict(X[te])
         if not taxonomy:
@@ -91,30 +105,47 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="runs/s2_ml")
     ap.add_argument("--window-s", type=float, default=None,
-                    help="window length in seconds (Section 9 open tradeoff)")
+                    help="window length in seconds; overrides the spec (Section 9 open tradeoff)")
     ap.add_argument("--taxonomy", action="store_true",
                     help="also run the row-level error taxonomy via dense inference (slow)")
     ap.add_argument("--stride-s", type=float, default=DEFAULT_INFERENCE_STRIDE_S,
                     help="dense inference stride in seconds")
+    ap.add_argument("--spec", default=str(CHAMPION_SPEC_PATH),
+                    help="champion spec JSON to honor (drop_features/window_s/model_params); "
+                         "defaults to the git-tracked champion_spec.json")
+    ap.add_argument("--full", action="store_true",
+                    help="ignore the spec and train on every feature (the baseline)")
     args = ap.parse_args()
 
     out_dir = (REPO_ROOT / args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    spec = WindowSpec(window_s=args.window_s, stride_s=args.window_s) if args.window_s else WindowSpec()
+    # the champion spec drives which features/window/params the persisted model uses; --full
+    # opts out to the all-feature baseline. an explicit --window-s always wins over the spec.
+    champ_spec: ExperimentSpec | None = None if args.full else load_champion_spec(Path(args.spec))
+    default = WindowSpec()
+    win = args.window_s or (champ_spec.window_s if champ_spec else None) or default.window_s
+    stride = ((champ_spec.stride_s if champ_spec else None)
+              or args.window_s or (champ_spec.window_s if champ_spec else None)
+              or default.stride_s)
+    spec = WindowSpec(window_s=win, stride_s=stride)
+    params = champ_spec.resolved_params() if champ_spec else dict(MODEL_PARAMS)
+    drops = champ_spec.drop_features if champ_spec else []
+
     trials = load_dataset()
     windows = build_windows(trials, spec)
-    feats = feature_columns(windows)
+    feats = select_features(feature_columns(windows), drops)
 
     train_df = trainable(windows, "train")
     assert "lockbox" not in set(train_df["split"]), "lockbox leaked into training"
     revs = sorted(train_df["rev"].unique())
-    print(f"[s2] window={spec.window_s}s  train windows={len(train_df):,}  "
-          f"features={len(feats)}  revs={len(revs)} {revs}")
+    tag = f"champion '{champ_spec.name}'" if champ_spec else "baseline (all features)"
+    print(f"[s2] {tag}: window={spec.window_s}s  train windows={len(train_df):,}  "
+          f"features={len(feats)} ({len(drops)} dropped)  revs={len(revs)} {revs}")
 
     if args.taxonomy:
         print(f"[s2] dense inference @ {args.stride_s * 1000:.0f} ms for the row-level taxonomy...")
-    y, oof, tax = loro(trials, train_df, feats, spec, args.stride_s, args.taxonomy)
+    y, oof, tax = loro(trials, train_df, feats, spec, args.stride_s, args.taxonomy, params)
     result = evaluate(y, oof, groups=train_df["rev"].to_numpy(),
                       unknown_frac=train_df["unknown_frac"].to_numpy())
     trans = transition_report(train_df, oof)
@@ -125,7 +156,7 @@ def main() -> None:
         print(f"[s2]   held-out {rev}: macro-F1 {f1:.4f}")
 
     # final model: refit on every training rev; the lockbox stays sealed
-    model = build_model()
+    model = build_model(params)
     model.fit(train_df[feats].to_numpy(float), train_df["label"].to_numpy(int))
 
     importances = sorted(zip(feats, model.feature_importances_), key=lambda x: -x[1])
@@ -137,7 +168,9 @@ def main() -> None:
                 print(f"[s2]   {b:<16} {tax['counts'][b]:>8,}  ({tax['fractions'][b]:.3f})")
 
     save(result, out_dir / "locoeval.json", trans)
-    body = render(result, trans, title="S2 champion - leave-one-rev-out CV")
+    title = (f"S2 champion ({champ_spec.name}) - leave-one-rev-out CV" if champ_spec
+             else "S2 baseline (all features) - leave-one-rev-out CV")
+    body = render(result, trans, title=title)
     if tax:
         body += "\n\n" + render_taxonomy(tax, args.stride_s)
     (out_dir / "locoeval.md").write_text(
@@ -149,7 +182,9 @@ def main() -> None:
         (out_dir / "taxonomy.json").write_text(json.dumps(tax, indent=2), encoding="utf-8")
     (out_dir / "model_meta.json").write_text(json.dumps({
         "model": "RandomForestClassifier",
-        "params": MODEL_PARAMS,
+        "spec": champ_spec.name if champ_spec else "baseline_all_features",
+        "drop_features": drops,
+        "params": params,
         "window_s": spec.window_s, "stride_s": spec.stride_s, "fs_hz": spec.fs_hz,
         "features": feats,
         "train_revs": revs,

@@ -71,6 +71,7 @@ def seed_champion() -> None:
 
 # the ordered pipeline. deterministic cores are free; agent steps are marked agent=True.
 # order matters: OOF is written after any champion change so it reflects the latest champion,
+# the champion joblib/model_meta are refit after the cycle for the same reason (s2_refit),
 # and S4 fuse joins the champion OOF with the S3 anchors
 def build_steps() -> list[Step]:
     return [
@@ -82,13 +83,19 @@ def build_steps() -> list[Step]:
              gate=RUNS / "s1_clean" / "clean_report.md"),
         Step("s1_exception", "S1 exception agent (triage the exception queue)",
              cmd=[PY, "orchestrator.py", "s1_exception"], agent=True),
-        Step("s2_train", "S2 train + locoeval (leave-one-rev-out baseline)",
+        Step("s2_train", "S2 train + locoeval (champion spec, leave-one-rev-out)",
              cmd=[PY, "-m", "stages.s2_ml.train", "--out", "runs/s2_ml", "--taxonomy"],
              gate=RUNS / "s2_ml" / "locoeval.md"),
         Step("s2_champion", "S2 seed champion (deterministic, from champion_spec.json)",
              fn=seed_champion, gate=RUNS / "s2_ml" / "champion.json"),
         Step("s2_cycle", "S2 champion/challenger cycle (experimenter + critic)",
              cmd=[PY, "orchestrator.py", "s2_cycle"], agent=True, opt_in=True),
+        # the cycle may have rewritten champion_spec.json; refit the deployment artifacts
+        # (champion.joblib, model_meta.json, locoeval.md, taxonomy.json) so they track the
+        # promoted champion. deterministic and idempotent -- a no-op if nothing was promoted.
+        Step("s2_refit", "S2 refit champion artifacts (after the cycle may have promoted)",
+             cmd=[PY, "-m", "stages.s2_ml.train", "--out", "runs/s2_ml", "--taxonomy"],
+             gate=RUNS / "s2_ml" / "champion.joblib", opt_in=True),
         Step("s2_oof", "S2 out-of-fold predictions (fusion input)",
              cmd=[PY, "-m", "stages.s2_ml.oof", "--out", "runs/s2_ml"],
              gate=RUNS / "s2_ml" / "oof_champion.csv"),
@@ -112,7 +119,8 @@ def select(steps: list[Step], with_agents: bool, s2_cycle: bool) -> list[Step]:
     out = []
     for s in steps:
         if s.opt_in:
-            if s.key == "s2_cycle" and s2_cycle:
+            # the cycle and its follow-on refit are gated behind the same --s2-cycle flag
+            if s.key in ("s2_cycle", "s2_refit") and s2_cycle:
                 out.append(s)
             continue
         if s.agent and not with_agents:

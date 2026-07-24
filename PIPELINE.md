@@ -102,7 +102,10 @@ agent can change the champion.
 
 artifacts + entry points: `stages/s2_ml/`. outputs in `runs/s2_ml/`: `champion.json`, the
 append-only `experiments.jsonl` ledger, `proposals.jsonl`, `locoeval.md`/`.json`, `taxonomy.json`,
-`model_meta.json`, and `oof_champion.csv` (the fusion stage's input).
+`model_meta.json`, and `oof_champion.csv` (the fusion stage's input). `champion.joblib` +
+`model_meta.json` are the ready-to-run deployment classifier, refit by `train.py` *from* the champion
+spec (not a rival record of it, `[S2-4]`); a `--s2-cycle` promotion triggers an `s2_refit` step so they
+never lag the spec.
 
 ---
 
