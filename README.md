@@ -105,6 +105,41 @@ Run in that order — S4 inner-joins S2's `oof_champion.csv` to S3's `anchors.cs
 `(rev, trial, segment, t_start_ms)` and refuses to proceed if the two stages windowed
 differently. `runs/s4_fusion/fusion.md` is the number the pipeline is judged on.
 
+### Labelling a file (the deliverable)
+
+```powershell
+python -m stages.s2_ml.label data\raw\20251024\00321_63_2025_10_24_15_32_0.csv   # raw device log
+python -m stages.s2_ml.label some_annotated_trial.csv --preset high_precision    # rev2 view
+```
+
+Takes **either** shape of file, dispatched on the header's family marker resolved by name: a
+raw device log, or the derived rev2 view. A raw log is bridged to the four rev2 channels
+first (`transform.raw_csv_to_features`), and the run prints which hardware revision was
+resolved, which two channels were actually read, and which `channel_trust.json` was
+consulted. Output is the caller's own rows with `state` / `confidence` / `ambiguous` /
+`reason` / `alternative` appended — rows in, rows out.
+
+It **abstains rather than guesses**, with a stated reason and no output file: an unmapped
+hardware revision, a file whose measured permutation contradicts the axis about to be read,
+a gyro that is not natively deg/s, a final timestamp that cannot carry the filter, or a
+missing trust record. 78 of the 91 files under `data/raw` are servable today; the other 13
+abstain, correctly.
+
+### Verifying the raw path
+
+```powershell
+python -m stages.s2_ml.verify_transform   # the four columns, rebuilt from raw to ~1e-13
+python -m stages.s2_ml.verify_serve       # the same recording labelled BOTH ways, row for row
+```
+
+`verify_transform` checks the bridge's math on every paired recording (18/18, ≤7.3e-13).
+`verify_serve` checks what a caller actually gets: it labels the raw log and its rev2 export
+and asserts identical state, confidence and reason on every row (536,590 rows, 0
+disagreements), then sweeps `data/raw` reporting what is servable and what abstains, by
+reason. Run both after touching `transform.py` — an unexercised bridge cannot be wrong out
+loud, and it was: the sagittal axis for the majority variant was wrong until the serve path
+was built (`caveats.md` §5).
+
 ### Agents
 
 ```powershell

@@ -465,9 +465,11 @@ downstream sees one rate. Dropped in the process: only the §3.2 startup-burst f
 rows), and they are counted, not silently discarded.
 
 ### 6.2 The raw→rev2 mapping is RESOLVED EXACTLY **[measured, 2026-07-20 — supersedes the earlier approximation]**
-Established by reproducing the labeled columns from raw to **~1e-13 (float roundoff)** on **19 paired
+Established by reproducing the labeled columns from raw to **~1e-13 (float roundoff)** on **18 paired
 recordings** — annotated trials and raw files with identical `Time` vectors and row counts, found by
 matching `t[0]`/`t[-1]`/`n`. Source: HUROTICS MATLAB LPF FILES (`LPF.m`, `timestamp.m`, `csv2mat.m`).
+(This entry said **19** until 2026-08-03; enumerating them yields 18, and the pairing is unambiguous
+— every annotated trial matches zero or one raw file, at `max|Δt| = 0`. See `caveats.md` §3.4.)
 
 **The transform.** First-order *causal* IIR (single pole), applied per channel:
 
@@ -488,31 +490,48 @@ features relative to labels.
 
 **The sagittal axis is a DEVICE property, not a signal property — resolve it by schema variant:**
 
-| variant | `*_ang_LPF` ← | `*_angvel_LPF` ← | revs | raw files |
-|---|---|---|---|---|
-| `fb5ea2c2` | `Deg_X` | `Gyro_X` | rev13, rev14 | 62 |
-| `0fda484e` | `Deg_Y` | `Gyro_Z` | rev7, rev8 | 11 |
-| `4bfd6ab2` | `Deg_Y` | `Gyro_Z` | rev4 | 5 |
+| variant | `*_ang_LPF` ← | `*_angvel_LPF` ← | revs | raw files | pairs behind it |
+|---|---|---|---|---|---|
+| `fb5ea2c2` | `Deg_Y` | `Gyro_Z` | rev13, rev14 | 62 | 7 (all rev13) |
+| `0fda484e` | `Deg_Y` | `Gyro_Z` | rev7, rev8 | 11 | 10 |
+| `4bfd6ab2` | `Deg_Y` | `Gyro_Z` | rev4 | 5 | 1 |
 
-**Every row of this table obeys the §4.1b permutation** (X→X, Y→Z, Z→Y): `fb5ea2c2` pairs `Deg_X`
-with `Gyro_X`, the others pair `Deg_Y` with `Gyro_Z`. So the **`*_angvel_LPF` column above is
-derivable from the `*_ang_LPF` column** and carries no independent information — the only per-variant
-fact here is *which Deg axis the exporter treated as sagittal*.
+**This table's `fb5ea2c2` row read `Deg_X`/`Gyro_X` until 2026-08-03, and it was wrong
+[corrected, measured].** Re-derived against all 18 pairs: every one reproduces to **≤7.3e-13** from
+`Deg_Y`, while `Deg_X` misses by 177–381 deg and `Deg_Z` by 99–460. The error rode in
+`transform.py`'s lookup, so it would have mis-served the majority variant — 62 of 91 raw files —
+had anything called that path; nothing did until the serve path was built. See `caveats.md` §5 for
+the per-variant error table and why it survived. **Re-derive this table with
+`python -m stages.s2_ml.verify_transform`; do not trust the prose around it, including this
+paragraph.**
 
-`fb5ea2c2` is therefore **not** an anomalous *permutation* — it is wired like every other variant.
-It is simply a revision whose sagittal plane is `Deg_X`. (An earlier version of this entry called it
-"the anomaly family" by pointing at `SAGITTAL_DEG_AXIS`/`DOCUMENTED_SAGITTAL_GYRO_AXIS`, constants
-that conflated the permutation with sagittality and have since been **deleted** — see §4.1b.) The
-genuine §4.1b anomalies are the two files whose *permutation* breaks, `B_Deg_Y → B_Gyro_Y`; one of
-them, `00001_69_…1_14_10_4_0.csv`, happens to be the raw file paired with `rev13_trial_1`, which is
-why S1 and the Phase-2 exception agent both flagged it. That coincidence is what made the two
-questions look like one.
-Coverage: **78 of 97 raw files (80%)**; unmapped are `e5f2660f` (mostly the §2.6 quarantine family)
-and `86069795`. Unknown variant ⇒ **abstain**, do not guess.
+**Every row obeys the §4.1b permutation** (X→X, Y→Z, Z→Y): all three pair `Deg_Y` with `Gyro_Z`. So
+the **`*_angvel_LPF` column is derivable from the `*_ang_LPF` column** and carries no independent
+information — the only per-variant fact here is *which Deg axis the exporter treated as sagittal*.
 
-**Signal-only axis detection DOES NOT WORK [measured — all rules scored below chance].** Over the 19
+What the corrected table no longer supports: **no measured variant differs.** Every hardware
+revision with a paired recording reads `Deg_Y`, which is also what §4.1/§4.2 say sagittal is on the
+raw side. The per-variant *structure* is kept anyway, because sagittality has no in-file signature
+and "three revisions agree" is not a licence to default a fourth — but the earlier framing of
+`fb5ea2c2` as a revision that simply wired its sagittal plane differently described something this
+corpus never contained. (An earlier version went further and called it "the anomaly family" via
+`SAGITTAL_DEG_AXIS`/`DOCUMENTED_SAGITTAL_GYRO_AXIS`, constants that conflated the permutation with
+sagittality and have since been **deleted** — see §4.1b.) The genuine §4.1b anomalies are the two
+files whose *permutation* breaks, `B_Deg_Y → B_Gyro_Y`; one of them, `00001_69_…1_14_10_4_0.csv`,
+happens to be the raw file paired with `rev13_trial_1`, which is why S1 and the Phase-2 exception
+agent both flagged it. That coincidence is what made the two questions look like one — and it is on
+`B`, which the feature path never reads.
+Coverage: **78 of 91 raw files (86%)**; unmapped are `e5f2660f` (mostly the §2.6 quarantine family)
+and `86069795`. Unknown variant ⇒ **abstain**, do not guess — `stages/s2_ml/label.py` does exactly
+that, with a stated reason and no output.
+
+**Signal-only axis detection DOES NOT WORK [measured — all rules scored below chance].** Over the
 ground-truth pairs: variant lookup **100%**, gait-band energy 16%, antiphase×amplitude 16%, raw
-amplitude 5% — against a 33% random baseline. Worse than chance is systematic, not noise: the
+amplitude 5% — against a 33% random baseline. (The signal-rule scores are as originally measured over
+the set this entry then called 19. Variant lookup is **100% on 18/18 as of 2026-08-03**, but only
+after the `fb5ea2c2` correction above — on the table as published it was 11/18, which is itself worse
+than the 33% baseline and is the sharpest available argument for re-running a check rather than
+citing it.) Worse than chance is systematic, not noise: the
 highest-amplitude Deg axis is reliably *not* sagittal, because `Deg_Z`'s variance is dominated by yaw
 drift (§4.2). L/R antiphase is **necessary but not sufficient** — every projection of a planar leg
 swing is antiphase, so it cannot discriminate. Do not re-attempt these; extend the lookup instead.

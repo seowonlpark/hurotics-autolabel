@@ -6,6 +6,17 @@
 
 This is the deliverable. Everything else in S2 exists to make this row honest.
 
+**It takes either shape of file**, dispatched on FAMILY resolved from the header by name
+(§1.3): the derived rev2 view (`L/R_ang_LPF`, `L/R_angvel_LPF`) or a **raw device log**,
+whose four channels are rebuilt by `transform.raw_csv_to_features` first. The raw path is
+the one a device actually produces, and until 2026-08-03 it did not exist — the pipeline
+could only label files that had already been through HUROTICS' MATLAB (caveats §3.1). It
+refuses rather than guesses: an unmapped hardware revision, a file whose measured
+permutation contradicts the axis about to be read, a gyro that is not natively deg/s, or a
+final timestamp that cannot carry the filter all abstain with a stated reason and no
+output. `verify_serve.py` runs both shapes of the same recording through this module and
+asserts they agree row for row.
+
 **Abstention is the point.** A confident wrong label is worse than an admitted unknown,
 so every row carries `confidence` and, below the threshold, `ambiguous=True` with a
 `reason` and an `alternative`. Coverage bought at each threshold is measured in
@@ -27,18 +38,37 @@ from __future__ import annotations
 
 import argparse
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from stages.s1_clean.config import CANONICAL_HZ
+from stages.s1_clean.census import family_of, read_header, strip_prefix
+from stages.s1_clean.config import CANONICAL_HZ, FAMILY_MARKERS
 from stages.s1_clean.resample import resample_file
+from stages.s1_clean.validate import health
 from stages.s2_ml.dataset import FEATURES, STAND, TIME_COL, WALK
 from stages.s2_ml.features import WindowSpec, feature_names, rest_reference, segment_features
+from stages.s2_ml.transform import (
+    AxisConflictError,
+    DegenerateClockError,
+    GyroUnitError,
+    NotRawDeviceError,
+    UnknownVariantError,
+    raw_csv_to_features,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL_DIR = REPO_ROOT / "runs" / "s2_ml"
+
+RAW_DEVICE, REV2_VIEW = "raw_device", "rev2_view"
+
+# Every way the raw path can decline a file. Caught as a group at the CLI boundary so a
+# refusal prints its reason instead of a traceback — an operator holding an unservable
+# recording needs to read WHY, and each of these messages says so and names the remedy.
+SERVE_REFUSALS = (UnknownVariantError, AxisConflictError, GyroUnitError,
+                  DegenerateClockError, NotRawDeviceError, FileNotFoundError)
 
 CLASS_NAME = {STAND: "stand", WALK: "walk"}
 
@@ -69,10 +99,16 @@ REASONS = {
 }
 
 
+@lru_cache(maxsize=4)
 def load_champion(model_dir: Path):
     """(model, meta). Both are required: the meta carries the window spec the model was
     fitted at and the reference statistics the reasons are stated against, so loading one
-    without the other is how train/serve skew starts."""
+    without the other is how train/serve skew starts.
+
+    Cached because `verify_serve` labels 36 files in one process and unpickling 400 trees
+    each time dominates its runtime. Keyed on the directory, so pointing at a different
+    champion still loads a different model.
+    """
     import joblib
 
     meta = json.loads((model_dir / "model_meta.json").read_text(encoding="utf-8"))
@@ -81,20 +117,52 @@ def load_champion(model_dir: Path):
 
 
 def read_input(path: Path) -> pd.DataFrame:
-    """Read a CSV and resolve the required columns BY NAME (§1.3 - never by position)."""
+    """Read a rev2-view CSV and resolve the required columns BY NAME (§1.3 - never by
+    position)."""
     df = pd.read_csv(path, encoding="utf-8-sig")
     df.columns = [c.strip() for c in df.columns]
     missing = [c for c in (TIME_COL, *FEATURES) if c not in df.columns]
     if missing:
         raise SystemExit(
-            f"{path.name}: missing required columns {missing}.\n"
-            f"This path expects the derived rev2 view: {TIME_COL} plus {list(FEATURES)}.\n"
-            f"For a raw device log, build those four channels first with "
-            f"stages.s2_ml.transform.raw_to_features - it needs the file's schema variant "
-            f"and its channel_trust record, and refuses rather than guessing the sagittal "
-            f"axis (DOMAIN_NOTES 6.2)."
+            f"{path.name}: reads as the derived rev2 view but is missing {missing}.\n"
+            f"That path needs {TIME_COL} plus all of {list(FEATURES)}."
         )
     return df
+
+
+def read_source(path: Path) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """(the caller's own rows, the rev2 view to score, provenance).
+
+    Dispatch is on FAMILY, resolved from the header by name (§1.3) through the same census
+    S1 uses — never on "does this file happen to have the columns I want". The two families
+    share only `Time`, so the marker column is the honest question and duck-typing the
+    columns would misroute a half-written file instead of rejecting it.
+
+    A raw device log goes through the bridge first. That call is where every provenance
+    guard fires — unmapped revision, contradicted axis, non-deg/s gyro, unusable final
+    timestamp — and each one raises rather than returning a frame, so a refusal can never
+    be mistaken for a labelled file.
+    """
+    family = family_of([strip_prefix(c) for c in read_header(path)])
+
+    if family == REV2_VIEW:
+        df = read_input(path)
+        return df, df[[TIME_COL, *FEATURES]], {
+            "source": str(path), "family": family, "derived": False,
+            "n_rows": int(len(df)),
+        }
+
+    if family == RAW_DEVICE:
+        rows, view, provenance = raw_csv_to_features(path)
+        return rows, view, {**provenance, "derived": True}
+
+    raise SystemExit(
+        f"{path.name}: unrecognized file family {family!r}.\n"
+        f"This module labels a raw device log (marker column "
+        f"{FAMILY_MARKERS[RAW_DEVICE]!r}) or the derived rev2 view (marker "
+        f"{FAMILY_MARKERS[REV2_VIEW]!r}). Neither marker is present, so nothing here can "
+        f"say what the columns mean, and resolving them by position is the §1.3 hazard."
+    )
 
 
 def _accumulate(values: np.ndarray, starts: np.ndarray, n: int, n_rows: int
@@ -232,19 +300,36 @@ def explain(scored: pd.DataFrame, meta: dict, threshold: float,
     return scored
 
 
-def label_csv(path: Path, model_dir: Path, threshold: float) -> pd.DataFrame:
-    """Label one CSV; returns the INPUT rows with the label columns appended."""
+def label_csv(path: Path, model_dir: Path, threshold: float) -> tuple[pd.DataFrame, dict]:
+    """Label one CSV; returns (the INPUT rows with the label columns appended, provenance).
+
+    Provenance travels with the frame rather than being printed and forgotten: on the raw
+    path it records which hardware revision was resolved, which two channels were actually
+    read, and which trust record was consulted. A labelled file whose axis resolution
+    cannot be reconstructed later is exactly the "recorded but never read" hole that let
+    the wrong sagittal axis ship for the majority variant.
+    """
     model, meta = load_champion(model_dir)
     spec = WindowSpec(window_s=meta["window_s"],
                       stride_s=meta.get("inference_stride_s", 0.25),
                       fs_hz=meta.get("fs_hz", CANONICAL_HZ))
-    raw = read_input(path)
+    raw, view, provenance = read_source(path)
 
     # Same normalization the model was trained under: segment at gaps, then the canonical
     # grid. Anything else is train/serve skew.
-    frame, _segments = resample_file(raw[[TIME_COL, *FEATURES]], TIME_COL)
+    frame, _segments = resample_file(view, TIME_COL)
     if frame.empty:
         raise SystemExit(f"{path.name}: no usable segment survived resampling")
+
+    # S1's label-free gate, in front of the model rather than beside it. A dead channel or
+    # a file with nothing scorable would otherwise produce confident numbers built on
+    # nothing, which is worse than refusing.
+    h = health(frame, window_s=spec.window_s, fs_hz=spec.fs_hz)
+    for w in h.warnings:
+        print(f"[label] warning: {w}")
+    if not h.usable:
+        raise SystemExit(f"{path.name}: not usable\n  "
+                         + "\n  ".join(h.errors))
 
     scored = explain(score_frame(model, meta, frame), meta, threshold, spec)
 
@@ -266,7 +351,40 @@ def label_csv(path: Path, model_dir: Path, threshold: float) -> pd.DataFrame:
     picked.loc[gap, "reason"] = "uncovered"
     picked.loc[gap, "reason_detail"] = REASONS["uncovered"][0]
     picked.loc[gap, "alternative"] = REASONS["uncovered"][1]
-    return pd.concat([raw.reset_index(drop=True), picked], axis=1)
+
+    # On the raw path the four derived channels are the model's actual input and appear
+    # nowhere in the caller's file, so they ride along. Without them the output states a
+    # verdict over columns nobody can see, and the sagittal-axis bug would have been
+    # invisible in the deliverable as well as in the code.
+    parts = [raw.reset_index(drop=True)]
+    if provenance["derived"]:
+        parts.append(view[list(FEATURES)].reset_index(drop=True))
+    parts.append(picked)
+    return pd.concat(parts, axis=1), provenance
+
+
+def describe_source(provenance: dict) -> str:
+    """The one-block answer to "what did the model actually read?".
+
+    Printed for every run, not only the interesting ones. The axis a raw file resolves to
+    is the single assumption this path cannot verify from inside the file, so it is stated
+    every time rather than left to be reconstructed from the variant id later.
+    """
+    if not provenance["derived"]:
+        return (f"source: {provenance['family']} (already the model's input, no bridge)\n"
+                f"rows in: {provenance['n_rows']:,}")
+    return "\n".join([
+        f"source: raw device log, variant {provenance['variant_id']}",
+        f"sagittal axis: Deg_{provenance['sagittal_deg_axis']} "
+        f"-> Gyro_{provenance['gyro_axis']}  (per-revision lookup, never guessed)",
+        f"channels read: {', '.join(provenance['columns_read'])}",
+        f"filter dt: {provenance['dt_ms']:.5f} ms "
+        f"({provenance['dt_last_over_median']:.4f}x the median interval)",
+        f"trust record: {provenance['trust_record']}",
+        f"axis detection: L={provenance['axis_check']['L']} R={provenance['axis_check']['R']}"
+        f"   gyro unit: L={provenance['gyro_unit']['L']} R={provenance['gyro_unit']['R']}",
+        f"rows in: {provenance['n_rows']:,}",
+    ])
 
 
 def summarize(df: pd.DataFrame, threshold: float) -> str:
@@ -304,7 +422,16 @@ def main() -> None:
             raise SystemExit(f"unknown preset {name!r}; known: {sorted(presets)}")
         threshold = presets[name]
 
-    out = label_csv(args.csv, args.model_dir, threshold)
+    try:
+        out, provenance = label_csv(args.csv, args.model_dir, threshold)
+    except SERVE_REFUSALS as exc:
+        # An abstention, not a crash. The file is unservable for a stated reason and the
+        # right outcome is no output at all — a labelled file the pipeline cannot defend
+        # is worse than none, because a controller would act on it.
+        raise SystemExit(f"{args.csv.name}: ABSTAINED — {type(exc).__name__}\n  {exc}")
+
+    print(describe_source(provenance))
+    print()
     print(summarize(out, threshold))
     dest = args.out or args.csv.with_name(args.csv.stem + "_labelled.csv")
     out.to_csv(dest, index=False)

@@ -21,12 +21,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from stages.s1_clean.census import fingerprint, read_header, strip_prefix
 from stages.s2_ml.dataset import TIME_COL, _read_raw, find_trials
 from stages.s2_ml.transform import (
     FEATURE_COLUMNS,
     TRUST_UNCHECKED,
     UnknownVariantError,
+    load_raw_frame,
     matlab_dt,
     raw_to_features,
 )
@@ -38,31 +38,35 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TOLERANCE = 1e-9
 
 
-def load_raw_by_name(path: str) -> pd.DataFrame:
-    """Raw device CSV with columns resolved BY NAME (never by position, §1.3)."""
-    names = [strip_prefix(c) for c in read_header(Path(path))]
-    df = pd.read_csv(path, encoding="utf-8-sig")
-    df = df.loc[:, [c for c in df.columns if not c.startswith("Unnamed")]]
-    df.columns = names[: len(df.columns)]
-    return df
-
-
 def index_raw_files(raw_glob: str = "data/raw/**/*.csv") -> dict[str, tuple]:
+    """Every readable raw file, keyed by path, with the facts pairing needs.
+
+    Reads through `transform.load_raw_frame` — the same reader the serve path uses. A
+    second, private reader here would mean this verification blesses a read that nothing
+    in production performs.
+    """
     index = {}
     for f in sorted(glob.glob(str(REPO_ROOT / raw_glob), recursive=True)):
         try:
-            df = load_raw_by_name(f)
-            t = df["Time"].to_numpy(float)
-            index[f] = (t[0], t[-1], len(t), df, fingerprint(read_header(Path(f))))
+            df, vid, _family = load_raw_frame(Path(f))
+            t = df[TIME_COL].to_numpy(float)
+            index[f] = (t[0], t[-1], len(t), df, vid)
         except Exception:
             continue  # unreadable/ragged files are S1's problem, not the bridge's
     return index
 
 
 def find_pairs(index: dict[str, tuple]) -> list[tuple[Path, str, pd.DataFrame, str]]:
-    """Annotated trials whose raw source is present, matched on the time vector."""
+    """Annotated trials whose raw source is present, matched on the time vector.
+
+    `excluded=set()` on purpose: `EXCLUDED_TRIALS` quarantines trials whose *labels* are
+    wrong, and this check never reads a label — it asks whether the four feature columns
+    can be rebuilt from raw. Honouring a label quarantine here would shrink the evidence
+    for the axis map for a reason that has nothing to do with it (it costs `rev13/4`, one
+    of only seven pairs behind the majority variant).
+    """
     pairs = []
-    for p in find_trials():
+    for p in find_trials(excluded=set()):
         t = _read_raw(p)[TIME_COL].to_numpy(float)
         for f, (r0, r1, nr, df, vid) in index.items():
             if abs(t[0] - r0) < 50 and abs(t[-1] - r1) < 5000 and nr == len(t):
