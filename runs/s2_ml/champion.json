@@ -1,0 +1,43 @@
+{
+  "ts": "2026-07-21T06:45:52.411076+00:00",
+  "git_sha": "5219cd5",
+  "spec": {
+    "name": "drop_static_offset_family",
+    "rationale": "combined drop of the static-offset angle family (ang_LR_offset + L/R ang_LPF mean + L/R ang_LPF absmean); \u00a74.6 per-subject zeroing bias, not gait. each helped alone but under margin -- test if gains stack. human-directed multi-feature test, bypasses the one-change critic rule.",
+    "drop_features": [
+      "ang_LR_offset",
+      "L_ang_LPF_mean",
+      "R_ang_LPF_mean",
+      "L_ang_LPF_absmean",
+      "R_ang_LPF_absmean"
+    ],
+    "window_s": null,
+    "stride_s": null,
+    "model_params": {}
+  },
+  "macro_f1": 0.8976721385233709,
+  "accuracy": 0.9407730673316709,
+  "balanced_accuracy": 0.9103910098522168,
+  "per_rev_macro_f1": {
+    "rev2": 0.8058498537536561,
+    "rev3": 0.9686843884559269,
+    "rev4": 0.9553884711779448,
+    "rev5": 0.8894910661359979,
+    "rev6": 0.9343627343426217,
+    "rev7": 0.9068590529357612
+  },
+  "n_features": 18,
+  "taxonomy": {
+    "row_accuracy": 0.9254,
+    "dominant": "steady_confusion",
+    "fractions": {
+      "omission": 0.0,
+      "swallowed": 0.005,
+      "edge_omission": 0.071,
+      "flicker": 0.014,
+      "late": 0.041,
+      "early": 0.047,
+      "steady_confusion": 0.823
+    }
+  }
+}

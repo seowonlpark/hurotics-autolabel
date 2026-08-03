@@ -1,0 +1,1 @@
+{"file": "data\\raw\\20260515\\00095_70_2026_5_15_11_38_0.csv", "reason": "degenerate time base: median dt <= 0 (duplicate/backward timestamps)", "category": "degenerate_time_base", "needs_human": true, "evidence": {}, "quarantined_at": "2026-08-03T08:04:16.742674+00:00"}

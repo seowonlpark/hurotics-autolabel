@@ -6,5 +6,20 @@ data/labeled
 data/clean/
 tracker/
 
-runs/
-!runs/.gitkeep
+# runs/ holds two different things. The regenerable artifacts (fitted models, per-row
+# scores) stay out -- they are tens of MB and `train.py` rebuilds them on demand. The
+# measurements do NOT: `roweval_lockbox.json` is the single-use rev8 read (see
+# dataset.py) and can never be regenerated, and `experiments.jsonl` is the only record
+# of how the feature set got from 23 to 42. Those are evidence for claims made in code
+# and in OPERATING_POINTS.md, so they are versioned alongside the claims.
+runs/**/*.joblib
+runs/**/*.pkl
+runs/**/*.csv
+runs/**/*.npy
+runs/**/*.parquet
+
+# labeled_raw/ splits the same way. The per-session labelled CSVs are a few GB and
+# `label_all.py` rebuilds them from data/raw on demand; the sweep report, the summary
+# and the abstention ledger are the record of what this corpus labels at a given
+# threshold -- small, and evidence for claims made elsewhere. Those stay.
+labeled_raw/*/

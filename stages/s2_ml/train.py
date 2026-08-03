@@ -12,11 +12,25 @@ Two guarantees enforced in code, not in comments:
      is the deployment question. Random k-fold would split one subject's trials across
      train and test and report a flattering, meaningless score.
 
-The model is ExtraTrees rather than RandomForest: on identical features and folds it gave
-both higher accuracy and a better-ordered confidence signal, which is what the abstention
-layer actually consumes. Gradient boosting scored marginally higher raw accuracy but was
-badly overconfident, which is the worse failure here — an overconfident model does not
-abstain when it should.
+The model is ExtraTrees rather than RandomForest. Measured on identical features, folds and
+params (42 features, leave-one-rev-out, the `MODEL_PARAMS` below) over 5 seeds: accuracy
+0.9625 ±0.0003 against 0.9568 ±0.0008, macro-F1 0.9194 against 0.9138 — seed ranges
+disjoint, so the gap is the model and not the draw. At threshold 0.85 the two commit at the
+SAME accuracy (0.9887 vs 0.9889, ranges overlapping) while ExtraTrees commits to 87.6% of
+windows against 81.9%: equal precision over more of the data, which is what the abstention
+layer consumes.
+
+Two honesties about that comparison. RandomForest is genuinely better on balanced accuracy
+(0.9246 vs 0.8995, disjoint) — it recovers more of the smaller class, paid for out of
+overall accuracy. And at a single seed it appeared to hold a worst-subject edge at 0.85
+(0.9754 vs 0.9699), which is why per-seed numbers are quoted here at all: over 5 seeds that
+edge dissolves into noise (0.9727 ±0.0037 vs 0.9699 ±0.0001, overlapping) and ExtraTrees is
+the far steadier of the two on that metric. Reproduce from `runs/s2_ml_rf42` (single RF fit
+at these features) and `runs/s2_ml_seedsweep.json` (the 5-seed comparison).
+
+Gradient boosting scored marginally higher raw accuracy but was badly overconfident, which
+is the worse failure here — an overconfident model does not abstain when it should. That
+one is inherited from the 23-feature stage and has NOT been re-measured at 42 features.
 
 Alongside the model this writes the reference statistics `label.py` needs to explain WHY a
 row is ambiguous. They are measured here, on training windows only, so no magic numbers

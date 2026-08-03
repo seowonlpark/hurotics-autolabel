@@ -1,0 +1,81 @@
+{
+  "n_windows": 6339,
+  "n_pure": 5984,
+  "accuracy_all": 0.9622326203208557,
+  "coverage": 0.9585561497326203,
+  "confident_accuracy": 0.9804741980474198,
+  "confident_errors": 112,
+  "abstained": 248,
+  "abstained_accuracy": 0.5403225806451613,
+  "transition_windows": 355,
+  "transition_abstain_rate": 0.19154929577464788,
+  "by_tier": {
+    "high": {
+      "n": 3893,
+      "accuracy": 0.9971744156177755
+    },
+    "medium": {
+      "n": 1843,
+      "accuracy": 0.9451980466630494
+    },
+    "low": {
+      "n": 248,
+      "accuracy": 0.5403225806451613
+    }
+  },
+  "amplitude_band": [
+    2.6163932652156405,
+    20.339325636315106
+  ],
+  "frontier": [
+    {
+      "policy": "floor 0.50",
+      "floor": 0.5,
+      "coverage": 0.9672459893048129,
+      "accuracy": 0.9777125086385625,
+      "errors": 129
+    },
+    {
+      "policy": "floor 0.60",
+      "floor": 0.6,
+      "coverage": 0.9632352941176471,
+      "accuracy": 0.9788341429562804,
+      "errors": 122
+    },
+    {
+      "policy": "floor 0.70",
+      "floor": 0.7,
+      "coverage": 0.9585561497326203,
+      "accuracy": 0.9804741980474198,
+      "errors": 112
+    },
+    {
+      "policy": "floor 0.80",
+      "floor": 0.8,
+      "coverage": 0.951370320855615,
+      "accuracy": 0.9822589144563499,
+      "errors": 101
+    },
+    {
+      "policy": "floor 0.90",
+      "floor": 0.9,
+      "coverage": 0.942346256684492,
+      "accuracy": 0.9831530413193829,
+      "errors": 95
+    },
+    {
+      "policy": "HIGH tier only (agree + outside band)",
+      "floor": null,
+      "coverage": 0.6577540106951871,
+      "accuracy": 0.9964430894308943,
+      "errors": 14
+    },
+    {
+      "policy": "no abstention (call everything)",
+      "floor": null,
+      "coverage": 1.0,
+      "accuracy": 0.9622326203208557,
+      "errors": 226
+    }
+  ]
+}

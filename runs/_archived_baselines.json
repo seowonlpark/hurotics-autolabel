@@ -1,0 +1,63 @@
+{
+  "baseline_all23": {
+    "note": "RF-era baseline, 23-feature stage. Dir deleted 2026-08-03; metrics kept because this run is NOT in experiments.jsonl. Superseded by runs/s2_ml_rf42 (RF at the champion 42-feature set).",
+    "model": "RandomForestClassifier",
+    "params": {
+      "n_estimators": 300,
+      "random_state": 0,
+      "n_jobs": -1,
+      "class_weight": "balanced"
+    },
+    "n_features": 23,
+    "features": [
+      "L_ang_LPF_mean",
+      "L_ang_LPF_std",
+      "L_ang_LPF_ptp",
+      "L_ang_LPF_absmean",
+      "R_ang_LPF_mean",
+      "R_ang_LPF_std",
+      "R_ang_LPF_ptp",
+      "R_ang_LPF_absmean",
+      "L_angvel_LPF_mean",
+      "L_angvel_LPF_std",
+      "L_angvel_LPF_ptp",
+      "L_angvel_LPF_absmean",
+      "R_angvel_LPF_mean",
+      "R_angvel_LPF_std",
+      "R_angvel_LPF_ptp",
+      "R_angvel_LPF_absmean",
+      "ang_LR_corr",
+      "angvel_LR_corr",
+      "ang_LR_offset",
+      "L_angvel_dom_hz",
+      "L_angvel_band_frac",
+      "R_angvel_dom_hz",
+      "R_angvel_band_frac"
+    ],
+    "window_s": 2.0,
+    "n_train_windows": 4812,
+    "macro_f1_cv": 0.8881393582790398,
+    "per_rev_macro_f1": {
+      "rev2": 0.7994404987571275,
+      "rev3": 0.9686843884559269,
+      "rev4": 0.9706851119894598,
+      "rev5": 0.8449750534568781,
+      "rev6": 0.9191841569723294,
+      "rev7": 0.9009601761922499
+    }
+  },
+  "s2_ml_baseline": {
+    "note": "RF-era dir, degenerate fit (macro-F1 exactly 0.5 on 1078 windows). Vanished from disk 2026-08-03 before archival; metrics below are from the model_meta read earlier in that session.",
+    "model": "RandomForestClassifier",
+    "params": {
+      "n_estimators": 300,
+      "random_state": 0,
+      "n_jobs": -1,
+      "class_weight": "balanced"
+    },
+    "n_features": 23,
+    "window_s": 2.0,
+    "n_train_windows": 1078,
+    "macro_f1_cv": 0.5
+  }
+}
