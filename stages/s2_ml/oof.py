@@ -8,8 +8,8 @@ same honesty the CV metric is held to. The lockbox never enters (§7).
 Predictions are emitted for EVERY window, including the `transition` ones training
 excludes. Those windows are not dropped from the deliverable just because they are not
 training targets: a recording still has to be labeled across them, and they are exactly
-where an abstention policy has to earn its keep. Their `label` stays `transition` so
-scoring can tell them apart from pure windows.
+where an abstention policy has to earn its keep. The `label` column keeps its three
+values -- an int class, `transition`, or None -- so scoring can tell them apart.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import LeaveOneGroupOut
 
-from stages.s2_ml.dataset import load_dataset
+from stages.s2_ml.dataset import TRAIN_CLASSES, load_dataset
 from stages.s2_ml.features import TRANSITION, WindowSpec, build_windows, feature_columns
 from stages.s2_ml.train import build_model
 
@@ -29,8 +29,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 S2_OUT_DIR = REPO_ROOT / "runs" / "s2_ml"
 OOF_CSV = "oof_champion.csv"
 
-# The keys S4 joins on. Identical to the metadata `iter_windows` emits, so the join to
-# the S3 anchor table is exact by construction rather than by convention.
+# The keys S4 joins on. The same metadata `features.windows_of_trial` and
+# `anchors.trial_anchors` emit, so the join is exact by construction, not by convention.
 JOIN_KEYS = ["rev", "trial", "segment", "t_start_ms"]
 
 
@@ -41,7 +41,12 @@ def champion_oof(spec: WindowSpec | None = None) -> pd.DataFrame:
     windows = windows[windows["split"] == "train"].reset_index(drop=True)
     feats = feature_columns(windows)
 
-    pure = windows["label"] != TRANSITION
+    # Three kinds of window label, and they are not two: an int class, `transition`
+    # (mixed over stand/walk), and None (no valid class at all — every row was `-1` or
+    # `255`, so there is nothing to be pure about). Only the ints can train or be scored;
+    # the other two still get predictions, because a recording has to be labeled across
+    # them and they are where abstention earns its keep.
+    pure = windows["label"].isin(TRAIN_CLASSES)
     X = windows[feats].to_numpy(float)
     groups = windows["rev"].to_numpy()
 
@@ -76,7 +81,7 @@ def main() -> None:
     path = out_dir / OOF_CSV
     oof.to_csv(path, index=False)
 
-    pure = oof["label"] != TRANSITION
+    pure = oof["label"].isin(TRAIN_CLASSES)
     acc = (oof.loc[pure, "s2_pred"].astype(int) == oof.loc[pure, "label"].astype(int)).mean()
     print(f"[s2] champion OOF: {len(oof):,} windows "
           f"({int(pure.sum()):,} pure, {int((~pure).sum()):,} transition), "

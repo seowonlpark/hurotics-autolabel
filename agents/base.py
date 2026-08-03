@@ -6,6 +6,7 @@ Every stage agent goes through run_agent(). Nothing else talks to the SDK direct
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,6 +98,29 @@ def _make_audit_hook(log_path: Path, agent_name: str):
         return {}
 
     return audit
+
+
+def extract_json_array(final_text: str) -> list | None:
+    """Pull the JSON array out of an agent's final text. None if there isn't one.
+
+    Agents are told to emit only JSON and mostly do, but "mostly" is not a contract:
+    fences, a leading sentence, or a trailing apology all happen. Returning None rather
+    than raising is deliberate — every caller must already have a conservative path for
+    an item the agent did not judge, and a parse failure is just that case at scale.
+
+    Greedy from the first `[` to the last `]` so a prose mention of a bracket before the
+    payload does not truncate it.
+    """
+    if not final_text:
+        return None
+    m = re.search(r"\[.*\]", final_text, re.DOTALL)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, list) else None
 
 
 def _record_cost(run_dir: Path, result: AgentResult) -> None:

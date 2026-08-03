@@ -34,11 +34,18 @@ import pandas as pd
 
 from stages.s1_clean.config import CANONICAL_HZ
 from stages.s2_ml.dataset import FEATURES, TIME_COL, Trial
-# `_corr` is shared with S2 on purpose, including its 0.0 on a constant series. A second
-# copy drifted from it once already in a sibling repo, and that repo's grow gate calls
-# `_corr` without importing it at all — a latent NameError on the slow-gait path.
-from stages.s2_ml.features import GAIT_BAND_HZ, WindowSpec, _corr, iter_windows
-from stages.s2_ml.rest import SWAP_DELTA_DEG, interleg, rest_anchor, swap_count
+# `_corr` and `rest_reference` are shared with S2 deliberately.
+#
+# `_corr`: a second copy drifted from it once already in a sibling repo, and that repo's
+# grow gate calls `_corr` without importing it at all — a latent NameError on the slow
+# gait path. It is vectorized over rows now, so scalar callers go through `_corr1`.
+#
+# `rest_reference`: S2's interleg features are centred on it, and if S3 measured its own
+# rest zero the two stages would disagree about where "rest" is on the same recording —
+# the swap count would then be taken about a different origin than the `ileg_*` features
+# the model reads. One definition, both consumers.
+from stages.s2_ml.features import GAIT_BAND_HZ, WindowSpec, _corr, rest_reference
+from stages.s2_ml.rest import SWAP_DELTA_DEG, swap_count
 
 # Stride-adaptive analysis span (§10.6). Standing keeps the base window; only motion
 # grows one. Capped so a span can never swallow a whole bout and average two states.
@@ -67,6 +74,18 @@ def swap_verdict(count: int) -> str:
     if count == 1:
         return AMBIGUOUS
     return WALKING
+
+
+def _corr1(a: np.ndarray, b: np.ndarray) -> float:
+    """Pearson r for a single pair, through S2's vectorized `_corr`.
+
+    A reshape rather than a reimplementation: the point is that S2 and S3 cannot compute
+    correlation differently, including the shared convention that a constant series
+    yields 0.0 instead of NaN.
+    """
+    if a.size < 2:
+        return 0.0
+    return float(_corr(a[None, :], b[None, :])[0])
 
 
 def stride_period(x: np.ndarray, fs: float,
@@ -134,7 +153,7 @@ def _grows_to_walking(d: np.ndarray, l: np.ndarray, r: np.ndarray, a: int, b: in
     h = seg.size // 2
     if min(float(np.ptp(seg[:h])), float(np.ptp(seg[h:]))) < GROW_MIN_PTP_DEG:
         return False  # not a both-sides swing
-    if -_corr(l[a:b], r[a:b]) < GROW_MIN_ANTIPHASE:
+    if -_corr1(l[a:b], r[a:b]) < GROW_MIN_ANTIPHASE:
         return False  # legs not antiphase
     return swap_count(seg, SWAP_DELTA_DEG) >= 2
 
@@ -193,7 +212,7 @@ def window_anchors(win: pd.DataFrame, fs: float = CANONICAL_HZ,
 
     # The four audited anchors (§10.8).
     # antiphase: legs oppose when walking. NECESSARY, not sufficient (§6.2).
-    antiphase = -_corr(l_ang, r_ang)
+    antiphase = -_corr1(l_ang, r_ang)
     # grav_stab: steadiness of tilt. -> 1 standing, -> 0 walking.
     grav_stab = 1.0 / (1.0 + 0.5 * (float(l_ang.std()) + float(r_ang.std())))
     periodicity = 0.5 * (_periodicity(l_ang, fs) + _periodicity(r_ang, fs))
@@ -216,65 +235,46 @@ def window_anchors(win: pd.DataFrame, fs: float = CANONICAL_HZ,
     }
 
 
-def rev_rest_references(trials: list[Trial], fs: float = CANONICAL_HZ) -> dict[str, float]:
-    """A standing reference per rev, for trials that never rest on their own.
+def trial_anchors(trial: Trial, spec: WindowSpec | None = None) -> pd.DataFrame:
+    """Per-window anchors for one trial, on the same window grid S2 features use.
 
-    The median interleg of the longest trial the swap rule calls STANDING end to end.
-    Label-free and rev-scoped, so it is still per-subject calibration (§7) rather than
-    the corpus-wide constant that section forbids. Empty for a rev with no such trial.
+    The grid is `range(0, len(seg) - spec.n + 1, spec.step)` per segment — identical to
+    the `sliding_window_view(...)[::step]` walk in `features.windows_of_trial`, and
+    segments shorter than one window are skipped there too. So
+    `(rev, trial, segment, t_start_ms)` joins the two stages exactly, and S4 asserts it
+    with `validate="one_to_one"` rather than trusting this comment.
+
+    The adaptive verdict is computed per segment (it needs ~2 strides of context either
+    side, which a single window does not contain) and read back positionally within the
+    same walk, so the two cannot fall out of step.
     """
-    from stages.s2_ml.rest import REST_ANCHOR_S, is_rest
+    spec = spec or WindowSpec()
+    frame = trial.frame.reset_index(drop=True)
+    if frame.empty:
+        return pd.DataFrame()
 
-    span = int(round(REST_ANCHOR_S * fs))
-    best: dict[str, tuple[int, float]] = {}
-    for t in trials:
-        if t.frame.empty:
-            continue
-        d = interleg(t.frame)
-        if not is_rest(d, span):
-            continue
-        prev = best.get(t.rev)
-        if prev is None or d.size > prev[0]:  # longest such trial: steadiest reference
-            best[t.rev] = (d.size, float(np.median(d)))
-    return {rev: med for rev, (_n, med) in best.items()}
+    # S2's rest zero, not a second opinion about where rest is (see the import note).
+    _zeros, center, rest_trusted = rest_reference(frame, spec.fs_hz)
 
-
-def _adaptive_swaps(trial: Trial, spec: WindowSpec, center: float) -> dict:
-    """Adaptive verdict/span/periodicity per cell, keyed by (segment, t_start_ms).
-
-    A keyed join rather than a positional loop, so it cannot drift out of alignment with
-    `iter_windows`. It needs whole-segment context (~2 strides either side), which is
-    why it cannot live inside `window_anchors`.
-    """
-    out: dict[tuple[int, float], tuple[str, float, float]] = {}
-    for seg_id, seg in trial.frame.groupby("segment", sort=True):
+    rows = []
+    for seg_id, seg in frame.groupby("segment", sort=True):
         seg = seg.reset_index(drop=True)
+        if len(seg) < spec.n:
+            continue
         l = seg[FEATURES[0]].to_numpy(float)
         r = seg[FEATURES[1]].to_numpy(float)
         d = (l - r) - center
         times = seg[TIME_COL].to_numpy(float)
         for start in range(0, len(seg) - spec.n + 1, spec.step):
-            out[(int(seg_id), float(times[start]))] = _adaptive_cell(
+            win = seg.iloc[start:start + spec.n]
+            verdict, span_s, per_adaptive = _adaptive_cell(
                 d, l, r, start + spec.n // 2, spec)
-    return out
-
-
-def trial_anchors(trial: Trial, spec: WindowSpec | None = None,
-                  rev_reference: float | None = None) -> pd.DataFrame:
-    """Per-window anchors for one trial, joined to the S2 window grid.
-
-    Same `iter_windows` S2 features use, so `(rev, trial, segment, t_start_ms)` joins the
-    two stages exactly — S4 merges on those keys and a mismatch is impossible by
-    construction rather than by convention.
-    """
-    spec = spec or WindowSpec()
-    center, rest_trusted = rest_anchor(trial.frame, spec.fs_hz, rev_reference)
-    adaptive = _adaptive_swaps(trial, spec, center)
-    rows = []
-    for meta, win in iter_windows(trial, spec):
-        verdict, span_s, per_adaptive = adaptive[(meta["segment"], meta["t_start_ms"])]
-        rows.append({**meta, **window_anchors(win, spec.fs_hz, center),
-                     "swap_verdict_adaptive": verdict, "swap_window_s": span_s,
-                     "periodicity_adaptive": per_adaptive,
-                     "rest_offset_trusted": rest_trusted})
+            rows.append({
+                "rev": trial.rev, "trial": trial.trial, "split": trial.split,
+                "segment": int(seg_id), "t_start_ms": float(times[start]),
+                **window_anchors(win, spec.fs_hz, center),
+                "swap_verdict_adaptive": verdict, "swap_window_s": span_s,
+                "periodicity_adaptive": per_adaptive,
+                "rest_offset_trusted": rest_trusted,
+            })
     return pd.DataFrame(rows)

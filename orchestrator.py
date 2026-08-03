@@ -3,6 +3,7 @@
 Usage:
     python orchestrator.py --phase 2      # S1 exception triage
     python orchestrator.py --phase 3      # S2 champion/challenger cycle
+    python orchestrator.py --phase 4      # S4 fusion review (why a window was not called)
 """
 
 from __future__ import annotations
@@ -25,12 +26,13 @@ from agents.s1_exception import (
     parse_review,
     write_review,
 )
-from agents import s2_critic, s2_experimenter
+from agents import s2_critic, s2_experimenter, s4_fusion
 
 REPO_ROOT = Path(__file__).resolve().parent
 RUNS_DIR = REPO_ROOT / "runs"
 CLEAN_RUN_DIR = RUNS_DIR / "s1_clean"  # where `python -m stages.s1_clean.clean` writes its ledgers
 S2_RUN_DIR = RUNS_DIR / "s2_ml"        # champion.json + experiments.jsonl live here
+S4_RUN_DIR = RUNS_DIR / "s4_fusion"    # fused.csv from `python -m stages.s4_fusion.run`
 
 
 def git_sha() -> str:
@@ -176,7 +178,56 @@ async def phase3(run_dir: Path) -> None:
     print(f"[s2] cost: experimenter ${ex.cost_usd:.4f} + critic ${cr.cost_usd:.4f}")
 
 
-PHASES = {2: phase2, 3: phase3}
+async def phase4(run_dir: Path) -> None:
+    """S4 fusion review: the agent judges WHY windows could not be confidently called.
+
+    Deterministic code fuses, scores and builds the queue; the agent only judges cause.
+    It cannot change a call — `fused.csv` is written before this runs and is not touched.
+    """
+    fused = S4_RUN_DIR / "fused.csv"
+    if not fused.exists():
+        raise FileNotFoundError(
+            f"No fusion output at {fused}. Run `python -m stages.s2_ml.oof`, "
+            f"`python -m stages.s3_physics.run`, then `python -m stages.s4_fusion.run` first."
+        )
+
+    queue, summary = s4_fusion.build_queue(fused)
+    print(f"[s4-rev] queue: {summary}")
+    if summary["n_dropped_by_cap"]:
+        print(f"[s4-rev] NOTE: {summary['n_dropped_by_cap']} rows left out by the "
+              f"{summary['cap']}-row review cap — this is a sample, not a full audit")
+
+    if not queue:
+        s4_fusion.write_review(run_dir, queue, [], "")
+        print("[s4-rev] nothing flagged — no abstentions and no confident errors")
+        return
+
+    result = await run_agent(s4_fusion.S4_FUSION_AGENT,
+                             s4_fusion.build_prompt(queue, summary), run_dir)
+    decisions = s4_fusion.parse_review(result.final_text)
+    out = s4_fusion.write_review(run_dir, queue, decisions, result.final_text)
+
+    rows = [json.loads(l) for l in out.read_text(encoding="utf-8").splitlines()]
+    tally: dict[str, int] = {}
+    for r in rows:
+        d = r["review"]["disposition"]
+        tally[d] = tally.get(d, 0) + 1
+    print(f"[s4-rev] {len(queue)} judged -> {out.name}: {tally}; "
+          f"turns={result.num_turns} cost=${result.cost_usd:.4f}")
+
+    audit = [r for r in rows if r["review"]["disposition"] == "label_audit"]
+    if audit:
+        print(f"[s4-rev] {len(audit)} MISLABEL CANDIDATE(S) — a human must confirm before "
+              f"any label changes:")
+        for r in audit:
+            w = r["where"]
+            print(f"[s4-rev]   {w['rev']} t{w['trial']} @ {w['t_start_s']}s: "
+                  f"labeled {r['human_label']}, {r['review']['rationale']}")
+    if decisions is None:
+        print("[s4-rev] WARNING: agent output did not parse — all rows marked unresolved")
+
+
+PHASES = {2: phase2, 3: phase3, 4: phase4}
 
 
 def main() -> None:

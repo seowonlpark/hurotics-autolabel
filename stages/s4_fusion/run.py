@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from stages.s2_ml.dataset import STAND, WALK
+from stages.s2_ml.dataset import STAND, TRAIN_CLASSES, WALK
 from stages.s2_ml.features import TRANSITION
 from stages.s2_ml.oof import JOIN_KEYS, OOF_CSV, S2_OUT_DIR
 from stages.s3_physics.run import ANCHORS_CSV, S3_OUT_DIR
@@ -93,6 +93,17 @@ def apply_fusion(df: pd.DataFrame, proba_floor: float = DEFAULT_PROBA_FLOOR) -> 
     return out
 
 
+def true_class(df: pd.DataFrame) -> pd.Series:
+    """Ground-truth class per window, NaN where there is none.
+
+    `label` holds three kinds — an int class, `transition`, or None — so it round-trips
+    through CSV as an object column and `isin((0, 10))` silently matches nothing. Coercing
+    once, here, is what stops "0 pure windows" from being reported as a result instead of
+    as the bug it is.
+    """
+    return pd.to_numeric(df["label"], errors="coerce")
+
+
 def score(df: pd.DataFrame) -> dict:
     """(coverage, confident accuracy) and the honest companions.
 
@@ -101,12 +112,17 @@ def score(df: pd.DataFrame) -> dict:
     model. Its abstention rate is reported separately — abstaining there is correct
     behaviour, and a policy that does not is not being careful, it is being lucky.
     """
-    pure = df[df["label"] != TRANSITION].copy()
-    pure["true"] = pure["label"].astype(int)
+    # `label` carries three kinds: an int class, `transition` (mixed), or None (no valid
+    # class at all). Only ints are scoreable; the other two are reported by rate, since a
+    # window with no true class cannot be counted right or wrong without inventing one.
+    t = true_class(df)
+    scoreable = t.isin(TRAIN_CLASSES)
+    pure = df[scoreable].copy()
+    pure["true"] = t[scoreable].astype(int)
     confident = ~pure["abstain"]
     correct = pure["fused_label"] == pure["true"]
 
-    trans = df[df["label"] == TRANSITION]
+    trans = df[~scoreable]
     return {
         "n_windows": int(len(df)),
         "n_pure": int(len(pure)),
@@ -145,16 +161,19 @@ def frontier(df: pd.DataFrame, floors=(0.50, 0.60, 0.70, 0.80, 0.90)) -> list[di
     # The brackets: agreement-only (physics decides alone) and no abstention at all.
     high_only = score(apply_fusion(df, 0.50))
     forced = apply_fusion(df, 0.50)
-    pure = forced[forced["label"] != TRANSITION]
-    rows.append({"policy": "agreement only (HIGH tier)", "floor": None,
-                 "coverage": high_only["by_tier"][HIGH]["n"] / high_only["n_pure"],
-                 "accuracy": high_only["by_tier"][HIGH]["accuracy"],
-                 "errors": int(round((1 - high_only["by_tier"][HIGH]["accuracy"])
-                                     * high_only["by_tier"][HIGH]["n"]))})
-    rows.append({"policy": "no abstention (call everything)", "floor": None,
-                 "coverage": 1.0,
-                 "accuracy": float((pure["fused_label"] == pure["label"].astype(int)).mean()),
-                 "errors": int((pure["fused_label"] != pure["label"].astype(int)).sum())})
+    ft = true_class(forced)
+    pure = forced[ft.isin(TRAIN_CLASSES)]
+    ptrue = ft[ft.isin(TRAIN_CLASSES)].astype(int)
+    if high_only["n_pure"]:
+        h = high_only["by_tier"][HIGH]
+        rows.append({"policy": "agreement only (HIGH tier)", "floor": None,
+                     "coverage": h["n"] / high_only["n_pure"],
+                     "accuracy": h["accuracy"],
+                     "errors": int(round((1 - h["accuracy"]) * h["n"]))})
+        rows.append({"policy": "no abstention (call everything)", "floor": None,
+                     "coverage": 1.0,
+                     "accuracy": float((pure["fused_label"] == ptrue).mean()),
+                     "errors": int((pure["fused_label"] != ptrue).sum())})
     return rows
 
 
@@ -162,7 +181,7 @@ def render(s: dict, floor: float, curve: list[dict]) -> str:
     lines = [
         "# S4 Fusion", "",
         f"- windows: **{s['n_windows']:,}** ({s['n_pure']:,} label-pure, "
-        f"{s['transition_windows']:,} transition)",
+        f"{s['transition_windows']:,} unscoreable)",
         f"- **coverage {s['coverage']:.1%} at confident accuracy {s['confident_accuracy']:.4f}** "
         f"(target {ACCURACY_TARGET:.0%})",
         f"- confident-but-wrong: **{s['confident_errors']}** windows",

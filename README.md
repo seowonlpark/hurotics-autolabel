@@ -14,6 +14,7 @@ Built on the [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overvi
 | file | what it is |
 |---|---|
 | **`DOMAIN_NOTES.md`** | Everything the corpus taught us the hard way. Injected into every agent's prompt. **Read before touching any data.** |
+| **`caveats.md`** | What this pipeline is shaky about: thin constants, accepted imperfections, unverified paths, deliberate omissions. Read before trusting a number. |
 | **`PLAN.md`** | Architecture, stage contracts, phase gates, cost rails. |
 | this file | How to run it. |
 
@@ -91,11 +92,36 @@ Produces `data/clean/**.parquet` (gyro normalized to deg/s) with a per-file
 `channel_trust.json` sidecar, plus per-run `segments.jsonl`, `observations.jsonl`,
 `quarantine.jsonl`, and `clean_report.md`.
 
+### S2 → S3 → S4 (the labeling chain)
+
+```powershell
+python -m stages.s2_ml.train   --out runs\s2_ml       # train + leave-one-rev-out locoeval
+python -m stages.s2_ml.oof     --out runs\s2_ml       # out-of-fold predictions + probabilities
+python -m stages.s3_physics.run --out runs\s3_physics # swap-rule anchors + rate audit
+python -m stages.s4_fusion.run  --out runs\s4_fusion  # call + confidence + reason
+```
+
+Run in that order — S4 inner-joins S2's `oof_champion.csv` to S3's `anchors.csv` on
+`(rev, trial, segment, t_start_ms)` and refuses to proceed if the two stages windowed
+differently. `runs/s4_fusion/fusion.md` is the number the pipeline is judged on.
+
 ### Agents
 
 ```powershell
 python orchestrator.py --phase 2      # S1 exception triage over the latest clean run
+python orchestrator.py --phase 4      # S4 review: why a window could not be called
 ```
+
+The S4 review agent (`agents/s4_fusion.py`) reads `runs/s4_fusion/fused.csv` and judges
+the windows the pipeline could not confidently *and* correctly call — abstentions, and
+confident errors against the human label, quota'd so neither crowds the other out. It
+assigns a cause from a closed vocabulary (`transition` / `label_suspect` / `slow_gait` /
+`weight_shift` / `data_quality` / `ambiguous`) plus whether a person is needed, and
+`collapse()` derives the disposition deterministically.
+
+`label_suspect` is the verdict worth having: if ground truth is wrong, the pipeline's
+"error" is not one. Those are printed as mislabel candidates and always routed to a
+human — an agent may nominate a label change, never enact one.
 
 The S1 exception agent (`agents/s1_exception.py`) reads the clean stage's exception queue
 (`quarantine.jsonl` + `observations.jsonl`), judges each item — `known_expected` / `novel` /
@@ -146,9 +172,9 @@ no message queues. `orchestrator.py` is a dumb sequencer; all intelligence lives
 | stage | deterministic core | agent role |
 |---|---|---|
 | **S1 clean** | schema census, rate normalization, gap segmentation, channel trust | exception queue only |
-| **S2 ml** | train + locoeval, champion/challenger | propose → critic reviews → metric-gated promotion |
-| **S3 physics** | anchor features, plots | read plots, write hypotheses with provenance |
-| **S4 report** | — (Read/Grep only) | cross-reference, label audit, flag anomalies |
+| **S2 ml** | windowing + features, train + locoeval, champion/challenger, OOF artifact | propose → critic reviews → metric-gated promotion |
+| **S3 physics** | swap-rule anchors, rate-invariance audit | — (deterministic, label-free) |
+| **S4 fusion** | join S2 + S3 → call, confidence, reason | judge the abstention queue |
 
 Non-negotiables:
 
@@ -173,14 +199,40 @@ change the champion outside the S2 promotion path.
 | 0 — skeleton | done |
 | 1 — S1 deterministic core | complete — schema/rate/gaps, gyro unit+axis trust, yaw-drift trust, degenerate-time-base rejection, quarantine ledger; gate passes (every raw file accounted) |
 | 2 — S1 exception agent | complete — `agents/s1_exception.py` triages the exception queue into known_expected / novel / needs_human with grounded rationale; verified on the real corpus and signed off (gate closed) |
-| 3 — S2 loop | not started |
-| 4 — S3 physics | not started |
-| 5 — S4 report | not started |
+| 3 — S2 loop | running — windowing/features, leave-one-rev-out CV, champion/challenger with a metric-gated promotion rule, OOF artifact |
+| 4 — S3 physics | complete — swap-rule anchors on the shared window grid; rate-invariance verdict recorded for all four anchors (gate closed) |
+| 5 — S4 fusion | running — call + confidence + reason per window, abstention queue for review |
 | 6 — hardening + handoff | not started |
 
 Current corpus counts (files, clean vs quarantined, usable segments/minutes, subjects) live in the
 latest `runs/*/clean_report.md` and `census.md`, regenerated every run. A 2026-05 batch is
 quarantined for a broken time base (`DOMAIN_NOTES` §2.6).
 
-See `PLAN.md` for each phase's gate. Sacrifice order if time runs short: Phase 4 first, then
-Phase 5. Never Phases 1–3 — they are the handoff-critical spine.
+---
+
+## What this pipeline is judged on
+
+**Label stand/walk on any recording at ≥95% accuracy over the windows it claims, and
+abstain rather than guess on the rest.** Abstention is a feature: an ambiguous window
+gets a call, a confidence tier, the reason it is uncertain, and the alternative it was
+weighing.
+
+Current position, leave-one-rev-out over 4,812 label-pure windows:
+
+| | |
+|---|---|
+| **coverage 95.1% at confident accuracy 0.9760** | the headline, always reported as a pair |
+| high tier | 4,140 windows, accuracy 0.9853 |
+| medium | 437 windows, 0.8879 |
+| low (abstained) | 235 windows, 0.5702 |
+
+Coverage and accuracy are quoted together because either alone is meaningless — abstain
+on all but the easiest window and accuracy reads 1.000. The full operating curve
+regenerates every run in `runs/s4_fusion/fusion.md`.
+
+The abstained set is *supposed* to score badly: that gap between 0.9760 and 0.5702 is what
+makes the confidence signal informative rather than decorative.
+
+**Read [`caveats.md`](caveats.md) before trusting any of these numbers.** It records what
+is thin, what is unverified, what was deliberately left out, and the lockbox that has
+never been opened.

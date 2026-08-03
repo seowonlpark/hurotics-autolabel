@@ -11,36 +11,43 @@ Deterministic, no data access, no model. It reads two independent opinions:
   - **S3**, the swap rule: zero fitted parameters, a different quantity (interleg angle),
     and no exposure to labels at all.
 
-Why two: measured on 4,812 out-of-fold windows, S2's own probability cannot find its
-worst errors, and the physics can.
+Why two: measured on 4,812 out-of-fold windows, S2's own probability does not find its
+worst errors as well as an independent opinion does.
 
     S2 vs physics    n       S2 accuracy   S2 mean probability
-    agree            4,226   0.9785        0.926
-    physics abstains   315   0.8635        0.801
-    DISAGREE           271   0.3395        0.713
+    agree            4,307   0.9807        0.947
+    physics abstains   316   0.8734        0.856
+    DISAGREE           189   0.5344        0.708
 
-When the swap rule contradicts the classifier, the classifier is wrong two times in
-three — while still reporting 0.71 confidence. That is the entire case for this stage.
+A window where the swap rule contradicts the classifier is a coin flip that the
+classifier reports 0.71 confidence on. Spending the same number of abstentions on the
+disagreements rather than on the lowest-probability windows catches materially more real
+errors — 0.4656 of the disagreeing windows are wrong versus 0.3757 of the equally-sized
+lowest-probability set. That, not the label override below, is what this stage is for.
 
-**The veto is asymmetric, and that is measured, not aesthetic.** Splitting the 271
-disagreements by direction:
+**These numbers are the SECOND measurement, and the first is why they are quoted.**
+Before the S2 feature set absorbed `ileg_swaps` and the rest-anchored interleg block,
+the same table read n=271 disagreements at S2 accuracy 0.3395, with physics right 0.788
+in the stand->walk direction. Teaching the model the swap count moved most of that signal
+inside S2, exactly as it should: fewer disagreements, and the survivors closer to even.
+A constant justified against the first measurement and never re-checked would now be
+folklore — re-run `stages/s4_fusion/run.py`, which re-measures the whole curve.
 
-    S2 says STAND, physics says WALK   n=189   physics right 0.788
-    S2 says WALK, physics says STAND   n= 82   physics right 0.366
+**Physics does NOT override the label, and that is a deliberate removal.** An earlier
+version let it veto toward WALK, justified when physics was right 0.788 of the time in
+that direction. After the feature rework the same measurement read **0.566 on 76
+windows** — worth about +0.2 points of accuracy, which is not an edge, it is noise with a
+rationale attached. Dropped (Lu, 2026-08-03).
 
-Physics asserting WALKING is strong evidence; physics asserting STANDING is weak. The
-asymmetry has a mechanism: >=2 committed alternations is *positive* evidence that the
-legs swapped, while 0 swaps is the *absence* of evidence, which a slow or small-amplitude
-stride produces just as readily as genuine standing. Graded by swap count, the same story:
-disagreements where physics counted 2-4 swaps, physics is right 0.82; where it counted 0,
-0.46 — a coin flip.
+The mechanism that motivated it is still real: >=2 committed alternations is *positive*
+evidence the legs swapped, while 0 swaps is the *absence* of evidence, which slow or
+small-amplitude gait produces as readily as standing. That asymmetry is why physics
+disagreement is worth flagging. It is not enough to overrule a model that now reads the
+swap count itself.
 
-So the label follows physics toward WALK only. Whole-corpus accuracy of each option:
-
-    S2 alone                            0.9350
-    follow physics both directions      0.9530
-    physics vetoes toward WALK only     0.9576   <- adopted
-    physics vetoes toward STAND only    0.9304
+So the split of responsibility is clean: **S2 decides what the window is, S3 decides
+whether to believe it.** The losing opinion is still reported as `alternative`, so a
+reviewer sees what the disagreement was about rather than only that there was one.
 """
 
 from __future__ import annotations
@@ -96,21 +103,19 @@ def fuse(s2_pred: int, s2_proba: float, s3_verdict: str, *,
     reasons: list[str] = []
     alternative: int | None = None
 
+    # The label is always S2's. Physics sets the confidence, never the call.
+    label = s2_pred
+
     if asserts is not None and asserts != s2_pred:
-        # Contradiction. Emit the call the evidence favours by direction (see module
-        # docstring), flag it low, and name the option that lost.
-        label = WALK if (s2_pred == STAND and s3_verdict == WALKING) else s2_pred
-        alternative = s2_pred if label != s2_pred else asserts
         reasons.append(R_CONTRADICTED)
+        alternative = asserts                    # what the physics argued for instead
         confidence = LOW
-    else:
-        label = s2_pred
-        if asserts is None:                      # physics abstained
-            reasons.append(R_PHYSICS_ABSTAINS)
-            confidence = MEDIUM if s2_proba >= proba_floor else LOW
-            alternative = WALK if s2_pred == STAND else STAND
-        else:                                    # both agree
-            confidence = HIGH if s2_proba >= proba_floor else MEDIUM
+    elif asserts is None:                        # physics abstained
+        reasons.append(R_PHYSICS_ABSTAINS)
+        alternative = WALK if s2_pred == STAND else STAND
+        confidence = MEDIUM if s2_proba >= proba_floor else LOW
+    else:                                        # both agree
+        confidence = HIGH if s2_proba >= proba_floor else MEDIUM
 
     if s2_proba < proba_floor:
         reasons.append(R_MODEL_SPLIT)

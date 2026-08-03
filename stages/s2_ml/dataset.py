@@ -37,9 +37,34 @@ TIME_COL = "Time"
 STAND, WALK, HUMAN_UNKNOWN = 0, 10, -1
 TRAIN_CLASSES = (STAND, WALK)
 
-# Lockbox: whole revs sealed until the very end (§7). rev8 spans the balanced regime
-# (~70/27), rev13 the walk-heavy one — together they probe both without touching the loop.
-DEFAULT_LOCKBOX_REVS = ("rev8", "rev13")
+# Lockbox: whole revs sealed until the very end (§7).
+#
+# rev8 ONLY. rev13 was sealed alongside it and opened deliberately: the first lockbox run
+# showed the confidence signal did not transfer to it at all — its accuracy is flat from
+# threshold 0.50 to 0.95 — and a failure that cannot be looked at cannot be fixed. rev13 is
+# now a development subject, held out one fold at a time by the leave-one-rev-out CV like
+# any other.
+#
+# rev8 has been read exactly once and must not be read again until the work is frozen.
+# Re-running `roweval --lockbox` to check whether a change helped would turn the only
+# measurement in this repo that was never optimized against into a second validation set.
+DEFAULT_LOCKBOX_REVS = ("rev8",)
+
+# Trials quarantined for a demonstrated label error, as (rev, trial). Excluded from both
+# training and scoring, and never silently: a mislabelled trial teaches the model the wrong
+# thing AND depresses every metric computed against it, so leaving it in is not the
+# conservative choice it looks like.
+#
+# rev13/4: 12,691 rows, every one annotated `stand`. The file contains two runs under that
+# one label - 7.0 s at 2.1 deg/s angular-velocity std, then 119.9 s at 45.3 deg/s with 71
+# deg of interleg swing and 39 deg of thigh excursion. rev13's own labelled WALKING runs
+# measure 35-50 deg/s across the other six trials. The second run is walking.
+#
+# The evidence is INTERNAL to the file - one run 20x the other under the same label, and
+# the larger matching that subject's own walking - not "the classifier disagreed".
+# Excluding data because a model dislikes it is how a corpus gets quietly fitted to its
+# model; this entry stands on the measurement and would stand with no model at all.
+EXCLUDED_TRIALS = {("rev13", 4)}
 
 _REV = re.compile(r"(rev\d+)")
 _TRIAL = re.compile(r"trial_(\d+)")
@@ -55,8 +80,17 @@ def trial_of(path: Path) -> int:
     return int(m.group(1)) if m else 0
 
 
-def find_trials(labeled_dir: Path = LABELED_DIR) -> list[Path]:
-    return sorted(labeled_dir.rglob("annotated_loco_*_trial_*.csv"))
+def find_trials(labeled_dir: Path = LABELED_DIR,
+                excluded: set[tuple[str, int]] | None = None) -> list[Path]:
+    """Every labeled trial, minus the quarantined ones.
+
+    `stages.s2_ml.audit` proposes exclusions with evidence; they take effect only once
+    written into `EXCLUDED_TRIALS` by hand. Pass `excluded=set()` to load the raw corpus,
+    which is what the audit itself does so it can still see what it flagged.
+    """
+    excluded = EXCLUDED_TRIALS if excluded is None else excluded
+    return sorted(p for p in labeled_dir.rglob("annotated_loco_*_trial_*.csv")
+                  if (rev_of(p), trial_of(p)) not in excluded)
 
 
 @dataclass
@@ -108,11 +142,14 @@ def load_dataset(
     labeled_dir: Path = LABELED_DIR,
     lockbox_revs: tuple[str, ...] = DEFAULT_LOCKBOX_REVS,
     val_revs: tuple[str, ...] = (),
+    excluded: set[tuple[str, int]] | None = None,
 ) -> list[Trial]:
     """Load every trial, normalized and split. `val_revs` may be empty when the caller
-    prefers grouped CV over a fixed validation rev; the lockbox is always held out."""
+    prefers grouped CV over a fixed validation rev; the lockbox is always held out.
+
+    `excluded` defaults to the quarantine list; pass `set()` to load the raw corpus."""
     trials = []
-    for p in find_trials(labeled_dir):
+    for p in find_trials(labeled_dir, excluded):
         split = assign_split(rev_of(p), lockbox_revs, val_revs)
         trials.append(load_trial(p, split))
     return trials

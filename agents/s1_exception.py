@@ -15,10 +15,9 @@ summarized as context, not triaged item by item.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
-from agents.base import MODEL_CHEAP, AgentSpec
+from agents.base import MODEL_CHEAP, AgentSpec, extract_json_array
 from stages.s2_ml.transform import SAGITTAL_DEG_AXIS_BY_VARIANT
 
 REVIEW_FILENAME = "exceptions_review.jsonl"
@@ -209,17 +208,12 @@ def build_prompt(queue: list[dict], summary: dict) -> str:
 
 
 def parse_review(final_text: str) -> list[dict] | None:
-    """Extract the JSON array from the agent's final text; tolerant of fences/prose."""
-    if not final_text:
-        return None
-    m = re.search(r"\[.*\]", final_text, re.DOTALL)
-    if not m:
-        return None
-    try:
-        data = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, list) else None
+    """Extract the JSON array from the agent's final text; tolerant of fences/prose.
+
+    Thin alias over `base.extract_json_array` — every agent parses its output the same
+    way, so a fix to the tolerant-parse logic reaches all of them.
+    """
+    return extract_json_array(final_text)
 
 
 _REVIEW_KEYS = ("explained", "action", "sections", "rationale", "confidence")

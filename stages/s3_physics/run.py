@@ -26,7 +26,6 @@ from stages.s3_physics.anchors import (
     AMBIGUOUS,
     STANDING,
     WALKING,
-    rev_rest_references,
     trial_anchors,
 )
 from stages.s3_physics.rate_audit import audit_anchors, render as render_audit
@@ -42,14 +41,13 @@ VERDICTS = (STANDING, AMBIGUOUS, WALKING)
 def build_anchor_table(trials, spec: WindowSpec | None = None) -> pd.DataFrame:
     """Anchors for every window of every trial, on one shared window grid.
 
-    Rev-level rest references are computed ONCE across the whole trial list and passed
-    down, so a trial that never rests is calibrated against its own session rather than
-    silently falling back to a whole-recording median (§10.5.2).
+    Each trial is calibrated on its own rest posture via `features.rest_reference` — the
+    same zero the S2 interleg features use. A trial that never rests falls back to a
+    whole-recording median and carries `rest_offset_trusted = False`, which S4 turns into
+    a stated reason rather than a silent caveat.
     """
     spec = spec or WindowSpec()
-    refs = rev_rest_references(trials, spec.fs_hz)
-    frames = [t for t in (trial_anchors(tr, spec, refs.get(tr.rev)) for tr in trials)
-              if not t.empty]
+    frames = [t for t in (trial_anchors(tr, spec) for tr in trials) if not t.empty]
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 

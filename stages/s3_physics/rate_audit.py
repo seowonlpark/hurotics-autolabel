@@ -36,14 +36,8 @@ from scipy.signal import decimate
 
 from stages.s1_clean.config import CANONICAL_HZ, DECIMATE_FILTER
 from stages.s2_ml.dataset import FEATURES, Trial
-from stages.s2_ml.features import WindowSpec, iter_windows
-from stages.s2_ml.rest import rest_anchor
-from stages.s3_physics.anchors import (
-    ANCHOR_NAMES,
-    WALKING,
-    rev_rest_references,
-    window_anchors,
-)
+from stages.s2_ml.features import WindowSpec, rest_reference
+from stages.s3_physics.anchors import ANCHOR_NAMES, WALKING, window_anchors
 
 # Halve the rate: a genuine bandwidth cut, not timestamp quantization at the same rate.
 AUDIT_FACTOR = 2
@@ -119,28 +113,28 @@ def _delta(anchor: str, native: float, decimated: float) -> float:
 
 def audit_anchors(trials: list[Trial], spec: WindowSpec | None = None,
                   factor: int = AUDIT_FACTOR, tol: float = AUDIT_TOL,
-                  rev_references: dict[str, float] | None = None,
                   pad: int = AUDIT_PAD_SAMPLES) -> dict[str, dict]:
     """One verdict per anchor. Never raises on a moved anchor — it reports.
 
-    Iterates segments directly rather than `iter_windows`, because padding a window
-    requires the samples around it. The window grid is identical either way: the same
-    `range(0, len(seg) - spec.n + 1, spec.step)` walk `iter_windows` performs.
+    Iterates segments directly, because padding a window requires the samples around
+    it. The grid is the same `range(0, len(seg) - spec.n + 1, spec.step)` walk that
+    `features.windows_of_trial` and `anchors.trial_anchors` perform.
     """
     spec = spec or WindowSpec()
     deltas: dict[str, list[float]] = {a: [] for a in ANCHOR_NAMES}
     n_total = n_walking = n_unpadded = 0
 
-    # The same rest zeros the anchor table is centred on, so the audit and the table
-    # never read a trial on two different zeros (§10.4).
-    if rev_references is None:
-        rev_references = rev_rest_references(trials, spec.fs_hz)
-
     for trial in trials:
-        center, _trusted = rest_anchor(trial.frame, spec.fs_hz,
-                                       rev_references.get(trial.rev))
-        for _seg_id, seg in trial.frame.groupby("segment", sort=True):
+        frame = trial.frame.reset_index(drop=True)
+        if frame.empty:
+            continue
+        # The same rest zero the anchor table and the S2 features are centred on, so the
+        # audit never reads a trial on a different origin than the stage it audits (§10.4).
+        _zeros, center, _trusted = rest_reference(frame, spec.fs_hz)
+        for _seg_id, seg in frame.groupby("segment", sort=True):
             seg = seg.reset_index(drop=True)
+            if len(seg) < spec.n:
+                continue
             for start in range(0, len(seg) - spec.n + 1, spec.step):
                 win = seg.iloc[start:start + spec.n]
                 native = window_anchors(win, spec.fs_hz, center)
