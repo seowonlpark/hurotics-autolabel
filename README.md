@@ -1,441 +1,186 @@
-# hurotics-autolabel
+# h-care-agents
 
-**English** | [한국어](README.ko.md)
+A staged pipeline for turning raw H-CARE IMU device logs into a locomotion classification system —
+cleaning, ML experimentation, physics-based analysis, and reporting — where **deterministic code
+does the work and Claude agents handle judgment at defined points**, with every decision logged and
+reproducible.
 
-A pipeline that reads raw wearable-sensor logs and, for every moment of a recording, decides whether
-the wearer is **standing** or **walking** - and, crucially, how **confident** it is in that call. It
-is built so that ordinary code does all the number-crunching and AI is used only for judgment calls,
-with every decision written down and reproducible.
-
-This page gets you from a fresh copy of the project to a finished report. For how the pipeline works
-inside, see [`PIPELINE.md`](PIPELINE.md); for why it is built the way it is, see
-[`BUILDLOG.md`](BUILDLOG.md).
+Built on the [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overview) (Python).
 
 ---
 
-## Background (for non-technical readers)
+## Read these first, in this order
 
-Two different kinds of "AI" appear in this project, and they do different jobs.
+| file | what it is |
+|---|---|
+| **`DOMAIN_NOTES.md`** | Everything the corpus taught us the hard way. Injected into every agent's prompt. **Read before touching any data.** |
+| **`PLAN.md`** | Architecture, stage contracts, phase gates, cost rails. |
+| this file | How to run it. |
 
-**Machine learning (ML)** is a program that learns patterns from labeled examples. Here it is shown
-many windows of sensor data that a person has already marked as standing or walking, and it learns to
-label new windows on its own. ML is very good at generalizing from lots of examples, but it is a black
-box: it cannot easily explain itself, and it can be confidently wrong.
-
-**Agentic AI** is a language model (the kind behind chat assistants) that can read files and reason
-about them. Here it is used only for **judgment** that a fixed rule cannot make well - things like
-"this file looks odd, is it a known problem or something new?" or "does the physics agree with the
-human label here?". It is good at reasoning over messy context, but it is never allowed to touch the
-data or compute a result.
-
-**Why both, and why this shape.** The guiding rule is *code does the work; agents judge the work*.
-Deterministic code and ML handle everything measurable - cleaning the data, training the classifier,
-scoring it. The AI agents only weigh in at a few defined points, and they can change nothing on their
-own. This matters because it keeps the whole system honest: every number can be reproduced by
-re-running the code, every agent decision is logged with its reasoning, and whenever the machine
-genuinely cannot decide, it says so and hands the case to a human instead of guessing. Splitting the
-work into stages (clean -> learn -> physics -> combine) lets each part be improved and checked on its
-own.
+`DOMAIN_NOTES.md` is not background reading — it is the reason this pipeline is shaped the way it
+is. Every entry carries a provenance tag: **[measured]** (reproducible by rerunning S1),
+**[reported]** (a human said so, unverified), **[decided]** (a design choice), **[open]** (known
+unknown). If you only read one thing, read §1.3 — the column prefix is a lie, and positional
+indexing silently corrupts most of the corpus without ever raising an error.
 
 ---
 
 ## Setup
 
-You need **Python 3.10 or newer**. All commands below are run in a terminal from the project folder.
-
-**1. Open the project.** Open the `hurotics-autolabel` folder in VS Code (File -> Open Folder), then
-open a terminal inside it (Terminal -> New Terminal).
-
-**2. Create and activate a virtual environment** (an isolated place for this project's Python
-packages):
+Requires Python 3.10+.
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\Activate.ps1
-```
-
-If PowerShell blocks the activate script, run this once, then try again:
-`Set-ExecutionPolicy -Scope Process RemoteSigned`.
-
-(On macOS or Linux the activate line is `source .venv/bin/activate` instead.)
-
-You must activate the environment in every new terminal. Forgetting to is the most common cause of
-"module not found" errors.
-
-**3. Install the packages:**
-
-```powershell
+.venv\Scripts\Activate.ps1          # PowerShell; if blocked: Set-ExecutionPolicy -Scope Process RemoteSigned
 pip install -r requirements.txt
+Copy-Item .env.example .env         # then put your real key in it
 ```
 
-**4. Set up your API key (only needed for the AI-agent steps).** The agents call the Claude API, which
-is pay-as-you-go and requires a key.
+```bash
+python3 -m venv .venv && source .venv/bin/activate   # macOS / Linux
+pip install -r requirements.txt
+cp .env.example .env
+```
 
-- Get a key from the Claude Console: **https://platform.claude.com** (create an account, then
-  API keys -> Create key).
-- In the Console, **set a monthly spend cap** so costs can never run away. This is a safety rail that
-  cannot be set from inside the project.
-- Copy the example config and paste your key into it:
+Get an API key from the [Console](https://platform.claude.com). The SDK reads it from the process
+environment; `orchestrator.py` calls `load_dotenv()` so `.env` is enough. **Set a monthly spend cap
+in the Console** — that rail cannot be enforced from inside this repo.
+
+You must activate the venv in every new terminal. Forgetting is the single most common source of
+`ModuleNotFoundError` here.
+
+---
+
+## Data layout
+
+```
+data/
+├── raw/<YYYYMMDD[_n]>/*.csv   unlabeled device logs. Session date comes from the FOLDER.
+├── labeled/                   golden data. Never mixed into raw/.
+└── clean/<session>/*.parquet  S1 output: canonical 100 Hz, 30 measured + 2 documented-exception columns, gyro normalized to deg/s
+```
+
+Whole-file rejects are recorded in each run's `quarantine.jsonl` ledger; the raw file
+is never copied or moved.
+
+`data/`, `runs/` and `.env` are gitignored. Nothing from HUROTICS leaves the machine via git.
+
+A `Label` column appearing under `data/raw/` is a **contamination event**, not a schema variant.
+
+---
+
+## Running it
+
+### S1 — census (measure the corpus, judge nothing)
 
 ```powershell
-Copy-Item .env.example .env
+python -m stages.s1_clean.run --out runs\s1_census
 ```
 
-  Then open `.env` and put your key after `ANTHROPIC_API_KEY=`.
+Produces `census.md` (human-readable), `variants.json` (every distinct header + the stable prefix
+per family), `manifest.jsonl` (one row per file: session, variant, measured rate, jitter, gaps,
+label codes).
 
-**Cost note.** The whole deterministic pipeline (cleaning, training, scoring, the final report) runs
-**for free** - no key, no charges. Only the four AI-agent steps spend credit, and a full run of them is
-roughly a few dollars. You can do everything except the agent steps without a key.
-
----
-
-## Get your data in
-
-Two kinds of data go in two different places. Put files in with your file explorer or VS Code; nothing
-here is edited by hand.
-
-**Unlabeled data you want the pipeline to label** goes in `data/raw/`, one folder per recording
-session, named by date:
-
-```
-data/raw/20260114/some_recording.csv
-data/raw/20260114/another_recording.csv
-```
-
-**Labeled data you want to train the classifier on** goes in `data/labeled/`, organized by **rev** -
-one rev is one subject recorded on one day - with the filename pattern
-`annotated_loco_<rev>_trial_<n>.csv`:
-
-```
-data/labeled/rev2/annotated_loco_rev2_trial_1.csv
-data/labeled/rev3/annotated_loco_rev3_trial_1.csv
-```
-
-Keep labeled and unlabeled data separate - never put labeled files under `data/raw/`.
-
-**The lockbox (held-out test set).** To trust a score, some labeled revs must be set aside *before
-training* and never looked at until the very end - this is the lockbox. It is how you find out whether
-the model really generalizes to a new person, rather than just memorizing the people it trained on.
-
-You choose which revs are the lockbox by editing one line in
-[`dataset_profile.py`](dataset_profile.py) - the single file that holds the data contract
-(label codes, column schema, file naming, and subject splits):
-
-```python
-DEFAULT_LOCKBOX_REVS = ("rev8", "rev13")   # the revs held out until the final test
-```
-
-Put one or two whole revs (subjects) here that the model will never train on. The pipeline enforces
-this in code. Note that a lockbox is **single-use**: once you open it for the final number, it is
-spent, and testing again honestly needs a fresh held-out rev.
-
----
-
-## Run it (one command)
+### S1 — clean (resample onto the canonical grid)
 
 ```powershell
-python run_pipeline.py
+python -m stages.s1_clean.clean --out runs\s1_clean
 ```
 
-That runs the full deterministic pipeline - clean the data, train and score the classifier, run the
-physics, and produce the final fused report - **for free**, in order, stopping with a clear message if
-anything is missing.
+Produces `data/clean/**.parquet` (gyro normalized to deg/s) with a per-file
+`channel_trust.json` sidecar, plus per-run `segments.jsonl`, `observations.jsonl`,
+`quarantine.jsonl`, and `clean_report.md`.
 
-To also run the four AI-agent steps (this spends API credit):
+### Agents
 
 ```powershell
-python run_pipeline.py --with-agents
+python orchestrator.py --phase 2      # S1 exception triage over the latest clean run
 ```
 
-Useful extras: `--list` prints the steps without running them, and `--dry-run` shows each command it
-would run.
+The S1 exception agent (`agents/s1_exception.py`) reads the clean stage's exception queue
+(`quarantine.jsonl` + `observations.jsonl`), judges each item — `known_expected` / `novel` /
+`needs_human`, grounded in `DOMAIN_NOTES` — and the deterministic wrapper writes
+`exceptions_review.jsonl`. It is read-only: the agent judges, code does the work.
+
+Every run gets `runs/YYYY-MM-DD_runN/` containing `run_meta.json` (commit SHA — `runs/` is
+gitignored, so each run records the commit that produced it), `run_log.jsonl` (every tool call, via
+a PostToolUse hook) and `costs.json` (per-agent spend from the SDK's ResultMessage).
 
 ---
 
-## What you get
+## What S1 actually does, and why
 
-**The deliverable.** When the run finishes, the two files most people want live under
-`runs/s4_fusion/`:
+**Resolves columns by name, never by position.** The `NN_` prefix is a per-file position, not an
+identifier. `loco` sits at index 47 — but in one header variant, index 47 is `Step`. Both are
+outdated columns (legacy algorithm output / firmware counter) and pruned by clean. See `DOMAIN_NOTES` §1.3.
 
-- **`fusion_report.md`** - the human-readable summary: how the combined call performed, and how much
-  of the data it can label at each confidence level.
-- **`fused_windows.csv`** - one row per window, with the call (standing / walking) and its confidence
-  tier: **high**, **medium**, or **low**.
+**Segments at gaps.** Gaps land anywhere. A file is a bag of continuous runs, and the **segment**,
+not the file, is the unit of analysis. Nothing is ever resampled across a gap — that would invent
+data that was never measured.
 
-The point of the project is that last column. A **high** or **medium** call is one you can act on; a
-**low** call is the system honestly saying "I am not sure here" - an abstention, not a guess. In a
-real device, you would act on the confident calls and hold on the low-confidence ones.
+**Normalizes rate to 100 Hz.** The corpus has two eras: an earlier ~100 Hz era and a later 500 Hz era.
+Downsampling uses `scipy.signal.decimate(..., ftype='fir')`, never `[::5]` — naive decimation folds
+everything above 50 Hz into the gait band as a full-amplitude fake signal. See `DOMAIN_NOTES` §2.5
+for the measured proof. The odd rates (99.3789 / 99.688 / 99.961 Hz) are *timestamp quantization*
+(10 + 2⁻ᵏ ms), not different devices — they are grid-corrected, not discarded.
 
-To write the calls back onto your original files (one CSV per recording, with the label and confidence
-added as columns), run `python -m stages.s4_fusion.export` - the results land in `results/`. Rows the
-pipeline did not score (transitions, dropped or short segments, and anything in the held-out lockbox)
-are left blank on purpose: the export never guesses a value it did not compute.
+**Keeps measured channels only.** The device *measures* IMU channels and load cells; it *computes*
+Cadence, Stride Length, GCP, admittance, PID state. Computed columns are the firmware's opinion, not
+observation. Dropping them collapses the schema variants into 1 and removes firmware-version signal
+from the feature set. The exception mechanism (`KEEP_EXCEPTIONS` in `stages/s1_clean/config.py`) is
+**currently empty** — canonical == measured, no caveat. The one former exception, `Hip_Deg_L/R`, was
+cut once measured: 0.991 correlated with the `Deg_Y` already kept, its residual carrying nothing but
+the firmware's zeroing convention, and dead on part of the corpus. See `DOMAIN_NOTES` §9.
 
-### Every form of output
-
-The pipeline is not one report but a stack of them - each stage writes its own outputs, and they come
-in a few fixed forms. You never edit any of these by hand; every one regenerates from a re-run. Below
-is the full set, grouped by the form it takes and what that form is for.
-
-A free run (`python run_pipeline.py`) produces everything except the AI-agent outputs. The items
-marked **(agents)** below appear only when you also run the agent steps (`--with-agents`), and the
-lockbox result appears only on the deliberate single-use run. Without those, the corresponding files
-are simply absent - nothing is faked.
-
-**Human-readable reports (`.md`)** - the narrative summaries meant to be read directly:
-
-- `runs/s1_census/census.md` - corpus sanity: file and family counts, and any unexpected column names.
-- `runs/s1_clean/clean_report.md` - the cleaning rollup: usable vs quarantined files, minutes kept,
-  rate mix, and per-channel trust flags.
-- `runs/s2_ml/locoeval.md` - how the trained classifier scores, per rev.
-- `runs/s4_fusion/fusion_report.md` - the headline deliverable described above.
-- `runs/s4_fusion/curation.md` **(agents)** - the queue of flagged windows routed for relabel /
-  new-class / collect-more.
-- `runs/s4_fusion/new_class_candidates.md` **(agents)** - structure the two-label taxonomy may be
-  missing, each marked for a human.
-- `runs/s4_fusion/lockbox_result.md` **(lockbox only)** - the single-use held-out score, written only
-  when you deliberately spend the lockbox.
-
-**Data tables (`.csv` / `.parquet`)** - one row per record, meant to be loaded into code or a spreadsheet:
-
-- `runs/s4_fusion/fused_windows.csv` - one row per scored window (the deliverable table).
-- `results/<recording>.csv` - your original recordings with the fused label and confidence appended
-  (the export described above).
-- `runs/s3_physics/anchors.csv` - the physics anchor measurements per window.
-- `runs/s2_ml/oof_champion.csv` - the classifier's out-of-fold predictions (the input fusion combines
-  with the physics view).
-- `data/clean/**.parquet` - the cleaned, resampled sensor data itself, one file per recording.
-
-**Machine-readable state and metrics (`.json`)** - exact numbers and settings for the code to consume:
-
-- `runs/s2_ml/champion.json`, `model_meta.json`, `taxonomy.json`, `locoeval.json` - the winning model's
-  definition, training metadata, class taxonomy, and full scores.
-- `runs/s3_physics/rate_audit.json`, `disagreement.json` - the rate-invariance verdicts and the
-  physics-vs-label disagreements.
-- `runs/s4_fusion/fusion.json`, `disagreements.json` - the fusion metrics and the cases where the two
-  views disagree.
-- `data/clean/**.channel_trust.json` - a per-file sidecar recording which channels were trusted.
-
-**Append-only ledgers (`.jsonl`)** - one JSON record per line, an audit trail that grows rather than
-being overwritten:
-
-- `runs/s1_*/manifest.jsonl`, `segments.jsonl`, `observations.jsonl`, `quarantine.jsonl` - what was
-  ingested, kept, observed, and rejected.
-- `runs/s2_ml/experiments.jsonl`, `proposals.jsonl` - every model idea tried and every one refused
-  (the rejections are what stop the same idea being re-proposed).
-- `runs/s3_physics/hypotheses.jsonl`, `runs/s4_fusion/fusion_review.jsonl`,
-  `runs/s4_fusion/curation_queue.jsonl` **(agents)** - the agents' logged reasoning and routing
-  decisions.
-- `runs/s3_physics/hypotheses_ledger.jsonl`, `runs/s4_fusion/fusion_findings_ledger.jsonl`,
-  `runs/s4_fusion/new_class_ledger.jsonl` **(agents)** - the cumulative cross-run record each
-  analyst agent reads before it runs, so a later run sharpens or contradicts an earlier claim
-  rather than silently restating it. Each passing item is stamped with the run that produced it.
-
-**Plots (`.png`)** - the visual companions the physics agent reads:
-
-- `runs/s3_physics/plots/trial_*.png` - one figure per trial; `rate_audit.png` - the rate-invariance
-  overview.
-
-**The trained model (`.joblib`)** - `runs/s2_ml/champion.joblib`, the saved classifier itself, ready
-to score new data. It is refit from the champion spec on every run (and right after a champion/challenger
-cycle), so it always matches the `champion.json` definition rather than drifting from it.
-
-**Per-run agent logs (agents)** - each agent step also writes a timestamped `runs/<date>_runN/` folder
-holding its prompt, tool log, and cost, so any AI decision can be traced back to exactly what it saw.
-
-For the exhaustive per-stage command-to-output mapping, see [`PIPELINE.md`](PIPELINE.md) sections 8-9.
+Note that "measured" means *not app-layer-computed*. The `Deg` channels are the IMU's own on-sensor
+fusion output, not a transducer reading — kept, but see `DOMAIN_NOTES` §4.6 before treating them as
+ground truth.
 
 ---
 
-## Running a single stage
+## Architecture
 
-The one command above is usually all you need. For finer control, each stage can be run on its own:
+Four stages. The **filesystem is the only interface** between them — no agent-to-agent messaging,
+no message queues. `orchestrator.py` is a dumb sequencer; all intelligence lives in the stages.
 
-| command | what it does |
+| stage | deterministic core | agent role |
+|---|---|---|
+| **S1 clean** | schema census, rate normalization, gap segmentation, channel trust | exception queue only |
+| **S2 ml** | train + locoeval, champion/challenger | propose → critic reviews → metric-gated promotion |
+| **S3 physics** | anchor features, plots | read plots, write hypotheses with provenance |
+| **S4 report** | — (Read/Grep only) | cross-reference, label audit, flag anomalies |
+
+Non-negotiables:
+
+1. **Code does the work; agents judge the work.** Agents never touch data values and never crunch
+   numbers themselves.
+2. **No silent mutation.** Failures are logged to the quarantine ledger, decisions get written
+   rationale, low confidence escalates to `needs_human`.
+3. **"Best" is defined by locoeval, not by an agent's opinion.** Champion changes only via a
+   logged, metric-justified promotion.
+4. **Every phase closes with a `DOMAIN_NOTES.md` update.** Discoveries become permanent, not
+   conversational.
+
+Agents are never authorized to delete raw data, edit `DOMAIN_NOTES.md` without human review, or
+change the champion outside the S2 promotion path.
+
+---
+
+## Status
+
+| phase | state |
 |---|---|
-| `python -m stages.s1_clean.clean --out runs/s1_clean` | clean + resample the raw data |
-| `python -m stages.s2_ml.train --out runs/s2_ml --taxonomy` | train + score the classifier |
-| `python -m stages.s3_physics.run` | compute the physics anchors + plots |
-| `python -m stages.s4_fusion.run` | combine into the fused call + confidence |
-| `python orchestrator.py s1_exception` | AI: triage unusual files (spends credit) |
-| `python orchestrator.py s3_physics` | AI: read the plots, propose rules (spends credit) |
-| `python orchestrator.py s4_fusion` | AI: review the disagreements (spends credit) |
+| 0 — skeleton | done |
+| 1 — S1 deterministic core | complete — schema/rate/gaps, gyro unit+axis trust, yaw-drift trust, degenerate-time-base rejection, quarantine ledger; gate passes (every raw file accounted) |
+| 2 — S1 exception agent | complete — `agents/s1_exception.py` triages the exception queue into known_expected / novel / needs_human with grounded rationale; verified on the real corpus and signed off (gate closed) |
+| 3 — S2 loop | not started |
+| 4 — S3 physics | not started |
+| 5 — S4 report | not started |
+| 6 — hardening + handoff | not started |
 
-See [`PIPELINE.md`](PIPELINE.md) section 8 for the complete list.
+Current corpus counts (files, clean vs quarantined, usable segments/minutes, subjects) live in the
+latest `runs/*/clean_report.md` and `census.md`, regenerated every run. A 2026-05 batch is
+quarantined for a broken time base (`DOMAIN_NOTES` §2.6).
 
----
-
-## Adding a new class (beyond standing / walking)
-
-The pipeline ships with two classes because that is what the labeled data supported, not because
-anything is wired to two. Adding a third locomotion state (say a **squat**, or a **ramp**) is three
-small, independent edits - one per stage that has an opinion about the class. Nothing here needs new
-plumbing; the mechanisms below already exist.
-
-**1. Teach the classifier the class (S2).** This is a data + declaration change:
-
-- Put trials carrying the new `Label` code under `data/labeled/rev*/`, same filename pattern. A class
-  the model never sees in training it can never predict.
-- Declare the code in [`dataset_profile.py`](dataset_profile.py) - add it next to `STAND` / `WALK` and
-  extend `TRAIN_CLASSES` - and add its display name to `CLASS_NAMES` in
-  [`stages/s2_ml/locoeval.py`](stages/s2_ml/locoeval.py) so the scoring tables know it.
-
-Nothing else in S2 is class-specific: the forest and its macro-F1 already average over whatever
-classes exist, so a re-run scores the new class alongside the old ones. A class with too few or too
-impure windows shows up as weak recall, not a crash.
-
-**2. Give the class a physics second-opinion (S3).** The physics stage judges each window with a
-**discriminator** - a named test that maps a window's anchor measurements to a verdict. The
-stand-vs-walk "swap rule" is simply the first one registered (see
-[`stages/s3_physics/discriminators.py`](stages/s3_physics/discriminators.py) and its registration in
-[`stages/s3_physics/anchors.py`](stages/s3_physics/anchors.py)). To give a new class its own verdict,
-register another. The simplest form is declarative - a threshold rule over the existing anchors, no
-new code:
-
-```python
-from stages.s3_physics import discriminators as disc
-from stages.s3_physics.anchors import DISCRIMINATOR_ANCHORS
-
-# a bilateral squat: the legs bend TOGETHER (antiphase < 0, unlike walking) while the
-# posture sweeps (grav_stab low). expressed only over anchors the pipeline already measures.
-squat = disc.from_spec(
-    name="squat", emits="SQUAT",
-    spec=[{"anchor": "antiphase", "op": "<", "value": 0.0},
-          {"anchor": "grav_stab", "op": "<", "value": 0.5}],
-    known_anchors=DISCRIMINATOR_ANCHORS,
-)
-```
-
-A declarative rule is **data, not code**, so the pipeline can check it the way it checks a model idea:
-`validate_spec` rejects any anchor it does not know or any malformed threshold, the rate-invariance
-audit tells you whether the verdict survives a change of sampling rate, and a rule that did not come
-from the built-in physics is marked *proposed* and routed to a human before it can change a call. If
-the class genuinely needs physics a threshold cannot express (the swap rule needed hysteresis and a
-stride-adaptive window), register a bespoke callable instead - same registry, `kind="callable"`. The
-one thing still done by hand is inventing a **new** physical quantity: if no existing anchor separates
-your class, someone has to add the anchor, the way the swap rule was first derived.
-
-**3. The confidence comes for free (S4).** The fused confidence is read off how often S2 and the
-physics **agree**, measured per cell of the (label, verdict) table - not hand-wired to two classes
-(see `derive_policy` / `FusionPolicy` in [`stages/s4_fusion/fuse.py`](stages/s4_fusion/fuse.py)). Once
-the new class appears in both the S2 labels and an S3 verdict, its cells enter that table
-automatically: the fused label for each cell becomes its measured majority, and the tier follows the
-same structural rule (the two views name the same class -> high; the physics abstains -> medium; they
-name different classes -> low). The only wiring is to map the new verdict to its class in `S3_TO_CLASS`
-so agreement can be computed. A cell with too few windows is left to fall back on the classifier
-rather than invent a call from noise. Derive the policy once from your training data and keep it fixed
-for deployment - never re-derive it on the held-out lockbox, which would spend the one honest test.
-
-For the deeper rationale and the exact anchor vocabulary, see
-[`PIPELINE.md`](PIPELINE.md) section 13.
-
----
-
-## Where to learn more
-
-- [`PIPELINE.md`](PIPELINE.md) - how each part works, and the exact commands and outputs.
-- [`BUILDLOG.md`](BUILDLOG.md) - why the pipeline is built the way it is, decision by decision.
-- Questions: **seowonlpark@gmail.com**.
-
-Before feeding in a new batch of CSVs, you can check they are well-formed with the companion validator:
-**https://github.com/seowonlpark/hurotics-imu-csv-validation**.
-
----
-
-## Troubleshooting
-
-- **"ModuleNotFoundError" / packages missing** - the virtual environment is not active. Run
-  `.venv\Scripts\Activate.ps1` (you must do this in every new terminal), then re-run.
-- **An agent step complains about the API key** - your `.env` is missing or has no key. Copy
-  `.env.example` to `.env` and paste your key in. (The non-agent steps do not need a key.)
-- **"no raw data" at startup** - `data/raw/` is empty. Add your recordings under
-  `data/raw/<date>/` first.
-- **PowerShell won't run the activate script** - run
-  `Set-ExecutionPolicy -Scope Process RemoteSigned` once, then activate again.
-
----
-
-## The full pipeline, step by step
-
-`python run_pipeline.py` runs the stages below in this fixed order, checking each step's gate
-artifact before the next one starts. This is the run-order view of the outputs listed above.
-
-Legend: **[det]** free deterministic step; **[agent]** paid, needs the API key (runs only with
-`--with-agents`); **[opt-in]** runs only with `--s2-cycle` / `--s2-cycles N`. "Gate" is the file
-that must exist afterward, or the run stops.
-
-Every agent step has the same internal shape: a deterministic core does the work, the agent judges
-at one point, and a gate in code records only what passes. Those internal phases are numbered
-beneath each agent step (for example 3.1 - 3.3), and the per-run agent outputs land in a timestamped
-`runs/<date>_runN/` folder.
-
-### S1 - Clean
-
-| # | step | type | command / action | writes / gate |
-|---|---|---|---|---|
-| 1 | `s1_census` - measure the corpus | det | `python -m stages.s1_clean.run --out runs/s1_census` | `runs/s1_census/census.md` (gate) |
-| 2 | `s1_clean` - resample to 100 Hz, quarantine | det | `python -m stages.s1_clean.clean --out runs/s1_clean` | `runs/s1_clean/clean_report.md` (gate), manifest / segments / observations / quarantine `.jsonl` |
-| 3 | `s1_exception` - triage the exception queue | agent | `python orchestrator.py s1_exception` | the three phases below |
-| 3.1 | (code) build the exception queue | det | reads the S1 clean ledgers; an empty queue means nothing to triage | - |
-| 3.2 | (agent) triage each queued item | agent | assigns a disposition per item | - |
-| 3.3 | (code) write the review | det | if the agent output does not parse, every item is marked needs_human | `runs/<date>_runN/exceptions_review.jsonl` |
-
-### S2 - ML
-
-| # | step | type | command / action | writes / gate |
-|---|---|---|---|---|
-| 4 | `s2_train` - train + locoeval (leave-one-rev-out) | det | `python -m stages.s2_ml.train --out runs/s2_ml --taxonomy` | `runs/s2_ml/locoeval.md` (gate), `locoeval.json`, `taxonomy.json` |
-| 5 | `s2_champion` - seed champion from spec | det | in-process `seed_champion()` | `runs/s2_ml/champion.json` (gate) |
-| 6 | `s2_cycle` - champion/challenger | agent, opt-in | `python orchestrator.py s2_cycle` | the four phases below |
-| 6.1 | (experimenter) propose one challenger spec | agent | reads locoeval.md + the full ledger + champion + feature list; never repeats a prior proposal | `runs/<date>_runN/proposal.json` |
-| 6.2 | (critic) vet it before any training | agent | reviews the proposal against the ledger; verdict approve / revise / reject. on `revise`, the experimenter gets one bounded retry with the critic's reasons, then a fresh critique | `runs/<date>_runN/critic_review.json` (+ `_rev1` if revised) |
-| 6.3 | run the experiment | det | only if the critic approved; deterministic LORO train + score | ledger row |
-| 6.4 | gate - the metric decides | det | `decide(result, champion)` gates on measured macro-F1; neither agent can promote | `experiments.jsonl`, `proposals.jsonl`, and `champion.json` only if promoted |
-| 7 | `s2_refit` - refit champion artifacts after the cycle | opt-in | `python -m stages.s2_ml.train --out runs/s2_ml --taxonomy --skip-if-current` | `runs/s2_ml/champion.joblib` (gate), `model_meta.json` |
-| 8 | `s2_oof` - out-of-fold predictions (fusion input) | det | `python -m stages.s2_ml.oof --out runs/s2_ml` | `runs/s2_ml/oof_champion.csv` (gate) |
-
-A `revise` verdict is not a dead end: the critic's reasons are fed back to the experimenter for
-one bounded retry (it fixes that same spec rather than starting over), then the revised spec is
-critiqued once more. Each attempt is written to its own file, so no proposal or review is
-overwritten. The cycle exits early - recording the proposal and leaving the champion untouched -
-if the experimenter output does not parse, the critic `reject`s (or still says `revise` after the
-retry), or the spec is invalid before training. The experimenter and critic only propose and vet;
-`decide()` in code is the only thing that can change the champion.
-
-### S3 - Physics
-
-| # | step | type | command / action | writes / gate |
-|---|---|---|---|---|
-| 9 | `s3_core` - anchors, rate audit, plots | det | `python -m stages.s3_physics.run` | `runs/s3_physics/anchors.csv` (gate), `rate_audit.json`, `disagreement.json`, `plots/` |
-| 10 | `s3_physics` - hypothesis agent | agent | `python orchestrator.py s3_physics` | the three phases below |
-| 10.1 | (det) regenerate the core | det | re-runs anchors + rate audit + figures (the same core as step 9) | refreshes `runs/s3_physics/` |
-| 10.2 | (agent) read the figures, propose hypotheses | agent | reads the plots under a provenance gate | - |
-| 10.3 | (gate) provenance check | det | keeps a hypothesis only if it points at a real window | `runs/<date>_runN/hypotheses.jsonl` |
-
-### S4 - Fusion
-
-| # | step | type | command / action | writes / gate |
-|---|---|---|---|---|
-| 11 | `s4_fuse` - fuse S2 + S3 into call + confidence | det | `python -m stages.s4_fusion.run` | `runs/s4_fusion/fusion_report.md` (gate), `fused_windows.csv`, `fusion.json`, `disagreements.json` |
-| 12 | `s4_fusion` - judge the disagreement cases | agent | `python orchestrator.py s4_fusion` | the three phases below |
-| 12.1 | (det) regenerate the core | det | re-runs the fused table + metrics + disagreement ranking (the same core as step 11) | refreshes `runs/s4_fusion/` |
-| 12.2 | (agent) judge the disagreement (LOW-confidence) cases | agent | characterises what the abstentions are made of | - |
-| 12.3 | (gate) provenance check | det | keeps a finding only if it points at a real window | `runs/<date>_runN/fusion_review.jsonl` |
-| 13 | `s4_newclass` - governed new-class discovery | agent | `python orchestrator.py s4_newclass` | the three phases below |
-| 13.1 | (det) assemble the evidence bundle | det | gathers the NEW_CLASS curation spans + their physics profiles | `runs/s4_fusion/` candidate bundle |
-| 13.2 | (agent) propose classes the taxonomy misses | agent | proposes classes the {stand, walk} taxonomy may be missing | - |
-| 13.3 | (gate) mass + provenance | det | validates cluster mass + provenance; every proposal is routed to needs_human | `runs/<date>_runN/new_class_proposals.jsonl` |
-
-**What each run mode selects:**
-
-- `python run_pipeline.py` - the deterministic steps only: 1, 2, 4, 5, 8, 9, 11 (free, no key).
-- `--with-agents` - adds the agent steps 3, 10, 12, 13.
-- `--s2-cycle` / `--s2-cycles N` - adds the opt-in steps 6 and 7; step 6 expands into one round
-  per N, and `s2_refit` runs once at the end and no-ops if nothing was promoted.
-
-**Ordering.** `s2_oof` (8) runs after the champion may have changed, so it reflects the latest
-champion; `s2_refit` (7) refreshes the deployment `.joblib` / `model_meta` after a cycle; `s4_fuse`
-(11) needs both the champion OOF and the S3 anchors, so it comes last.
-
-The single-use lockbox (`stages/s4_fusion/lockbox.py`) is deliberately not in this list - the runner
-never invokes it.
+See `PLAN.md` for each phase's gate. Sacrifice order if time runs short: Phase 4 first, then
+Phase 5. Never Phases 1–3 — they are the handoff-critical spine.

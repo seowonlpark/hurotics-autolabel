@@ -1,9 +1,26 @@
-# S2 windowing + feature extraction: the model-agnostic boundary, and the surface the S2 experimenter
-# proposes changes to (Section 9). rules: never window across a gap; a mixed window is `transition`
-# (excluded from training); window length is an open tradeoff.
+"""S2 windowing + feature extraction: the model-agnostic boundary.
+
+Per DOMAIN_NOTES §9 this is where feature selection lives — NOT in the clean layer.
+The clean layer keeps the honest superset; this module decides what a model sees, and
+it is the surface the S2 experimenter agent proposes changes to.
+
+Three rules it exists to enforce:
+
+  1. **Never window across a gap.** A window is drawn inside one segment. Spanning a
+     gap would invent continuity that was never measured (§3.1).
+  2. **A mixed window is not a training example.** If a window spans a stand->walk
+     transition its label is genuinely ambiguous, mirroring the human `-1` (§5.2).
+     Such windows are kept and marked `transition`, but excluded from training targets:
+     abstain rather than force (§7).
+  3. **Window length is an OPEN TRADEOFF, not a constant** (§9). 2 s gives transition
+     precision; 4 s is needed for slow gait — this population runs to 0.13 Hz, far below
+     the healthy-adult band. Hence `window_s` is a parameter, and the frequency features
+     below are only meaningful when the window actually spans a few strides.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import numpy as np
@@ -19,71 +36,75 @@ from stages.s2_ml.dataset import (
     Trial,
 )
 
-# non-overlapping by default: overlapping windows manufacture near-duplicate rows and
-# flatter any metric computed on them
+# Defaults. Non-overlapping by default: overlapping windows manufacture near-duplicate
+# rows, which inflates apparent sample count and flatters any metric computed on them.
 DEFAULT_WINDOW_S = 2.0
 DEFAULT_STRIDE_S = 2.0
 
-# a training window must be label-pure; anything less is a transition (rule 2)
+# A training window must be label-pure. Anything less is a transition (rule 2).
 PURITY_MIN = 1.0
 
-# the band a stride can plausibly occupy for this population (Section 9): cadence 16-102
-# steps/min. deliberately NOT the healthy-adult (0.5, 3.0) Hz band
+# The band a stride can plausibly occupy for this population (§9): cadence 16-102
+# steps/min. Deliberately NOT the healthy-adult (0.5, 3.0) Hz band.
 GAIT_BAND_HZ = (0.13, 3.0)
 
 TRANSITION = "transition"
 
 
-# window/stride in samples, derived from seconds and rate
 @dataclass
 class WindowSpec:
-    window_s: float = DEFAULT_WINDOW_S # window length in seconds
-    stride_s: float = DEFAULT_STRIDE_S # hop between windows in seconds
-    fs_hz: float = CANONICAL_HZ # sampling rate
+    window_s: float = DEFAULT_WINDOW_S
+    stride_s: float = DEFAULT_STRIDE_S
+    fs_hz: float = CANONICAL_HZ
 
-    # window length in samples
     @property
     def n(self) -> int:
         return int(round(self.window_s * self.fs_hz))
 
-    # stride in samples
     @property
     def step(self) -> int:
         return int(round(self.stride_s * self.fs_hz))
 
 
-# (dominant frequency in the gait band, fraction of power inside the band); resolution is
-# 1/window_s, so at 2 s the low edge is unresolvable -- the Section 9 tradeoff made visible
 def _spectral(x: np.ndarray, fs: float) -> tuple[float, float]:
+    """(dominant frequency in the gait band, fraction of power inside the band).
+
+    Resolution is 1/window_s, so at 2 s the low edge of the band is unresolvable — the
+    number is still computed, but it is near-meaningless for slow gait. That is the §9
+    tradeoff made visible rather than hidden.
+    """
     x = x - x.mean()
     if x.size < 4 or not np.any(x):
         return 0.0, 0.0
     power = np.abs(np.fft.rfft(x * np.hanning(x.size))) ** 2
     freq = np.fft.rfftfreq(x.size, 1.0 / fs)
     band = (freq >= GAIT_BAND_HZ[0]) & (freq <= GAIT_BAND_HZ[1])
-    total = power[1:].sum() # drop DC
+    total = power[1:].sum()  # drop DC
     if not band.any() or total <= 0:
         return 0.0, 0.0
     return float(freq[band][np.argmax(power[band])]), float(power[band].sum() / total)
 
 
-# pearson r; 0 when either series is constant or too short
 def _corr(a: np.ndarray, b: np.ndarray) -> float:
     if a.size < 2 or a.std() == 0 or b.std() == 0:
         return 0.0
     return float(np.corrcoef(a, b)[0, 1])
 
 
-# features for one window: time-domain per channel + cross-leg + spectral. cross-leg corr
-# earns its place physically -- walking swings the legs in antiphase, standing doesn't
 def window_features(win: pd.DataFrame, fs: float) -> dict[str, float]:
+    """Features for one window. Time-domain per channel + cross-leg + spectral.
+
+    Cross-leg correlation earns its place on physical grounds: walking swings the legs
+    in antiphase, standing does not — it separates the two classes by mechanism rather
+    than by amplitude, so it should survive a change of subject or walking speed.
+    """
     feats: dict[str, float] = {}
     arrays = {c: win[c].to_numpy(float) for c in FEATURES}
 
     for name, v in arrays.items():
         feats[f"{name}_mean"] = float(v.mean())
         feats[f"{name}_std"] = float(v.std())
-        feats[f"{name}_ptp"] = float(np.ptp(v)) # np.ptp: ndarray.ptp() gone in NumPy 2 (Section 8)
+        feats[f"{name}_ptp"] = float(np.ptp(v))       # np.ptp: ndarray.ptp() gone in NumPy 2 (§8)
         feats[f"{name}_absmean"] = float(np.abs(v).mean())
 
     feats["ang_LR_corr"] = _corr(arrays["L_ang_LPF"], arrays["R_ang_LPF"])
@@ -98,9 +119,20 @@ def window_features(win: pd.DataFrame, fs: float) -> dict[str, float]:
     return feats
 
 
-# (label, purity, unknown_fraction) for a window; -1 excluded before voting (Section 5.2) but its
-# share reported. not pure over {stand, walk} => TRANSITION, never a coin-flip vote
 def label_window(labels: np.ndarray) -> tuple[object, float, float]:
+    """(label, purity, unknown_fraction) for a window.
+
+    `-1` is excluded before voting (§5.2: training-poison, evaluation-gold) but its share
+    is reported so a confidence signal can be evaluated against it later. A window that
+    is not pure over {stand, walk} is TRANSITION, never a coin-flip majority vote.
+
+    KNOWN AND ACCEPTED (Lu, 2026-08-03 — §5.2): exclusion is per ROW, so `purity` is
+    computed over the survivors and a window can be "pure" on a minority of its rows.
+    Measured at the 2 s default: 92 of 4,812 trainable windows contain `-1`, 20 are
+    over half `-1`, worst is 93.5%. Left in deliberately — 1.9% label noise is inside
+    what an RF tolerates, and no threshold on `unknown_frac` has evidence behind it.
+    `unknown_frac` rides along on every window so the decision stays checkable.
+    """
     unknown_frac = float(np.mean(labels == HUMAN_UNKNOWN))
     valid = labels[np.isin(labels, TRAIN_CLASSES)]
     if valid.size == 0:
@@ -111,51 +143,52 @@ def label_window(labels: np.ndarray) -> tuple[object, float, float]:
     return (winner if purity >= PURITY_MIN else TRANSITION), purity, unknown_frac
 
 
-# every window of one trial as (metadata, raw slice), never spanning a gap. the single
-# source of the windowing rule -- S3 physics reuses this so the "no window across a gap"
-# and label-purity logic is defined exactly once (Section 9, rule 2).
-def iter_windows(trial: Trial, spec: WindowSpec):
+def iter_windows(trial: Trial, spec: WindowSpec) -> Iterator[tuple[dict, pd.DataFrame]]:
+    """Yield (metadata, window) for every window of one trial, never spanning a gap.
+
+    THE windowing primitive — S2 features and S3 anchors both consume it, so the two
+    stages cannot drift into windowing the same trial differently. Anything keyed on
+    `(segment, t_start_ms)` from one stage joins to the other exactly.
+
+    Yields the window unlabeled: what a window *is* does not depend on ground truth,
+    and S3 must be able to run on raw recordings that carry none.
+    """
     frame = trial.frame
     if frame.empty:
         return
     for seg_id, seg in frame.groupby("segment", sort=True):
         seg = seg.reset_index(drop=True)
-        labels = seg[LABEL_COL].to_numpy()
         for start in range(0, len(seg) - spec.n + 1, spec.step):
-            stop = start + spec.n
-            label, purity, unk = label_window(labels[start:stop])
-            if label is None:
-                continue
-            win = seg.iloc[start:stop]
-            meta = {
-                "rev": trial.rev, "trial": trial.trial, "split": trial.split,
-                "segment": int(seg_id), "t_start_ms": float(win[TIME_COL].iloc[0]),
-                "label": label, "purity": purity, "unknown_frac": unk,
-            }
-            yield meta, win
+            win = seg.iloc[start:start + spec.n]
+            yield ({"rev": trial.rev, "trial": trial.trial, "split": trial.split,
+                    "segment": int(seg_id), "t_start_ms": float(win[TIME_COL].iloc[0])},
+                   win)
 
 
-# every window of one trial, never spanning a gap
 def windows_of_trial(trial: Trial, spec: WindowSpec) -> pd.DataFrame:
-    rows = [{**meta, **window_features(win, spec.fs_hz)}
-            for meta, win in iter_windows(trial, spec)]
+    """Every window of one trial, labeled and featurized."""
+    rows = []
+    for meta, win in iter_windows(trial, spec):
+        label, purity, unk = label_window(win[LABEL_COL].to_numpy())
+        if label is None:
+            continue
+        rows.append({**meta, "label": label, "purity": purity, "unknown_frac": unk,
+                     **window_features(win, spec.fs_hz)})
     return pd.DataFrame(rows)
 
 
-# windows for every trial, stacked
 def build_windows(trials: list[Trial], spec: WindowSpec | None = None) -> pd.DataFrame:
     spec = spec or WindowSpec()
     frames = [w for t in trials if not (w := windows_of_trial(t, spec)).empty]
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-# feature columns only -- never the metadata or the target
 def feature_columns(df: pd.DataFrame) -> list[str]:
+    """Feature columns only — never the metadata or the target."""
     meta = {"rev", "trial", "split", "segment", "t_start_ms", "label", "purity", "unknown_frac"}
     return [c for c in df.columns if c not in meta]
 
 
-# build windows at the default spec and print the split x label crosstab
 def main() -> None:
     from stages.s2_ml.dataset import load_dataset
 

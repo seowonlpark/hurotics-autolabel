@@ -7,8 +7,4 @@ data/clean/
 tracker/
 
 runs/
-results/
-
 !runs/.gitkeep
-
-archive/

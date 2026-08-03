@@ -1,6 +1,22 @@
-# profile the legacy rule-based algorithm (`loco`) through OUR error taxonomy: runs it as a prediction
-# against the same ground truth on the paired recordings, to test whether it fails differently from our
-# classifier. does NOT resurrect loco (Section 4.5); measuring how it fails is not trusting it.
+"""Profile the legacy rule-based algorithm (`loco`) through OUR error taxonomy.
+
+    python -m stages.s2_ml.profile_incumbent
+
+Why: the claim that the physics/rule-based algorithms fail differently from our
+classifier — few `steady_confusion`, many `swallowed` — is currently **[reported]**.
+If true it is a measured mandate for building S3 and fusing the two, because the two
+error profiles would be complementary. If false, it saves a phase. §11 is a list of
+claims that felt obvious and did not survive measurement, so measure it.
+
+This is cheap because the taxonomy is already ported: run `loco` as if it were a
+prediction, against the same ground truth, scored by the same buckets, on the 19
+recordings that exist in BOTH the raw family (which carries `loco`) and the labeled
+family (which carries `Label`).
+
+**This does not resurrect `loco`.** §4.5 severed it as ground truth and as a feature,
+on evidence that its "standing" class contains a decile as periodic as median walking.
+Measuring *how a predictor fails* is a different question from trusting what it says.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +29,8 @@ import numpy as np
 import pandas as pd
 
 from stages.s1_clean.census import read_header, strip_prefix
-from stages.s2_ml.dataset import TIME_COL, TRAIN_CLASSES, _read_raw, find_trials
+from stages.s1_clean.resample import segment_at_gaps
+from stages.s2_ml.dataset import STAND, TIME_COL, TRAIN_CLASSES, WALK, _read_raw, find_trials
 from stages.s2_ml.predict import labeled_runs
 from stages.s2_ml.taxonomy import ERROR_BUCKETS, aggregate, bucket_errors
 
@@ -21,7 +38,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCO_COL = "loco"
 
 
-# read a raw csv only if it carries both `loco` and Time; else None
 def load_raw_with_loco(path: str) -> pd.DataFrame | None:
     names = [strip_prefix(c) for c in read_header(Path(path))]
     if LOCO_COL not in names or "Time" not in names:
@@ -35,8 +51,8 @@ def load_raw_with_loco(path: str) -> pd.DataFrame | None:
     return df
 
 
-# annotated trials whose raw source carries `loco`, matched on the time vector
 def find_pairs() -> list[tuple[Path, pd.DataFrame]]:
+    """Annotated trials whose raw source carries `loco`, matched on the time vector."""
     raws = {}
     for f in sorted(glob.glob(str(REPO_ROOT / "data/raw/**/*.csv"), recursive=True)):
         df = load_raw_with_loco(f)
@@ -55,10 +71,14 @@ def find_pairs() -> list[tuple[Path, pd.DataFrame]]:
     return pairs
 
 
-# learn loco-code -> {stand, walk} by maximising agreement with ground truth
-# the legacy encoding is undocumented, so it's measured; fitting to labels is deliberately
-# generous to the incumbent, so any weakness the taxonomy reports is a floor on its error
 def best_mapping(pairs: list[tuple[Path, pd.DataFrame]]) -> dict[int, int]:
+    """Learn loco-code -> {stand, walk} by maximising agreement with ground truth.
+
+    The legacy encoding is not documented anywhere in this repo, so it is measured, not
+    assumed. Fitting the mapping to the labels is deliberately GENEROUS to the incumbent:
+    it hands `loco` its best possible frame accuracy, so any weakness the taxonomy then
+    reports is a floor on its real error, never an artefact of a bad decode.
+    """
     codes: set[int] = set()
     for _p, raw in pairs:
         codes.update(int(v) for v in pd.unique(raw[LOCO_COL].dropna()))
@@ -84,11 +104,10 @@ def best_mapping(pairs: list[tuple[Path, pd.DataFrame]]) -> dict[int, int]:
     return best
 
 
-# pair recordings, learn the mapping, score `loco` through the taxonomy, write the json
 def main() -> None:
     pairs = find_pairs()
     if not pairs:
-        raise SystemExit("no paired recordings carrying `loco` - cannot profile")
+        raise SystemExit("no paired recordings carrying `loco` — cannot profile")
     print(f"[loco] {len(pairs)} paired recordings carry both `loco` and ground truth")
 
     mapping = best_mapping(pairs)
@@ -100,8 +119,16 @@ def main() -> None:
         gt = ann["Label"].to_numpy()
         pred = np.array([mapping[int(v)] for v in raw[LOCO_COL].to_numpy()])
         t = raw["Time"].to_numpy(float)
-        for g, pr, tt in labeled_runs(gt, pred, t):
-            per_run.append(bucket_errors(g, pr, tt))
+        # Segment at gaps first, exactly as the classifier path does (`dense_predict_trial`
+        # groups by `segment`). The taxonomy is defined per gap-free segment: a segment
+        # boundary IS a recording boundary, which is what `edge_omission` is for. Scoring
+        # the incumbent over the whole file would let a predicted run straddle a gap,
+        # inflating its `dur_ms` past the flicker threshold and inventing flanks that were
+        # never recorded — and the comparison this module exists to make would be between
+        # two different scoring pipelines, not two predictors.
+        for a, b in segment_at_gaps(t):
+            for g, pr, tt in labeled_runs(gt[a:b], pred[a:b], t[a:b]):
+                per_run.append(bucket_errors(g, pr, tt))
 
     agg = aggregate(per_run)
     print(f"\n[loco] row accuracy: {agg['row_accuracy']:.4f}")

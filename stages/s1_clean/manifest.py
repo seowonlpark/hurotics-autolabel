@@ -1,6 +1,10 @@
-# per-file measurement -- numbers only, no verdicts
-# rate is measured from the Time column, never a filename; two estimates are reported
-# because they legitimately disagree on a jittery file (see README)
+"""Per-file measurement. Numbers only, no verdicts.
+
+Rate is MEASURED from the Time column, never read from a filename. Two rate
+estimates are reported because they legitimately disagree (median-dt vs span/n):
+a file with jitter and gaps has no single true rate, and hiding that behind one
+number is how a rate confound goes unnoticed.
+"""
 
 from __future__ import annotations
 
@@ -23,8 +27,8 @@ from stages.s1_clean.config import (
 _SESSION = re.compile(SESSION_DIR_PATTERN)
 
 
-# session identity from the directory, the only metadata we trust
 def session_of(path: Path) -> dict:
+    """Session identity comes from the directory, the only metadata we trust."""
     m = _SESSION.match(path.parent.name)
     if not m:
         return {"session_date": None, "session_run": None, "session_dir": path.parent.name}
@@ -35,8 +39,8 @@ def session_of(path: Path) -> dict:
     }
 
 
-# rate, jitter and gaps from the Time column
 def measure_time(t: np.ndarray) -> dict:
+    """Rate, jitter and gaps from the Time column."""
     if t.size < 2:
         return {"error": "fewer than 2 rows"}
 
@@ -71,8 +75,8 @@ def measure_time(t: np.ndarray) -> dict:
     }
 
 
-# label census: codes, counts, segment structure; no judgement
 def measure_labels(series: pd.Series) -> dict:
+    """Label census: codes, counts, segment structure. No judgement."""
     vals = series.to_numpy()
     counts = {int(k): int(v) for k, v in series.value_counts().items()}
     changes = np.flatnonzero(vals[1:] != vals[:-1]) + 1
@@ -88,8 +92,8 @@ def measure_labels(series: pd.Series) -> dict:
     }
 
 
-# one manifest row; never raises on bad data -- records the failure instead
 def profile_file(path: Path, repo_root: Path) -> dict:
+    """One manifest row. Never raises on bad data — records the failure instead."""
     row: dict = {
         "path": str(path.relative_to(repo_root)),
         "filename": path.name,
@@ -105,6 +109,7 @@ def profile_file(path: Path, repo_root: Path) -> dict:
 
     row.update(
         {
+            "variant_id": res.variant_id,
             "family": res.family,
             "n_cols": res.n_cols,
             "roles_present": {k: sorted(v) for k, v in sorted(res.roles_present.items())},

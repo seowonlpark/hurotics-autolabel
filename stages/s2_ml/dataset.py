@@ -1,6 +1,19 @@
-# S2 dataset: load the labeled rev* trials onto the canonical grid, split by rev. the rev2 view: 4
-# rotational features + Label (Section 5.7). reuses S1's resampler, groups by rev (one subject/day), and
-# the lockbox holds out whole revs so nothing leaks. does NOT window or train.
+"""S2 dataset: load the labeled rev* trials onto the canonical grid, split by rev.
+
+The only labeled data is `data/labeled/rev*/csv/annotated_loco_rev*_trial_*.csv`
+(DOMAIN_NOTES §5.7): the derived rev2 view — four rotational features
+(`L/R_ang_LPF`, `L/R_angvel_LPF`) + `Label` (0=stand, 10=walk, -1=human-unknown).
+
+Two disciplines carried straight from S1, because they are not optional here either:
+  - **Canonical grid.** rev* logs at ~494 Hz with jitter (§7). Every trial is put on
+    the 100 Hz grid by the same `resample_file` S1 uses — segment at gaps, FIR-decimate
+    the continuous channels, nearest-sample the label (never average a class code).
+  - **Group = rev.** A rev is one subject on one day (§7); trials within a rev share
+    both. CV groups by rev and the lockbox holds out whole revs, so nothing leaks.
+
+This module does NOT window or train — it hands back normalized, grouped, split
+frames. Feature extraction and modelling live in their own modules.
+"""
 
 from __future__ import annotations
 
@@ -12,63 +25,55 @@ import pandas as pd
 
 from stages.s1_clean.resample import resample_file
 
-# the data contract (schema, label codes, naming, subject splits) lives in one place so a new
-# corpus is a single edit there, not a scavenger hunt across stages. re-exported below so the
-# many `from stages.s2_ml.dataset import STAND, WALK, ...` call sites keep working unchanged.
-from dataset_profile import (
-    DEFAULT_LOCKBOX_REVS,
-    EXCLUDED_REVS,
-    FEATURES,
-    HUMAN_UNKNOWN,
-    LABEL_COL,
-    REV_PATTERN,
-    STAND,
-    TIME_COL,
-    TRAIN_CLASSES,
-    TRIAL_GLOB,
-    TRIAL_PATTERN,
-    WALK,
-)
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LABELED_DIR = REPO_ROOT / "data" / "labeled"
 
-_REV = re.compile(REV_PATTERN)
-_TRIAL = re.compile(TRIAL_PATTERN)
+# The rev2 derived view. Names carry stray whitespace in some trials — normalized on read.
+FEATURES = ("L_ang_LPF", "R_ang_LPF", "L_angvel_LPF", "R_angvel_LPF")
+LABEL_COL = "Label"
+TIME_COL = "Time"
+
+# Label codes (§5.1/§5.2). -1 is excluded from training targets, kept for eval.
+STAND, WALK, HUMAN_UNKNOWN = 0, 10, -1
+TRAIN_CLASSES = (STAND, WALK)
+
+# Lockbox: whole revs sealed until the very end (§7). rev8 spans the balanced regime
+# (~70/27), rev13 the walk-heavy one — together they probe both without touching the loop.
+DEFAULT_LOCKBOX_REVS = ("rev8", "rev13")
+
+_REV = re.compile(r"(rev\d+)")
+_TRIAL = re.compile(r"trial_(\d+)")
 
 
-# rev id from a path, e.g. 'rev13'
 def rev_of(path: Path) -> str:
     m = _REV.search(str(path))
     return m.group(1) if m else "rev?"
 
 
-# trial number from a filename
 def trial_of(path: Path) -> int:
     m = _TRIAL.search(path.stem)
     return int(m.group(1)) if m else 0
 
 
-# every labeled trial csv, excluded revs skipped
 def find_trials(labeled_dir: Path = LABELED_DIR) -> list[Path]:
-    return sorted(p for p in labeled_dir.rglob(TRIAL_GLOB)
-                  if rev_of(p) not in EXCLUDED_REVS)
+    return sorted(labeled_dir.rglob("annotated_loco_*_trial_*.csv"))
 
 
-# one labeled trial, normalized onto the canonical grid
 @dataclass
 class Trial:
-    path: str # trial csv path
-    rev: str # rev id
-    trial: int # trial number
-    split: str # "train" | "val" | "lockbox"
-    frame: pd.DataFrame # Time, segment, FEATURES..., Label -- usable segments only
-    n_source_rows: int # rows in the raw trial, before normalization
-    dropped_rows: int # raw rows in segments too short / off-grid to keep (Section 3.2 burst)
+    """One labeled trial, normalized onto the canonical grid."""
+
+    path: str
+    rev: str
+    trial: int
+    split: str          # "train" | "val" | "lockbox"
+    frame: pd.DataFrame  # Time, segment, FEATURES..., Label — usable segments only
+    n_source_rows: int  # rows in the raw trial, before normalization
+    dropped_rows: int   # raw rows in segments too short / off-grid to keep (§3.2 burst)
 
 
-# read a trial, strip header whitespace, keep Time + 4 features + Label by name
 def _read_raw(path: Path) -> pd.DataFrame:
+    """Read a trial, strip header whitespace, keep Time + 4 features + Label by name."""
     df = pd.read_csv(path)
     df.columns = [c.strip() for c in df.columns]
     want = [TIME_COL, *FEATURES, LABEL_COL]
@@ -78,11 +83,12 @@ def _read_raw(path: Path) -> pd.DataFrame:
     return df[want]
 
 
-# normalize one trial to 100 Hz via S1's resampler (features FIR-decimated, Label nearest)
 def load_trial(path: Path, split: str) -> Trial:
+    """Normalize one trial to 100 Hz. Reuses S1's resampler: continuous features are
+    FIR-decimated, the categorical Label is nearest-sampled (role `label`)."""
     df = _read_raw(path)
     frame, segments = resample_file(df, TIME_COL)
-    # resample_file emits float Label from nearest sampling; restore integer codes
+    # resample_file emits float Label from nearest sampling; restore integer codes.
     if LABEL_COL in frame.columns:
         frame[LABEL_COL] = frame[LABEL_COL].round().astype(int)
     dropped = sum(s.n_source_rows for s in segments if not s.usable)
@@ -90,7 +96,6 @@ def load_trial(path: Path, split: str) -> Trial:
                  frame, len(df), dropped)
 
 
-# split for one rev: lockbox > val > train
 def assign_split(rev: str, lockbox_revs: tuple[str, ...], val_revs: tuple[str, ...]) -> str:
     if rev in lockbox_revs:
         return "lockbox"
@@ -99,13 +104,13 @@ def assign_split(rev: str, lockbox_revs: tuple[str, ...], val_revs: tuple[str, .
     return "train"
 
 
-# load every trial, normalized and split; val_revs may be empty (grouped CV), lockbox
-# is always held out
 def load_dataset(
     labeled_dir: Path = LABELED_DIR,
     lockbox_revs: tuple[str, ...] = DEFAULT_LOCKBOX_REVS,
     val_revs: tuple[str, ...] = (),
 ) -> list[Trial]:
+    """Load every trial, normalized and split. `val_revs` may be empty when the caller
+    prefers grouped CV over a fixed validation rev; the lockbox is always held out."""
     trials = []
     for p in find_trials(labeled_dir):
         split = assign_split(rev_of(p), lockbox_revs, val_revs)
@@ -113,8 +118,8 @@ def load_dataset(
     return trials
 
 
-# per-rev row counts by split and class -- the sanity check before any modelling
 def census(trials: list[Trial]) -> pd.DataFrame:
+    """Per-rev row counts by split and class — the sanity check before any modelling."""
     rows = []
     for t in trials:
         lab = t.frame[LABEL_COL]
@@ -131,7 +136,6 @@ def census(trials: list[Trial]) -> pd.DataFrame:
               .sort_values(["split", "rev"]))
 
 
-# load the dataset and print the per-rev census + row accounting
 def main() -> None:
     trials = load_dataset()
     c = census(trials)

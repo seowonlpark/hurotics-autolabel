@@ -1,12 +1,23 @@
-# S2 experimenter (read-only): propose one challenger as a declarative spec from the champion report
-# + ledger. never writes code or trains; experiment.py runs the spec and the metric gate decides.
+"""S2 experimenter: propose ONE challenger, as a declarative spec.
+
+The agent reads the champion's locoeval report and the full experiment ledger, then
+proposes a single change. It never writes code, never touches data, never trains —
+`stages/s2_ml/experiment.py` runs the spec and the promotion gate decides. (PLAN
+principle 1: code does the work, agents judge it.)
+
+The ledger is in the prompt for one reason above all: **so the agent cannot re-propose
+something already tried.** The first challenger run by hand was a well-argued hypothesis
+that the numbers refuted; without the ledger, the same idea would come back forever,
+each time sounding just as reasonable.
+"""
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
-from agents.base import MODEL_SMART, AgentSpec, extract_json_object
+from agents.base import MODEL_SMART, AgentSpec
 from stages.s2_ml.experiment import ALLOWED_MODEL_PARAMS, WINDOW_S_RANGE
 
 PROPOSAL_FILENAME = "proposal.json"
@@ -14,10 +25,10 @@ PROPOSAL_FILENAME = "proposal.json"
 SYSTEM_PROMPT = (
     "You are the S2 experimenter for an IMU locomotion classifier. You propose ONE "
     "change per turn, as a declarative spec. You do not write code, run training, or "
-    "read data - deterministic code runs your spec and a metric gate decides.\n\n"
+    "read data — deterministic code runs your spec and a metric gate decides.\n\n"
     "The vocabulary is fixed. A spec has exactly these fields:\n"
     '  - "name": short snake_case identifier, unique against the ledger\n'
-    '  - "rationale": ONE sentence - the mechanism you expect, not a restatement\n'
+    '  - "rationale": ONE sentence — the mechanism you expect, not a restatement\n'
     '  - "drop_features": list of feature names to remove (may be empty)\n'
     '  - "window_s": window length in seconds, or null to keep the champion\'s\n'
     '  - "model_params": hyperparameter overrides (may be empty)\n\n'
@@ -26,7 +37,7 @@ SYSTEM_PROMPT = (
     "training, so the proposal is wasted.\n\n"
     "How to choose well:\n"
     "  - **Never assert anything about the code without reading it.** You have Read and "
-    "Grep - use them before claiming a constant's value or how a feature is computed. "
+    "Grep — use them before claiming a constant's value or how a feature is computed. "
     "A past proposal claimed a feature used a (0.5, 3.0) Hz band; the source sets "
     "(0.13, 3.0) and says on the line above that it is deliberately NOT (0.5, 3.0). "
     "The whole proposal rested on that error. Do not describe the code from memory of "
@@ -53,12 +64,9 @@ S2_EXPERIMENTER_AGENT = AgentSpec(
     allowed_tools=["Read", "Grep"],
     model=MODEL_SMART,
     max_turns=15,
-    # channel trust, labels, features, eval/gate, spec vocab, descriptors, methodology
-    domain_sections=("4", "5", "6", "7", "9", "10", "11"),
 )
 
 
-# assemble the prompt: champion report, available features, full ledger
 def build_prompt(report_md: str, ledger_rows: list[dict], champion: dict | None,
                  features: list[str]) -> str:
     history = [
@@ -75,38 +83,31 @@ def build_prompt(report_md: str, ledger_rows: list[dict], champion: dict | None,
         "Propose one challenger.\n\n"
         f"CURRENT CHAMPION: {champ_line}\n\n"
         f"AVAILABLE FEATURES ({len(features)}):\n{json.dumps(features, indent=2)}\n\n"
-        "CHAMPION locoeval REPORT - per-class, per-rev, and the error taxonomy:\n"
+        "CHAMPION locoeval REPORT — per-class, per-rev, and the error taxonomy:\n"
         f"{report_md}\n\n"
-        "EXPERIMENT LEDGER - everything already tried, with outcomes. Do NOT repeat any "
+        "EXPERIMENT LEDGER — everything already tried, with outcomes. Do NOT repeat any "
         f"of these:\n{json.dumps(history, indent=2)}\n"
     )
 
 
-# revision request appended to the prompt when the critic returned 'revise': the held-back spec and
-# the changes asked for, so the experimenter fixes THAT spec rather than starting over.
-def revision_block(prev_proposal: dict, critic_reasons: list[str]) -> str:
-    return (
-        "\nREVISION REQUESTED - the critic did NOT reject your idea. It wants this same "
-        "proposal run, but the spec must be fixed first. Your previous proposal was:\n"
-        f"{json.dumps(prev_proposal, indent=2)}\n"
-        "The critic asked you to revise it for these reasons:\n"
-        f"{json.dumps(critic_reasons, indent=2)}\n"
-        "Output the corrected spec. Keep the same core idea and, unless a reason forces it, the "
-        "same name. Change only what the critic flagged - do not start a different experiment.\n"
-    )
-
-
-# pull the JSON object out of the agent's reply; tolerant of fences and prose
 def parse_proposal(final_text: str) -> dict | None:
-    return extract_json_object(final_text)
+    """Extract the JSON object from the agent's reply; tolerant of fences and prose."""
+    if not final_text:
+        return None
+    m = re.search(r"\{.*\}", final_text, re.DOTALL)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
-# persist the proposal (or raw text when it did not parse). `name` lets a revision attempt write to a
-# distinct file so no earlier attempt is overwritten.
-def write_proposal(out_dir: Path, proposal: dict | None, final_text: str,
-                   name: str = PROPOSAL_FILENAME) -> Path:
+def write_proposal(out_dir: Path, proposal: dict | None, final_text: str) -> Path:
+    """Persist the proposal (or the raw text when it did not parse) for audit."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / name
+    path = out_dir / PROPOSAL_FILENAME
     path.write_text(json.dumps(proposal if proposal else {"unparsed": final_text},
                                indent=2, ensure_ascii=False), encoding="utf-8")
     return path

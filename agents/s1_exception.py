@@ -1,63 +1,79 @@
-# S1 exception agent: triage the clean stage's exception queue (read-only)
-# clean measures/quarantines; this agent judges each exception -- known, novel, or
-# needs-human -- from the records + DOMAIN_NOTES. code writes the review. see README.
+"""S1 exception agent: triage the deterministic layer's exception queue.
+
+The clean stage MEASURES and quarantines deterministically. This agent JUDGES the
+result: for each exception, is it a KNOWN failure mode (already in DOMAIN_NOTES), a
+NOVEL one worth surfacing, or one that needs a human before the pipeline can
+proceed? It never touches data and never recomputes — it reads the run's exception
+records + DOMAIN_NOTES and returns a verdict as text; this module's deterministic
+wrapper writes the review. (Non-negotiable: code does the work, agents judge it.)
+
+Queue = genuine exceptions only (whole-file quarantines, gyro axis anomalies, yaw
+drift flags). Routine gyro-abstentions are designed-normal behaviour, so they are
+summarized as context, not triaged item by item.
+"""
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
-from agents.base import MODEL_CHEAP, AgentSpec, extract_json_array
-from stages.s2_ml.transform import SAGITTAL_DEG_AXIS
+from agents.base import MODEL_CHEAP, AgentSpec
+from stages.s2_ml.transform import SAGITTAL_DEG_AXIS_BY_VARIANT
 
 REVIEW_FILENAME = "exceptions_review.jsonl"
 
-# the only Deg axis the feature path reads (sagittal/Y, Section 6.3); derived from the consumer
-# so it can't go stale -- a conflict on any other axis never reaches the feature path
-_SAGITTAL_CANDIDATE_AXES = frozenset({SAGITTAL_DEG_AXIS})
+# Deg axes any known hardware revision treats as sagittal — i.e. the only ones the
+# feature path can read. Derived from the consumer, not restated, so a new variant
+# mapping cannot make this stale (§6.2).
+_SAGITTAL_CANDIDATE_AXES = frozenset(SAGITTAL_DEG_AXIS_BY_VARIANT.values())
 
-# the raw->rev* feature path (transform.raw_to_features) loops L and R only
+# The raw->rev* feature path (`transform.py:raw_to_features`) loops L and R only.
 _DATA_PATH_SIDES = frozenset({"L", "R"})
 
 SYSTEM_PROMPT = (
     "You are the S1 exception triage agent for an IMU locomotion pipeline. The "
     "deterministic clean stage has already measured the data and flagged exceptions. "
-    "JUDGE them - do not recompute or open raw CSVs to 'eyeball' signals; the notes "
-    "warn the eyeball is not truth and whole-file statistics mislead.\n\n"
-    "Answer TWO orthogonal questions per item. Judge them separately; do not infer one "
-    "from the other. Deterministic code collapses the pair into the final disposition."
-    "\n\n"
-    "1. `explained` - does DOMAIN NOTES account for this evidence?\n"
-    "  - \"yes\": a finding covers it and the evidence agrees.\n"
-    "  - \"no\": no finding covers it - say what is unexplained. The case we most want "
-    "surfaced.\n"
-    "  - \"contradicts\": a finding covers it but the MEASURED EVIDENCE disagrees with "
-    "what that finding says the signal should look like. Name the section and the "
-    "disagreement - the note may be wrong. Never act on it.\n\n"
-    "2. `action` - is a person needed before this data can be used?\n"
+    "Your job is to JUDGE them — not to recompute, not to open raw signals.\n\n"
+    "Answer TWO independent questions per item. They are orthogonal: do not let one "
+    "decide the other.\n\n"
+    "1. `explained` — does DOMAIN NOTES account for this evidence?\n"
+    "  - \"yes\": a finding covers it and the evidence agrees with that finding.\n"
+    "  - \"no\": no finding covers it. Say what is unexplained. This is the case we "
+    "most want surfaced.\n"
+    "  - \"contradicts\": a finding covers it and the evidence DISAGREES with the "
+    "finding. Name the section and the disagreement. This is also a find — the note "
+    "may be wrong — but never act on it.\n\n"
+    "2. `action` — is a person needed before this data can be used?\n"
     "  - \"none\": the pipeline already handles it end to end.\n"
-    "  - \"human\": someone must act or decide (re-export, repair, amend a note).\n"
-    "  A documented cause can still need a person (a broken clock is explained and "
-    "still needs re-export); an unexplained anomaly can be inert.\n\n"
-    "Authority for `action`: each item carries a machine-derived `handled` {value, "
-    "why}, computed from actual downstream consumers. DOMAIN NOTES states POLICY; "
-    "`handled` states what the code does. A note that an anomaly is 'recorded' or that "
-    "features 'must consult' a flag is NOT evidence anything consumes it. On "
-    "disagreement, `handled` wins - but it settles `action` ONLY. A stale claim about "
-    "handling does not make the finding's account of the signal wrong, so it is not "
-    "\"contradicts\"; say so in the rationale and leave `explained` on the evidence."
-    "\n\n"
-    "Fields:\n"
-    "  - `sections`: every DOMAIN NOTES section relied on, e.g. [\"4.1b\"] - all that "
-    "apply, not just one. Non-empty when explained is \"yes\"/\"contradicts\"; [] when "
-    "\"no\".\n"
-    "  - `confidence`: confidence in these two fields, NOT the underlying cause - "
-    "certainty that something is unexplained is high confidence.\n"
-    "  - One terse sentence of rationale.\n\n"
-    "Output ONLY a JSON array, one object per item, each exactly: "
-    '{"ref": <ref>, "explained": "yes"|"no"|"contradicts", "action": "none"|"human", '
-    '"sections": [<section strings>], "rationale": <one sentence>, '
-    '"confidence": <0.0-1.0>}. No text outside the JSON array.'
+    "  - \"human\": someone must act or decide (re-export, repair, amend a note).\n\n"
+    "Do NOT infer `action` from `explained`. A documented cause can still need a "
+    "person (a broken clock is §2.6-explained and still needs a re-export). An "
+    "unexplained anomaly can be inert. Judge them separately; deterministic code "
+    "collapses the pair into the final disposition.\n\n"
+    "`action` evidence — read `handled` on the queue item:\n"
+    "  Each item carries a machine-derived `handled` {value, why} computed from the "
+    "actual downstream consumers, not from prose. It is the authority on whether the "
+    "pipeline handles this item. DOMAIN NOTES states POLICY; `handled` states what the "
+    "code does. A note saying an anomaly is 'recorded' or that features 'must consult' "
+    "a flag is NOT evidence that anything consumes it. Where the two disagree, follow "
+    "`handled` and set explained=\"contradicts\".\n\n"
+    "Rules:\n"
+    "  - Judge ONLY from the provided evidence and the DOMAIN NOTES. Do NOT open raw "
+    "CSVs to 'eyeball' signals — the notes warn repeatedly that the eyeball is not "
+    "truth and whole-file statistics mislead.\n"
+    "  - `sections`: every DOMAIN NOTES section you relied on, e.g. [\"4.1b\"]. List "
+    "all that apply, not just one. Required non-empty when explained is \"yes\" or "
+    "\"contradicts\"; MUST be [] when explained is \"no\".\n"
+    "  - `confidence` is confidence in THESE TWO FIELDS, not in the underlying cause. "
+    "Being certain that something is unexplained is high confidence, however deep the "
+    "mystery.\n"
+    "  - One sentence of rationale per item. Be terse.\n\n"
+    "Output ONLY a JSON array, one object per queue item, each exactly: "
+    '{"ref": <the item ref>, "explained": "yes"|"no"|"contradicts", '
+    '"action": "none"|"human", "sections": [<DOMAIN NOTES section strings>], '
+    '"rationale": <one sentence>, "confidence": <number 0.0-1.0>}. '
+    "No text outside the JSON array."
 )
 
 S1_EXCEPTION_AGENT = AgentSpec(
@@ -66,26 +82,30 @@ S1_EXCEPTION_AGENT = AgentSpec(
     allowed_tools=["Read", "Grep"],
     model=MODEL_CHEAP,
     max_turns=15,
-    # schema/units/quarantine/drift/axis + label contamination + eyeball-not-truth
-    domain_sections=("1", "2", "3", "4", "5", "6", "11"),
 )
 
 
-# handled record: what the code actually does with this exception
 def _handled(value: bool, why: str) -> dict:
     return {"value": value, "why": why}
 
 
-# handled helper: a quarantined file is excluded, not repaired
 def _handled_quarantine() -> dict:
+    """A quarantined file is EXCLUDED, which is not the same as repaired."""
     return _handled(False,
                     "the file is kept out of data/clean so downstream is safe, but the "
-                    "pipeline cannot repair it - recovery needs a person (Section 2.6)")
+                    "pipeline cannot repair it — recovery needs a person (§2.6)")
 
 
-# handled helper: is this axis conflict on a channel the feature path actually reads?
-# a conflict on a read channel is fatal (not handled -- needs a person); otherwise inert
 def _handled_axis_anomaly(side: str, conflicts: list[str]) -> dict:
+    """Is this permutation conflict on a channel the feature path actually reads?
+
+    `transform.py` resolves the sagittal Deg axis per VARIANT, then checks it against
+    this file's own record (`check_axis_trust`). A conflict on a channel it reads is
+    now FATAL, not silent — but fatal is not handled: the file cannot be featurized
+    until a person resolves it. A conflict on a channel it never reads stays inert.
+    That distinction is code, not prose; the notes' "recorded, not reordered" says only
+    that S1 did not mutate, never that a consumer honours the record.
+    """
     if side not in _DATA_PATH_SIDES:
         return _handled(True,
                         f"the raw->rev* feature path reads L/R only, never {side}; no "
@@ -93,30 +113,34 @@ def _handled_axis_anomaly(side: str, conflicts: list[str]) -> dict:
     reachable = sorted(set(conflicts) & _SAGITTAL_CANDIDATE_AXES)
     if not reachable:
         return _handled(True,
-                        f"conflict is on Deg {sorted(conflicts)}, not the sagittal Y "
-                        f"plane the feature path reads (Section 6.3), so no consumer reads it")
+                        f"conflict is on Deg {sorted(conflicts)}, which no known "
+                        f"variant treats as sagittal, so the feature path never reads it")
     return _handled(False,
-                    f"conflict touches Deg {reachable}, the sagittal Y plane the feature "
-                    f"path reads - transform.py's check_axis_trust hard-fails this file "
-                    f"rather than reading a corrupted axis, so nothing is corrupted, but "
-                    f"nothing is featurized either until someone resolves the axis")
+                    f"conflict touches Deg {reachable}, which the feature path reads "
+                    f"as sagittal on some variant — transform.py's check_axis_trust "
+                    f"hard-fails this file rather than reading the documented column, "
+                    f"so nothing is corrupted, but nothing is featurized either until "
+                    f"someone resolves the axis")
 
 
-# handled helper: no code consumes drift_contaminated; Section 4.2's "must consult" is policy only
 def _handled_drift(channel: str) -> dict:
+    """No code consumes `drift_contaminated`; §4.2's "must consult" is policy only."""
     if channel.endswith("_Deg_Z"):
         return _handled(True,
                         "nothing in the pipeline reads the drift flag, but nothing "
-                        "reads Deg_Z either - the feature path uses the sagittal Deg "
+                        "reads Deg_Z either — the feature path uses the sagittal Deg "
                         "axis and its gyro rate, so this flag is inert, not honoured")
     return _handled(False,
-                    f"{channel} is not the yaw-like Deg_Z axis Section 4.2 predicts, and no "
+                    f"{channel} is not the yaw-like Deg_Z axis §4.2 predicts, and no "
                     f"code consumes the drift flag, so nothing would exclude it")
 
 
-# extract genuine exceptions from a clean run's artifacts
-# routine gyro-abstentions are counted, not queued -- they're designed-normal
 def build_queue(clean_run_dir: Path) -> tuple[list[dict], dict]:
+    """Extract genuine exceptions from a clean run's artifacts.
+
+    Routine gyro-abstentions are counted, not queued — they are designed-normal
+    (static files falling back to the documented convention), not exceptions.
+    """
     queue: list[dict] = []
 
     q_path = clean_run_dir / "quarantine.jsonl"
@@ -146,7 +170,8 @@ def build_queue(clean_run_dir: Path) -> tuple[list[dict], dict]:
                     "type": "gyro_axis_anomaly",
                     "file": o["path"],
                     "side": side,
-                    # conflicts_with_documented is WHY this is an anomaly
+                    # `conflicts_with_documented` is WHY this is an anomaly — without
+                    # it the agent is judging a permutation with no stated grievance.
                     "detail": {k: rec[k] for k in (
                         "gyro_axis_by_deg_axis", "conflicts_with_documented",
                         "is_bijection", "unit", "r")},
@@ -171,7 +196,6 @@ def build_queue(clean_run_dir: Path) -> tuple[list[dict], dict]:
     return queue, summary
 
 
-# assemble the triage prompt: routine-abstain count as context + the queue
 def build_prompt(queue: list[dict], summary: dict) -> str:
     return (
         "Triage this S1 exception queue.\n\n"
@@ -179,37 +203,67 @@ def build_prompt(queue: list[dict], summary: dict) -> str:
         "files with routine gyro-abstentions (static files falling back to the "
         "documented convention). These are designed-normal and are NOT in the queue; "
         "flag only if that COUNT itself looks anomalous for this corpus.\n\n"
-        "QUEUE - return exactly one verdict per item, matched by `ref`:\n"
+        "QUEUE — return exactly one verdict per item, matched by `ref`:\n"
         f"{json.dumps(queue, indent=2, ensure_ascii=False)}\n"
     )
 
 
-# pull the JSON array out of the agent's final text; tolerant of fences/prose
 def parse_review(final_text: str) -> list[dict] | None:
-    return extract_json_array(final_text)
+    """Extract the JSON array from the agent's final text; tolerant of fences/prose."""
+    if not final_text:
+        return None
+    m = re.search(r"\[.*\]", final_text, re.DOTALL)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, list) else None
 
 
 _REVIEW_KEYS = ("explained", "action", "sections", "rationale", "confidence")
 
 
-# collapse the agent's two judgements into (disposition, action), the only place they combine:
-#   yes/none -> known_expected; yes/human -> needs_human;
-#   no -> novel; contradicts -> novel, action forced to human
 def collapse(explained: str | None, action: str | None) -> tuple[str, str]:
+    """Collapse the agent's two orthogonal judgements into (disposition, action).
+
+    The agent answers two questions that live on different axes; this is the only place
+    the pipeline decides how they combine, so two runs cannot disposition the same item
+    differently. `explained` names the bucket, `action` rides along and is never lost:
+
+        explained    action        disposition
+        yes          none       -> known_expected
+        yes          human      -> needs_human
+        no           (kept)     -> novel
+        contradicts  -> human   -> novel
+
+    Unexplained wins the label because "surface it" is the point of the bucket, and it
+    costs nothing: `action` still carries whether the pipeline is blocked, so a novel
+    item that also needs a person is not demoted to a queue of routine repairs. A
+    contradicted note is a find too — but it is never acted on (§ DOMAIN_NOTES header),
+    so its action is forced, not read.
+    """
     if explained == "contradicts":
         return "novel", "human"
     if explained == "no":
         return "novel", action if action in ("none", "human") else "human"
     if explained == "yes" and action in ("none", "human"):
         return ("known_expected" if action == "none" else "needs_human"), action
-    # unrecognized pair: judge nothing, escalate
+    # Unrecognized pair: judge nothing, escalate. Same conservatism as a parse failure.
     return "needs_human", "human"
 
 
-# write one review row per queue item, agent verdict merged in; disposition is derived
-# here by collapse(), never taken from the model. no verdict => needs_human, never dropped
 def write_review(out_dir: Path, queue: list[dict], decisions: list[dict] | None,
                  final_text: str) -> Path:
+    """Write one review row per queue item, agent verdict merged in.
+
+    The agent's two judgements are recorded as given; `disposition` is DERIVED here by
+    `collapse`, never taken from the model — the taxonomy is the pipeline's, not a thing
+    each run re-decides. A queue item with no parseable verdict is conservatively marked
+    needs_human, so a parsing failure never silently drops an exception. Raw text is kept
+    for audit.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     by_ref = {d.get("ref"): d for d in decisions} if decisions else {}
     out = out_dir / REVIEW_FILENAME

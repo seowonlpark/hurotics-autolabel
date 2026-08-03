@@ -1,6 +1,16 @@
-# S3 deterministic core: compute anchor table, run rate-invariance audit, draw plots. no agent, no
-# judgement. outputs (anchors.csv, rate_audit.json, plots/) are the interface the hypothesis agent
-# reads; rate_audit.json satisfies the PLAN S3 gate (Section 10).
+"""S3 physics: build the anchor table and audit it.
+
+    python -m stages.s3_physics.run --out runs/s3_physics
+
+Outputs:
+    anchors.csv     one row per window, keyed to the S2 window grid
+    rate_audit.json per-anchor rate-invariance verdict (the PLAN S3 gate)
+    physics.md      human-readable summary
+
+Deterministic and label-free end to end. The anchor table is built the same way for a
+labeled trial and a raw recording, which is what lets S4 fuse on files that have no
+ground truth at all.
+"""
 
 from __future__ import annotations
 
@@ -10,142 +20,101 @@ from pathlib import Path
 
 import pandas as pd
 
-from stages.s2_ml.dataset import STAND, WALK, Trial, load_dataset
-from stages.s2_ml.experiment import resolve_champion
+from stages.s2_ml.dataset import load_dataset
 from stages.s2_ml.features import WindowSpec
-from stages.s3_physics.anchors import ANCHOR_NAMES, WALKING, trial_anchors
-from stages.s3_physics.plots import plot_all
-from stages.s3_physics.rate_audit import (
-    AUDIT_FACTOR, AUDIT_TOL, CANONICAL_HZ, audit_anchors,
+from stages.s3_physics.anchors import (
+    AMBIGUOUS,
+    STANDING,
+    WALKING,
+    rev_rest_references,
+    trial_anchors,
 )
+from stages.s3_physics.rate_audit import audit_anchors, render as render_audit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 S3_OUT_DIR = REPO_ROOT / "runs" / "s3_physics"
-S2_RUN_DIR = REPO_ROOT / "runs" / "s2_ml"
-
-
-# champion's window, so S3's per-window grid matches the S2 OOF grid the fusion joins on (a
-# mismatched window collapses the inner join). defaults to WindowSpec() when no champion exists yet.
-def champion_windowspec(s2_dir: Path = S2_RUN_DIR) -> WindowSpec:
-    return resolve_champion(s2_dir, require=False)[0]
-
 ANCHORS_CSV = "anchors.csv"
 AUDIT_JSON = "rate_audit.json"
-DISAGREEMENT_JSON = "disagreement.json"
-PLOTS_SUBDIR = "plots"
+
+VERDICTS = (STANDING, AMBIGUOUS, WALKING)
 
 
-# the per-window anchor table for the whole corpus, one row per window
-def build_anchor_table(trials: list[Trial], spec: WindowSpec | None = None) -> pd.DataFrame:
+def build_anchor_table(trials, spec: WindowSpec | None = None) -> pd.DataFrame:
+    """Anchors for every window of every trial, on one shared window grid.
+
+    Rev-level rest references are computed ONCE across the whole trial list and passed
+    down, so a trial that never rests is calibrated against its own session rather than
+    silently falling back to a whole-recording median (§10.5.2).
+    """
     spec = spec or WindowSpec()
-    frames = [a for t in trials if not (a := trial_anchors(t, spec)).empty]
+    refs = rev_rest_references(trials, spec.fs_hz)
+    frames = [t for t in (trial_anchors(tr, spec, refs.get(tr.rev)) for tr in trials)
+              if not t.empty]
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-# physics cause of one window's disagreement with its human label (Section 10.7, Section 11), so the
-# reviewer can triage the flag rather than see a bare boolean. None when verdict and label agree.
-def disagree_reason(label: object, verdict: str, antiphase: float, swap_count: int) -> str | None:
-    if label == WALK and verdict != WALKING:
-        if antiphase <= 0:
-            return "in_phase_not_gait" # legs together: physics right, likely a label issue
-        if swap_count <= 1:
-            return "single_hump"       # alternates but <2 crossings even after the grow
-        return "sub_threshold"         # antiphase swing that never commits both +/-delta bands
-    if label == STAND and verdict == WALKING:
-        return "stand_reads_walking"   # label-audit: standing stretch the physics reads as gait
-    return None
+def render(anchors: pd.DataFrame, audit: dict) -> str:
+    n = len(anchors)
+    fixed = anchors["swap_verdict"].value_counts()
+    adapt = anchors["swap_verdict_adaptive"].value_counts()
+    untrusted = int((~anchors["rest_offset_trusted"]).sum())
+
+    lines = [
+        "# S3 Physics", "",
+        f"- windows: **{n:,}** across **{anchors['rev'].nunique()}** revs",
+        f"- rest zero untrusted on **{untrusted:,}** windows "
+        f"({untrusted / n:.1%}) — those recordings never rest, so their interleg zero is "
+        f"a whole-recording median rather than a measured standing posture (§10.2)",
+        "",
+        "## Swap-rule verdicts", "",
+        "The rule has zero fitted parameters: `delta = 1°` is a sensor noise floor and "
+        "`1 swap` is the only integer between measured standing (0) and measured walking "
+        "(2). The adaptive column sizes the span to ~2 detected strides (§10.6/10.7), "
+        "which is what rescues slow gait from abstaining.", "",
+        "| verdict | fixed 2 s span | stride-adaptive span |", "|---|---|---|",
+    ]
+    for v in VERDICTS:
+        lines.append(f"| `{v}` | {int(fixed.get(v, 0)):,} | {int(adapt.get(v, 0)):,} |")
+    lines += [
+        "",
+        f"Median adaptive span: **{anchors['swap_window_s'].median():.1f} s** "
+        f"(base {2 * (anchors['swap_window_s'].min() / 2):.1f} s, "
+        f"max {anchors['swap_window_s'].max():.1f} s).",
+        "", render_audit(audit), "",
+        "*An anchor that fails is not a bug — `gyro_energy` is defined the way that fails, "
+        "on purpose, as the audit's negative control. An audit that has never rejected "
+        "anything is not evidence that the rest passed (§11.1).*",
+    ]
+    return "\n".join(lines)
 
 
-# per-trial physics-vs-label disagreement, ranked so the agent looks at the worst trials first.
-# ranked on the stride-adaptive verdict (Section 10.6) so slow-gait window artifacts don't drown real
-# label issues. each row carries a `reasons` histogram (Section 10.7) showing why a trial ranks.
-def label_disagreement(table: pd.DataFrame) -> list[dict]:
-    rows = []
-    for (rev, trial), g in table.groupby(["rev", "trial"], sort=True):
-        walk_lab = g[g["label"] == WALK]
-        stand_lab = g[g["label"] == STAND]
-        walk_not_walking = float((walk_lab["swap_verdict_adaptive"] != WALKING).mean()) if len(walk_lab) else 0.0
-        stand_is_walking = float((stand_lab["swap_verdict_adaptive"] == WALKING).mean()) if len(stand_lab) else 0.0
-        reasons = g["disagree_reason"].dropna().value_counts().to_dict() if "disagree_reason" in g else {}
-        rows.append({
-            "rev": rev, "trial": int(trial), "n_windows": int(len(g)),
-            "walk_labeled_not_walking": round(walk_not_walking, 3),
-            "stand_labeled_is_walking": round(stand_is_walking, 3),
-            "disagreement": round(max(walk_not_walking, stand_is_walking), 3),
-            "reasons": {k: int(v) for k, v in reasons.items()},
-            "plot": f"{PLOTS_SUBDIR}/trial_{rev}_t{int(trial)}.png",
-        })
-    return sorted(rows, key=lambda r: r["disagreement"], reverse=True)
-
-
-# trials S3 may see: train + val only. lockbox stays SEALED (Section 7), since S3's plots feed an agent
-# whose hypotheses reach DOMAIN_NOTES, and reading the lockbox would spend that independence.
-def load_analysis_trials() -> list[Trial]:
-    return [t for t in load_dataset() if t.split != "lockbox"]
-
-
-# run the whole deterministic core into out_dir; returns the audit report
-def run(out_dir: Path = S3_OUT_DIR, spec: WindowSpec | None = None) -> dict:
-    spec = spec or champion_windowspec()  # match the champion/OOF grid the fusion joins on
-    out_dir.mkdir(parents=True, exist_ok=True)
-    trials = load_analysis_trials() # lockbox sealed (Section 7)
-
-    # purge stale figures so a previous run's outputs can't leak to the agent, which reads every png
-    plots_dir = out_dir / PLOTS_SUBDIR
-    if plots_dir.exists():
-        for png in plots_dir.glob("*.png"):
-            png.unlink()
-
-    table = build_anchor_table(trials, spec)
-    if not table.empty: # Section 10.7: annotate each window's disagreement cause for the reviewer/agent
-        table["disagree_reason"] = [
-            disagree_reason(lab, v, ap, sc) for lab, v, ap, sc in zip(
-                table["label"], table["swap_verdict_adaptive"],
-                table["antiphase"], table["swap_count"])]
-    table.to_csv(out_dir / ANCHORS_CSV, index=False)
-
-    disagreement = label_disagreement(table)
-    (out_dir / DISAGREEMENT_JSON).write_text(json.dumps(disagreement, indent=2),
-                                             encoding="utf-8")
-
-    report = audit_anchors(trials, spec)
-    audit = {
-        "rate_hz": CANONICAL_HZ,
-        "decimated_hz": CANONICAL_HZ / AUDIT_FACTOR,
-        "factor": AUDIT_FACTOR,
-        "tol": AUDIT_TOL,
-        "gate": "no anchor feature without a rate-invariance verdict (PLAN S3)",
-        "anchors": report,
-    }
-    (out_dir / AUDIT_JSON).write_text(json.dumps(audit, indent=2), encoding="utf-8")
-
-    plot_all(trials, report, out_dir / PLOTS_SUBDIR, spec)
-
-    audit["disagreement"] = disagreement
-    return audit
-
-
-# run the deterministic core and print the audit verdicts + output locations
 def main() -> None:
-    parser = argparse.ArgumentParser(description="S3 physics deterministic core.")
-    parser.add_argument("--out", type=Path, default=S3_OUT_DIR)
-    parser.add_argument("--window-s", type=float, default=None,
-                        help="window length in seconds (default: champion window)")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(description="S3 physics: anchors + rate-invariance audit.")
+    ap.add_argument("--out", type=Path, default=S3_OUT_DIR)
+    ap.add_argument("--window-s", type=float, default=None)
+    args = ap.parse_args()
 
-    spec = WindowSpec(window_s=args.window_s) if args.window_s else None  # None => champion window
-    audit = run(args.out, spec)
+    default = WindowSpec()
+    spec = WindowSpec(window_s=args.window_s or default.window_s,
+                      stride_s=default.stride_s)
 
-    n_rows = sum(1 for _ in (args.out / ANCHORS_CSV).open(encoding="utf-8")) - 1
-    r0 = audit["anchors"][ANCHOR_NAMES[0]]
-    print(f"[s3] {n_rows:,} windows -> {args.out / ANCHORS_CSV}")
-    print(f"[s3] rate audit @ {audit['rate_hz']:.0f} vs {audit['decimated_hz']:.0f} Hz "
-          f"({r0['n_windows_walking']:,} walking windows), tol {audit['tol']:g}:")
-    for a in ANCHOR_NAMES:
-        r = audit["anchors"][a]
-        flag = "ok " if r["verdict"] == "invariant" else "!! "
-        print(f"    {flag}{a:14} {r['metric']} delta={r['median_delta']:.4f}  {r['verdict']}")
-    print(f"[s3] plots -> {args.out / PLOTS_SUBDIR}")
+    # The lockbox stays sealed here too (§7). Physics needs no labels, but a rate verdict
+    # measured partly on lockbox windows would make the lockbox a thing we had looked at.
+    trials = [t for t in load_dataset() if t.split != "lockbox"]
+
+    anchors = build_anchor_table(trials, spec)
+    print(f"[s3] {len(anchors):,} windows across {anchors['rev'].nunique()} revs")
+
+    audit = audit_anchors(trials, spec)
+    for a, r in audit.items():
+        print(f"[s3]   {a:<14} {r['metric']:>4} median Δ {r['median_delta']:>8.4f}  {r['verdict']}")
+
+    out_dir = args.out if args.out.is_absolute() else REPO_ROOT / args.out
+    out_dir.mkdir(parents=True, exist_ok=True)
+    anchors.to_csv(out_dir / ANCHORS_CSV, index=False)
+    (out_dir / AUDIT_JSON).write_text(json.dumps(audit, indent=2), encoding="utf-8")
+    (out_dir / "physics.md").write_text(render(anchors, audit), encoding="utf-8")
+    print(f"[s3] artifacts -> {out_dir}")
 
 
 if __name__ == "__main__":
