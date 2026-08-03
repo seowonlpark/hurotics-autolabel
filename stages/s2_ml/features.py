@@ -20,6 +20,7 @@ Three rules it exists to enforce:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import numpy as np
@@ -124,6 +125,13 @@ def label_window(labels: np.ndarray) -> tuple[object, float, float]:
     `-1` is excluded before voting (§5.2: training-poison, evaluation-gold) but its share
     is reported so a confidence signal can be evaluated against it later. A window that
     is not pure over {stand, walk} is TRANSITION, never a coin-flip majority vote.
+
+    KNOWN AND ACCEPTED (Lu, 2026-08-03 — §5.2): exclusion is per ROW, so `purity` is
+    computed over the survivors and a window can be "pure" on a minority of its rows.
+    Measured at the 2 s default: 92 of 4,812 trainable windows contain `-1`, 20 are
+    over half `-1`, worst is 93.5%. Left in deliberately — 1.9% label noise is inside
+    what an RF tolerates, and no threshold on `unknown_frac` has evidence behind it.
+    `unknown_frac` rides along on every window so the decision stays checkable.
     """
     unknown_frac = float(np.mean(labels == HUMAN_UNKNOWN))
     valid = labels[np.isin(labels, TRAIN_CLASSES)]
@@ -135,28 +143,37 @@ def label_window(labels: np.ndarray) -> tuple[object, float, float]:
     return (winner if purity >= PURITY_MIN else TRANSITION), purity, unknown_frac
 
 
-def windows_of_trial(trial: Trial, spec: WindowSpec) -> pd.DataFrame:
-    """Every window of one trial, never spanning a gap."""
-    rows = []
+def iter_windows(trial: Trial, spec: WindowSpec) -> Iterator[tuple[dict, pd.DataFrame]]:
+    """Yield (metadata, window) for every window of one trial, never spanning a gap.
+
+    THE windowing primitive — S2 features and S3 anchors both consume it, so the two
+    stages cannot drift into windowing the same trial differently. Anything keyed on
+    `(segment, t_start_ms)` from one stage joins to the other exactly.
+
+    Yields the window unlabeled: what a window *is* does not depend on ground truth,
+    and S3 must be able to run on raw recordings that carry none.
+    """
     frame = trial.frame
     if frame.empty:
-        return pd.DataFrame()
-
+        return
     for seg_id, seg in frame.groupby("segment", sort=True):
         seg = seg.reset_index(drop=True)
-        labels = seg[LABEL_COL].to_numpy()
         for start in range(0, len(seg) - spec.n + 1, spec.step):
-            stop = start + spec.n
-            label, purity, unk = label_window(labels[start:stop])
-            if label is None:
-                continue
-            win = seg.iloc[start:stop]
-            rows.append({
-                "rev": trial.rev, "trial": trial.trial, "split": trial.split,
-                "segment": int(seg_id), "t_start_ms": float(win[TIME_COL].iloc[0]),
-                "label": label, "purity": purity, "unknown_frac": unk,
-                **window_features(win, spec.fs_hz),
-            })
+            win = seg.iloc[start:start + spec.n]
+            yield ({"rev": trial.rev, "trial": trial.trial, "split": trial.split,
+                    "segment": int(seg_id), "t_start_ms": float(win[TIME_COL].iloc[0])},
+                   win)
+
+
+def windows_of_trial(trial: Trial, spec: WindowSpec) -> pd.DataFrame:
+    """Every window of one trial, labeled and featurized."""
+    rows = []
+    for meta, win in iter_windows(trial, spec):
+        label, purity, unk = label_window(win[LABEL_COL].to_numpy())
+        if label is None:
+            continue
+        rows.append({**meta, "label": label, "purity": purity, "unknown_frac": unk,
+                     **window_features(win, spec.fs_hz)})
     return pd.DataFrame(rows)
 
 

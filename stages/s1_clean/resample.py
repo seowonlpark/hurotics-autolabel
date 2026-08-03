@@ -21,7 +21,7 @@ from stages.s1_clean.config import (
     CANONICAL_HZ,
     DECIMATE_FILTER,
     GAP_FACTOR,
-    MIN_SEGMENT_SAMPLES,
+    MIN_SEGMENT_S,
     NEAREST_ROLES,
     RATE_TOLERANCE,
     ROLE_BY_NAME,
@@ -109,8 +109,11 @@ def resample_segment(
     if nominal is None:
         seg.usable, seg.reason = False, f"rate {seg.source_hz:.3f} Hz fits no known family"
         return None, seg
-    if seg.n_source_rows < MIN_SEGMENT_SAMPLES:
-        seg.usable, seg.reason = False, f"{seg.n_source_rows} rows < {MIN_SEGMENT_SAMPLES}"
+    if seg.duration_s < MIN_SEGMENT_S:
+        seg.usable, seg.reason = False, (
+            f"{seg.duration_s:.3f} s < {MIN_SEGMENT_S} s "
+            f"({seg.n_source_rows} rows @ {seg.source_hz:.1f} Hz)"
+        )
         return None, seg
 
     factor = int(round(nominal / CANONICAL_HZ))

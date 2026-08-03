@@ -160,8 +160,13 @@ across one invents data that was never measured.
 
 Many files open with a segment of **exactly 10 rows**, then a gap, then the real trial. The 500 Hz
 era shows two tiny leading segments (2–8 rows each). Mechanical, not random.
-`MIN_SEGMENT_SAMPLES = 100` currently trims it as a side effect of a size filter — the right
-outcome for an incidental reason.
+`MIN_SEGMENT_S = 1.0` trims it as a side effect of a size filter — the right outcome for an
+incidental reason. **The floor was a sample count until 2026-08-03 [measured]:**
+`MIN_SEGMENT_SAMPLES = 100`, documented as "1 s at canonical rate", which it was only in the
+~100 Hz era — at 500 Hz it meant 0.2 s. One labeled segment (`rev6_trial_3`, 238 rows at
+500 Hz = 0.48 s) passed as *usable* into `data/clean` and into the report's usable minutes
+while being too short to yield a single 2 s window. A threshold in samples is a threshold that
+changes meaning with the rate era (§2.1); it is now a duration.
 
 ### 3.3 Gap position is otherwise unpredictable **[reported + measured]**
 
@@ -365,6 +370,18 @@ correct — tier 3 is what churns column position between variants and bakes in 
 It is a hand-drawn map of where confidence *should* be low — the exact signal the current
 rule-based algorithm lacks. Exclude from training targets (ambiguous label = noisy target); retain
 and report separately in evaluation as the natural test set for a confidence signal.
+
+**Exclusion is per ROW, not per window — so a little `-1` still reaches training
+[measured, 2026-08-03, ACCEPTED].** `features.label_window` drops `-1` rows and then votes over
+what survives, so window purity is computed on the remainder. A window can therefore be
+"label-pure" on a small minority of its rows: at the 2 s default, **92 of 4,812** trainable
+windows contain `-1`, **20** are more than half `-1`, and the worst is **93.5%** `-1` — a
+confident `walk` target resting on ~13 of 200 rows. **Decision (Lu, 2026-08-03): leave it.**
+1.9% of targets, and a Random Forest tolerates that much label noise; gating on
+`unknown_frac` would trade measured windows for a threshold nobody has evidence for. Recorded
+because it is a *silent* asymmetry, not because it is currently harmful: `unknown_frac` is
+carried on every window, so if per-rev macro-F1 ever splits along it, this is the first place
+to look. Revisit if the window length grows — a 4 s window swallows more of each `-1` stretch.
 
 ### 5.3 rev2 label encoding **[measured]**
 `annotated_loco_rev2_trial_1.csv`: `int64`, no nulls, three codes — `10` (93.7%), `0` (5.6%),

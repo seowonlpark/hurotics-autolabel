@@ -75,7 +75,15 @@ RATE_TOLERANCE = 0.05
 # Gaps fall anywhere, unpredictably. The segment — a continuous run between gaps —
 # is therefore the unit of analysis, not the file. Nothing is ever resampled
 # across a gap: that would invent data that was never measured.
-MIN_SEGMENT_SAMPLES = 100  # 1 s at canonical rate; shorter runs are recorded, not used
+#
+# The floor is a DURATION, not a sample count. It was 100 source rows, described as
+# "1 s at canonical rate" — true only in the ~100 Hz era. At 500 Hz the same constant
+# meant 0.2 s, so the rule silently loosened by 5x exactly where the data is densest:
+# `annotated_loco_rev6_trial_3` carried a 238-row / 500 Hz segment (0.48 s) through as
+# usable, into data/clean and into clean_report.md's usable minutes, despite being too
+# short to yield even one analysis window. A threshold whose meaning depends on the
+# rate era is a rate confound in the segment filter (§2.1).
+MIN_SEGMENT_S = 1.0  # shorter runs are recorded, not used
 
 # Anti-aliasing is not optional when downsampling. Dropping every 5th sample folds
 # everything above 50 Hz into the passband — heel-strike transients and rig

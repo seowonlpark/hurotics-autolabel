@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from stages.s1_clean.census import read_header, strip_prefix
+from stages.s1_clean.resample import segment_at_gaps
 from stages.s2_ml.dataset import STAND, TIME_COL, TRAIN_CLASSES, WALK, _read_raw, find_trials
 from stages.s2_ml.predict import labeled_runs
 from stages.s2_ml.taxonomy import ERROR_BUCKETS, aggregate, bucket_errors
@@ -118,8 +119,16 @@ def main() -> None:
         gt = ann["Label"].to_numpy()
         pred = np.array([mapping[int(v)] for v in raw[LOCO_COL].to_numpy()])
         t = raw["Time"].to_numpy(float)
-        for g, pr, tt in labeled_runs(gt, pred, t):
-            per_run.append(bucket_errors(g, pr, tt))
+        # Segment at gaps first, exactly as the classifier path does (`dense_predict_trial`
+        # groups by `segment`). The taxonomy is defined per gap-free segment: a segment
+        # boundary IS a recording boundary, which is what `edge_omission` is for. Scoring
+        # the incumbent over the whole file would let a predicted run straddle a gap,
+        # inflating its `dur_ms` past the flicker threshold and inventing flanks that were
+        # never recorded — and the comparison this module exists to make would be between
+        # two different scoring pipelines, not two predictors.
+        for a, b in segment_at_gaps(t):
+            for g, pr, tt in labeled_runs(gt[a:b], pred[a:b], t[a:b]):
+                per_run.append(bucket_errors(g, pr, tt))
 
     agg = aggregate(per_run)
     print(f"\n[loco] row accuracy: {agg['row_accuracy']:.4f}")

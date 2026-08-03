@@ -165,9 +165,20 @@ def run_experiment(spec: ExperimentSpec, trials=None, *, taxonomy: bool = False,
     validate_spec(spec)
     trials = trials if trials is not None else load_dataset()
     default = WindowSpec()
+    # Stride falls back to the CHAMPION'S stride, never to `window_s`. Deriving it from
+    # the window is what the field comment above forbids, and it was the behaviour here
+    # until 2026-08-03: a 4 s proposal silently got a 4 s stride, halving the training
+    # set, so "longer window" and "half the data" moved together and neither could be
+    # credited. Holding stride fixed keeps N roughly constant and isolates the variable.
+    #
+    # The cost is overlap: a 4 s window at a 2 s stride shares half its samples with its
+    # neighbour, so N overstates the independent sample count and CV spread reads tighter
+    # than it is. That is a precision claim, not a leakage one — CV groups by rev, and
+    # overlapping windows are neighbours inside one trial, so no duplicate ever straddles
+    # the fold boundary. PROMOTION_MARGIN is what guards against ratcheting on that noise.
     wspec = WindowSpec(
         window_s=spec.window_s if spec.window_s else default.window_s,
-        stride_s=spec.stride_s if spec.stride_s else (spec.window_s or default.stride_s),
+        stride_s=spec.stride_s if spec.stride_s else default.stride_s,
     )
     windows = build_windows(trials, wspec)
 

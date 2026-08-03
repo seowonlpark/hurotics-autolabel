@@ -112,6 +112,11 @@ def main() -> None:
     ap.add_argument("--out", default="runs/s2_ml")
     ap.add_argument("--window-s", type=float, default=None,
                     help="window length in seconds (§9 open tradeoff)")
+    ap.add_argument("--window-stride-s", type=float, default=None,
+                    help="windowing stride in seconds; independent of --window-s on "
+                         "purpose, so changing the window does not also change the "
+                         "training-set size (see experiment.py). Not --stride-s, which "
+                         "is the inference stride.")
     ap.add_argument("--taxonomy", action="store_true",
                     help="also run the row-level error taxonomy via dense inference (slow)")
     ap.add_argument("--stride-s", type=float, default=DEFAULT_INFERENCE_STRIDE_S,
@@ -121,7 +126,9 @@ def main() -> None:
     out_dir = (REPO_ROOT / args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    spec = WindowSpec(window_s=args.window_s, stride_s=args.window_s) if args.window_s else WindowSpec()
+    default = WindowSpec()
+    spec = WindowSpec(window_s=args.window_s or default.window_s,
+                      stride_s=args.window_stride_s or default.stride_s)
     trials = load_dataset()
     windows = build_windows(trials, spec)
     feats = feature_columns(windows)
@@ -135,7 +142,9 @@ def main() -> None:
     y, oof = cross_validate(train_df, feats)
     result = evaluate(y, oof, groups=train_df["rev"].to_numpy(),
                       unknown_frac=train_df["unknown_frac"].to_numpy())
-    trans = transition_report(train_df, oof)
+    # Stride passed explicitly: train_df has had its `transition` windows removed, so
+    # window adjacency has to be judged against the clock, not array position.
+    trans = transition_report(train_df, oof, stride_ms=spec.stride_s * 1000.0)
 
     print(f"[s2] leave-one-rev-out macro-F1 = {result.macro_f1:.4f}  "
           f"(acc {result.accuracy:.4f}, balanced {result.balanced_accuracy:.4f})")

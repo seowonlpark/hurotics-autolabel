@@ -12,12 +12,17 @@ to reward that.
 `-1` (human-unknown) never enters training and is excluded from the metrics consistently
 (§7), but its share is reported so a future confidence signal can be scored against it.
 
-SCOPE NOTE: §7 also specifies a precedence-ordered MECE error taxonomy
-(correct -> omission -> flicker -> late -> early -> steady_confusion -> remainder).
-Its per-category operational semantics are not written down anywhere in this repo, so
-this module implements the parts that are unambiguous — per-class rates, the confusion
-matrix, and transition timing (which underpins late/early/flicker) — and deliberately
-does NOT invent the full partition. See `transition_report`.
+SCOPE NOTE: §7's precedence-ordered MECE row-level taxonomy is NOT here — it lives in
+`taxonomy.py`, ported verbatim from `locoeval/diagnose.py`, and is fed row-level
+predictions by `predict.py`. (An earlier version of this note said its semantics were
+"not written down anywhere in this repo" and listed a chain ending in `remainder`;
+both were wrong — `steady_confusion` absorbs what precedence leaves, and `omission`
+splits three ways. See DOMAIN_NOTES §7.)
+
+What stays here is the WINDOW-level view: per-class rates, the confusion matrix, and
+`transition_report`'s timing counts. Window-level and row-level are different
+resolutions of the same question and are not interchangeable — a 2 s window cannot
+express a 200 ms flicker (see `taxonomy.py`).
 """
 
 from __future__ import annotations
@@ -112,12 +117,44 @@ def evaluate(y_true: np.ndarray, y_pred: np.ndarray,
     )
 
 
-def transition_report(df: pd.DataFrame, y_pred: np.ndarray) -> dict:
-    """Timing behaviour around true state changes — the substrate for late/early/flicker.
+def _contiguous_chunks(g: pd.DataFrame, stride_ms: float) -> list[pd.DataFrame]:
+    """Split one (rev, trial, segment) group where windows are not actually adjacent.
 
-    Reported as raw counts, not as the §7 taxonomy: the taxonomy's precedence rules are
-    not specified in this repo, and guessing them would produce numbers that look
-    official while meaning something nobody agreed to.
+    The caller hands us a FILTERED frame — `TRANSITION` windows have already been
+    dropped, because they are not training targets. Their rows are gone but the time
+    they occupied is not, so two windows that are neighbours in the array can be
+    seconds apart on the clock. Treating them as adjacent is §11 item 2 ("a bout
+    analysis deleted UNKNOWNs *then* computed runs, silently merging across gaps") —
+    and, measured on the current corpus, it merged 213 of 244 counted boundaries.
+
+    So adjacency is decided by the clock, never by array position. A neighbour more
+    than 1.5 strides away means at least one window was removed in between.
+    """
+    t = g["t_start_ms"].to_numpy(float)
+    cuts = np.flatnonzero(np.diff(t) > 1.5 * stride_ms) + 1
+    bounds = [0, *cuts.tolist(), len(g)]
+    return [g.iloc[a:b] for a, b in zip(bounds[:-1], bounds[1:])]
+
+
+def infer_stride_ms(df: pd.DataFrame) -> float:
+    """Smallest positive window spacing in the frame — the stride, when anything survives."""
+    d = np.diff(np.sort(df["t_start_ms"].to_numpy(float)))
+    d = d[d > 0]
+    return float(d.min()) if d.size else 0.0
+
+
+def transition_report(df: pd.DataFrame, y_pred: np.ndarray,
+                      stride_ms: float | None = None) -> dict:
+    """Timing behaviour around true state changes, at WINDOW resolution.
+
+    The §7 row-level partition is `taxonomy.py`'s; this is the cheap window-level view
+    that comes free with the CV predictions. Read it as such: its unit is one window,
+    so it can neither see a 200 ms flicker nor place a boundary finer than one stride.
+
+    Measured only across genuinely adjacent windows (`_contiguous_chunks`). Boundaries
+    that fall across a removed window are excluded and COUNTED, not silently dropped —
+    a large `merged_boundaries_excluded` means most transitions live in the windows
+    this split threw away, which is itself the finding.
 
     - `flicker_rate`: predicted switches per window inside label-steady runs. A steady
       truth run should produce zero switches; every switch is spurious.
@@ -126,32 +163,43 @@ def transition_report(df: pd.DataFrame, y_pred: np.ndarray) -> dict:
     """
     d = df.reset_index(drop=True).copy()
     d["pred"] = y_pred
-    flick_switch = flick_windows = 0
+    stride = stride_ms if stride_ms else infer_stride_ms(d)
+    flick_switch = flick_windows = excluded = 0
     offsets: list[int] = []
 
     for (_rev, _trial, _seg), g in d.groupby(["rev", "trial", "segment"], sort=True):
         g = g.sort_values("t_start_ms")
-        truth = g["label"].to_numpy()
-        pred = g["pred"].to_numpy()
-        if truth.size < 2:
+        if stride <= 0:
             continue
+        chunks = _contiguous_chunks(g, stride)
+        # A label change ACROSS a chunk boundary is a real transition we cannot time.
+        for prev, nxt in zip(chunks[:-1], chunks[1:]):
+            excluded += int(prev["label"].iloc[-1] != nxt["label"].iloc[0])
 
-        t_switch = np.flatnonzero(truth[1:] != truth[:-1]) + 1
-        p_switch = np.flatnonzero(pred[1:] != pred[:-1]) + 1
+        for chunk in chunks:
+            truth = chunk["label"].to_numpy()
+            pred = chunk["pred"].to_numpy()
+            if truth.size < 2:
+                continue
 
-        steady = np.ones(truth.size - 1, dtype=bool)
-        for s in t_switch:                      # exclude the true boundary neighbourhood
-            steady[max(0, s - 2):min(steady.size, s + 1)] = False
-        flick_switch += int(np.sum((pred[1:] != pred[:-1]) & steady))
-        flick_windows += int(steady.sum())
+            t_switch = np.flatnonzero(truth[1:] != truth[:-1]) + 1
+            p_switch = np.flatnonzero(pred[1:] != pred[:-1]) + 1
 
-        for s in t_switch:
-            if p_switch.size:
-                offsets.append(int(p_switch[np.argmin(np.abs(p_switch - s))] - s))
+            steady = np.ones(truth.size - 1, dtype=bool)
+            for s in t_switch:                  # exclude the true boundary neighbourhood
+                steady[max(0, s - 2):min(steady.size, s + 1)] = False
+            flick_switch += int(np.sum((pred[1:] != pred[:-1]) & steady))
+            flick_windows += int(steady.sum())
+
+            for s in t_switch:
+                if p_switch.size:
+                    offsets.append(int(p_switch[np.argmin(np.abs(p_switch - s))] - s))
 
     off = np.array(offsets) if offsets else np.array([], dtype=int)
     return {
         "true_transitions": int(off.size),
+        "merged_boundaries_excluded": excluded,
+        "stride_ms": stride,
         "flicker_rate": float(flick_switch / flick_windows) if flick_windows else 0.0,
         "flicker_switches": flick_switch,
         "boundary_error_windows": {
@@ -190,13 +238,18 @@ def render(result: EvalResult, transitions: dict | None = None, title: str = "lo
     if transitions:
         b = transitions["boundary_error_windows"]
         lines += [
-            "", "## Transition behaviour", "",
-            f"- true transitions: **{transitions['true_transitions']}**",
+            "", "## Transition behaviour (window resolution)", "",
+            f"- timeable transitions: **{transitions['true_transitions']}**"
+            f"  ·  excluded as non-adjacent: **{transitions.get('merged_boundaries_excluded', 0)}**",
             f"- flicker rate (spurious switches per steady window): **{transitions['flicker_rate']:.4f}**",
             f"- boundary error (windows): median {b['median']:+.1f}, mean|err| {b['mean_abs']:.2f}",
             f"- early {b['early']} · on-time {b['on_time']} · late {b['late']}",
             "",
-            "*Not the §7 taxonomy — its precedence semantics are unspecified in this repo.*",
+            "*Window-level, so a boundary resolves no finer than one stride and a sub-window*",
+            "*flicker is inexpressible. The §7 row-level partition is `taxonomy.py`, scored on*",
+            "*dense inference. Excluded boundaries fall inside `transition` windows, which are*",
+            "*not training targets — a large count means the transitions live where this split*",
+            "*cannot see them.*",
         ]
     return "\n".join(lines)
 
