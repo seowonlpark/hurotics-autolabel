@@ -59,5 +59,117 @@
     "window_s": 2.0,
     "n_train_windows": 1078,
     "macro_f1_cv": 0.5
+  },
+  "s2_ml_abl_bottom8": {
+    "note": "Feature ablation of the 42-feature spec: the bottom 8 features by importance dropped. REJECTED -- macro-F1 0.9193 -> 0.9176; the regression is the zeroing half of the set, not the moments half. Low importance is not droppability (champion_spec.json rejected[1]). Metrics archived 2026-08-04 ahead of a runs/ cleanup; champion.joblib is gitignored and is not preserved.",
+    "ablation_of": "extratrees400_all42",
+    "model": "ExtraTreesClassifier",
+    "params": {
+      "n_estimators": 400,
+      "random_state": 0,
+      "n_jobs": -1,
+      "class_weight": "balanced"
+    },
+    "n_features": 34,
+    "dropped_features": [
+      "L_ang_med_rest",
+      "L_angvel_LPF_mean",
+      "L_angvel_kurt",
+      "L_angvel_peakratio",
+      "R_angvel_LPF_mean",
+      "R_angvel_kurt",
+      "R_angvel_peakratio",
+      "R_cycle_s"
+    ],
+    "window_s": 2.0,
+    "n_train_windows": 5984,
+    "macro_f1_cv": 0.9176416324324609,
+    "loro": {
+      "macro_f1": 0.9176416324324609,
+      "accuracy": 0.9615641711229946,
+      "balanced_accuracy": 0.8989033626146201,
+      "n": 5984
+    },
+    "per_rev_macro_f1": {
+      "rev13": 0.9664296885293797,
+      "rev2": 0.8894221660877801,
+      "rev3": 0.9686843884559269,
+      "rev4": 0.9540051679586563,
+      "rev5": 0.855328798185941,
+      "rev6": 0.9136009744374762,
+      "rev7": 0.9071267868886506
+    }
+  },
+  "s2_ml_abl_moments": {
+    "note": "Feature ablation of the 42-feature spec (extratrees400_all42): the four angular-velocity higher moments dropped. This is the measurement BEHIND the shipped 38-feature champion -- macro-F1 0.9193 -> 0.9196, inside the +/-0.0003 five-seed noise band, so the drop is for parsimony, not for a gain (see the rationale in stages/s2_ml/champion_spec.json). Metrics archived 2026-08-04 ahead of a runs/ cleanup; champion.joblib is gitignored and is not preserved.",
+    "ablation_of": "extratrees400_all42",
+    "model": "ExtraTreesClassifier",
+    "params": {
+      "n_estimators": 400,
+      "random_state": 0,
+      "n_jobs": -1,
+      "class_weight": "balanced"
+    },
+    "n_features": 38,
+    "dropped_features": [
+      "L_angvel_kurt",
+      "L_angvel_peakratio",
+      "R_angvel_kurt",
+      "R_angvel_peakratio"
+    ],
+    "window_s": 2.0,
+    "n_train_windows": 5984,
+    "macro_f1_cv": 0.9195582010216896,
+    "loro": {
+      "macro_f1": 0.9195582010216896,
+      "accuracy": 0.9623997326203209,
+      "balanced_accuracy": 0.9013454753911756,
+      "n": 5984
+    },
+    "per_rev_macro_f1": {
+      "rev13": 0.9664296885293797,
+      "rev2": 0.8927229969508315,
+      "rev3": 0.9686843884559269,
+      "rev4": 0.9540051679586563,
+      "rev5": 0.855328798185941,
+      "rev6": 0.9146707806039343,
+      "rev7": 0.9111276455026456
+    }
+  },
+  "s2_ml_abl_zeroing": {
+    "note": "Feature ablation of the 42-feature spec: the zeroing family dropped (L/R_angvel_LPF_mean, L/R_ang_med_rest). REJECTED -- macro-F1 0.9193 -> 0.9168. The per-subject cuff-zeroing argument that justified the sibling repo's static-offset drop does not transfer to this basis; these carry real signal (champion_spec.json rejected[0]). Metrics archived 2026-08-04 ahead of a runs/ cleanup; champion.joblib is gitignored and is not preserved.",
+    "ablation_of": "extratrees400_all42",
+    "model": "ExtraTreesClassifier",
+    "params": {
+      "n_estimators": 400,
+      "random_state": 0,
+      "n_jobs": -1,
+      "class_weight": "balanced"
+    },
+    "n_features": 38,
+    "dropped_features": [
+      "L_ang_med_rest",
+      "L_angvel_LPF_mean",
+      "R_ang_med_rest",
+      "R_angvel_LPF_mean"
+    ],
+    "window_s": 2.0,
+    "n_train_windows": 5984,
+    "macro_f1_cv": 0.9168384662347957,
+    "loro": {
+      "macro_f1": 0.9168384662347957,
+      "accuracy": 0.9612299465240641,
+      "balanced_accuracy": 0.8977310296720644,
+      "n": 5984
+    },
+    "per_rev_macro_f1": {
+      "rev13": 0.9664296885293797,
+      "rev2": 0.8848905441210517,
+      "rev3": 0.9686843884559269,
+      "rev4": 0.9540051679586563,
+      "rev5": 0.855328798185941,
+      "rev6": 0.9137559120729517,
+      "rev7": 0.9071267868886506
+    }
   }
 }
