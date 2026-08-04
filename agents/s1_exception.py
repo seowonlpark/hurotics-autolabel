@@ -1,16 +1,21 @@
-"""S1 exception agent: triage the deterministic layer's exception queue.
-
-The clean stage MEASURES and quarantines deterministically. This agent JUDGES the
-result: for each exception, is it a KNOWN failure mode (already in DOMAIN_NOTES), a
-NOVEL one worth surfacing, or one that needs a human before the pipeline can
-proceed? It never touches data and never recomputes — it reads the run's exception
-records + DOMAIN_NOTES and returns a verdict as text; this module's deterministic
-wrapper writes the review. (Non-negotiable: code does the work, agents judge it.)
-
-Queue = genuine exceptions only (whole-file quarantines, gyro axis anomalies, yaw
-drift flags). Routine gyro-abstentions are designed-normal behaviour, so they are
-summarized as context, not triaged item by item.
-"""
+# S1 exception triage (read-only): judge the clean stage's exception queue, recompute nothing.
+#
+# The clean stage MEASURES and refuses to conclude. What it leaves behind is a pile of flags —
+# a quarantined file, a gyro axis that disagrees with the documented convention, a yaw channel
+# marked drift-contaminated — and each one needs two answers that live on different axes: does
+# DOMAIN NOTES account for it, and is a person needed before the data can be used. Collapsing
+# those into one choice was the original design and it was wrong: a documented cause can still
+# need a re-export, and an unexplained anomaly can be inert. `collapse()` derives the
+# disposition from the pair, in one place, so two runs cannot disposition the same item
+# differently.
+#
+# The load-bearing part is `handled`. Every queue item carries a machine-derived {value, why}
+# computed from the ACTUAL downstream consumers rather than from prose, because this repo has
+# already been bitten by the difference: a note saying a flag is "recorded" is not evidence that
+# anything reads it, and `drift_contaminated` is exactly that case — inert, not honoured. The
+# prompt tells the agent to follow `handled` over the notes and mark the disagreement
+# `contradicts`, which turns "the docs are stale" into a queue item instead of a silent
+# assumption.
 
 from __future__ import annotations
 
@@ -21,13 +26,7 @@ from agents.base import MODEL_CHEAP, AgentSpec, extract_json_array
 from stages.s2_ml.transform import SAGITTAL_DEG_AXIS_BY_VARIANT
 
 REVIEW_FILENAME = "exceptions_review.jsonl"
-
-# Deg axes any known hardware revision treats as sagittal — i.e. the only ones the
-# feature path can read. Derived from the consumer, not restated, so a new variant
-# mapping cannot make this stale (§6.2).
 _SAGITTAL_CANDIDATE_AXES = frozenset(SAGITTAL_DEG_AXIS_BY_VARIANT.values())
-
-# The raw->rev* feature path (`transform.py:raw_to_features`) loops L and R only.
 _DATA_PATH_SIDES = frozenset({"L", "R"})
 
 SYSTEM_PROMPT = (
@@ -87,27 +86,23 @@ S1_EXCEPTION_AGENT = AgentSpec(
 def _handled(value: bool, why: str) -> dict:
     return {"value": value, "why": why}
 
-
+# A quarantined file is EXCLUDED, and excluded is not repaired: downstream is safe because the
+# file never reaches data/clean, but the recording itself is still lost until someone re-exports
+# it. `handled=False` says that, where "it is out of the corpus" would have read as handled.
 def _handled_quarantine() -> dict:
-    """A quarantined file is EXCLUDED, which is not the same as repaired."""
     return _handled(False,
                     "the file is kept out of data/clean so downstream is safe, but the "
                     "pipeline cannot repair it — recovery needs a person (§2.6)")
 
-
+# Does the pipeline handle this end to end, or is a person needed? The question is NOT "is the
+# axis wrong" — it is "does anything the feature path reads touch this axis". Both exits below
+# are `True` for the same reason: an anomaly on a channel no consumer opens cannot hurt a
+# number. Note the third exit is `False` even though `check_axis_trust` hard-fails the file:
+# FATAL IS NOT HANDLED. Nothing is corrupted, and nothing is featurized either.
 def _handled_axis_anomaly(side: str, conflicts: list[str]) -> dict:
-    """Is this permutation conflict on a channel the feature path actually reads?
-
-    `transform.py` resolves the sagittal Deg axis per VARIANT, then checks it against
-    this file's own record (`check_axis_trust`). A conflict on a channel it reads is
-    now FATAL, not silent — but fatal is not handled: the file cannot be featurized
-    until a person resolves it. A conflict on a channel it never reads stays inert.
-    That distinction is code, not prose; the notes' "recorded, not reordered" says only
-    that S1 did not mutate, never that a consumer honours the record.
-    """
     if side not in _DATA_PATH_SIDES:
         return _handled(True,
-                        f"the raw->rev* feature path reads L/R only, never {side}; no "
+                        f"the raw->lpf_view feature path reads L/R only, never {side}; no "
                         f"consumer reads this side's gyro axes")
     reachable = sorted(set(conflicts) & _SAGITTAL_CANDIDATE_AXES)
     if not reachable:
@@ -121,9 +116,12 @@ def _handled_axis_anomaly(side: str, conflicts: list[str]) -> dict:
                     f"so nothing is corrupted, but nothing is featurized either until "
                     f"someone resolves the axis")
 
-
+# The `drift_contaminated` flag has NO consumer — nothing in the pipeline reads it. That is
+# tolerable only where the flagged channel is one no feature reads either, which §4.2 predicts is
+# the yaw-like `Deg_Z`. So the split below is between "inert" and "unhandled", never between
+# "honoured" and "not": on `Deg_Z` the flag costs nothing because the feature path uses the
+# sagittal Deg axis and its gyro rate; on any other channel the flag is a warning nothing acts on.
 def _handled_drift(channel: str) -> dict:
-    """No code consumes `drift_contaminated`; §4.2's "must consult" is policy only."""
     if channel.endswith("_Deg_Z"):
         return _handled(True,
                         "nothing in the pipeline reads the drift flag, but nothing "
@@ -133,13 +131,12 @@ def _handled_drift(channel: str) -> dict:
                     f"{channel} is not the yaw-like Deg_Z axis §4.2 predicts, and no "
                     f"code consumes the drift flag, so nothing would exclude it")
 
-
+# Genuine exceptions from a clean run's artifacts. Routine gyro-abstentions are COUNTED and
+# summarized rather than queued item by item: they are designed-normal behaviour (a static file
+# falling back to the documented convention), and 19 of them would bury the handful of real
+# anomalies in noise. The count still reaches the agent through `build_prompt`, so a corpus where
+# that number itself looks wrong is still reportable.
 def build_queue(clean_run_dir: Path) -> tuple[list[dict], dict]:
-    """Extract genuine exceptions from a clean run's artifacts.
-
-    Routine gyro-abstentions are counted, not queued — they are designed-normal
-    (static files falling back to the documented convention), not exceptions.
-    """
     queue: list[dict] = []
 
     q_path = clean_run_dir / "quarantine.jsonl"
@@ -169,8 +166,6 @@ def build_queue(clean_run_dir: Path) -> tuple[list[dict], dict]:
                     "type": "gyro_axis_anomaly",
                     "file": o["path"],
                     "side": side,
-                    # `conflicts_with_documented` is WHY this is an anomaly — without
-                    # it the agent is judging a permutation with no stated grievance.
                     "detail": {k: rec[k] for k in (
                         "gyro_axis_by_deg_axis", "conflicts_with_documented",
                         "is_bijection", "unit", "r")},

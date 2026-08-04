@@ -1,8 +1,8 @@
-"""Regression guard for the raw -> rev2 bridge.
+"""Regression guard for the raw -> `lpf_view` bridge.
 
     python -m stages.s2_ml.verify_transform
 
-The model trains on the labeled rev2 features but runs on raw CSVs. If
+The model trains on the labeled `lpf_view` features but runs on raw CSVs. If
 `transform.raw_to_features` ever stops reproducing the labeled columns, the classifier
 silently sees a different distribution than it learned — train/serve skew that no test
 downstream would catch, because both sides would still "look like" angles.
@@ -111,7 +111,7 @@ def main() -> None:
     if worst > TOLERANCE:
         print("FAIL: the bridge no longer reproduces the labeled features.")
         sys.exit(1)
-    print("PASS: raw -> rev2 reproduction is exact to float roundoff.")
+    print("PASS: raw -> lpf_view reproduction is exact to float roundoff.")
 
 
 if __name__ == "__main__":

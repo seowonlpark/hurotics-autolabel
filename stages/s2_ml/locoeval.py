@@ -4,7 +4,7 @@ DOMAIN_NOTES §7: this layer emits objective numbers and NO opinion. Every judge
 "is this good", "should this ship" — belongs above it. Keeping that separation is what
 stops a model from being adopted because a narrative sounded convincing.
 
-Headline metric is **macro-F1** (§5.4): the corpus is ~82% walking, so a "predict walk
+Headline metric is **macro-F1** (§5.4): the corpus is ~86% walking, so a "predict walk
 always" model scores >0.8 accuracy while being useless. Macro-F1 refuses to reward that.
 
 The second headline is the **selective curve**. Once the classifier may abstain, a lone
@@ -62,6 +62,11 @@ class EvalResult:
     confusion: dict[str, dict[str, int]]
     unknown_frac_mean: float
     per_rev_macro_f1: dict[str, float] = field(default_factory=dict)
+    # Window-level accuracy on the same held-out rev, reported ALONGSIDE macro-F1 and never
+    # instead of it: on an ~86% walk corpus accuracy alone rewards the degenerate model
+    # (§5.4), while macro-F1 alone hides how much of a subject's data is actually being
+    # called right. The pair is readable; either half on its own is not.
+    per_rev_accuracy: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -94,11 +99,14 @@ def evaluate(y_true: np.ndarray, y_pred: np.ndarray,
     }
 
     per_rev: dict[str, float] = {}
+    per_rev_acc: dict[str, float] = {}
     if groups is not None:
         g = np.asarray(groups)
         for name in pd.unique(g):
             m = g == name
-            per_rev[str(name)] = evaluate(y_true[m], y_pred[m]).macro_f1
+            sub = evaluate(y_true[m], y_pred[m])
+            per_rev[str(name)] = sub.macro_f1
+            per_rev_acc[str(name)] = sub.accuracy
 
     return EvalResult(
         n=int(y_true.size),
@@ -109,6 +117,7 @@ def evaluate(y_true: np.ndarray, y_pred: np.ndarray,
         confusion=confusion,
         unknown_frac_mean=float(np.mean(unknown_frac)) if unknown_frac is not None else 0.0,
         per_rev_macro_f1=per_rev,
+        per_rev_accuracy=per_rev_acc,
     )
 
 
@@ -166,9 +175,12 @@ def render(result: EvalResult, curve: list[dict] | None = None,
         lines.append(f"| **{t}** | {row['stand']:,} | {row['walk']:,} |")
 
     if result.per_rev_macro_f1:
-        lines += ["", "per-rev macro-F1 (each rev = one subject/day, §7):", ""]
+        lines += ["", "per-rev held-out scores (each rev = one subject/day, §7):", "",
+                  "| rev | macro-F1 | window accuracy |", "|---|---|---|"]
         for rev, f1 in sorted(result.per_rev_macro_f1.items()):
-            lines.append(f"- `{rev}`: {f1:.4f}")
+            acc = result.per_rev_accuracy.get(rev)
+            acc_s = f"{acc * 100:.2f}%" if acc is not None else "-"
+            lines.append(f"| `{rev}` | {f1:.4f} | {acc_s} |")
 
     if curve:
         lines += ["", "## Selective accuracy", "",

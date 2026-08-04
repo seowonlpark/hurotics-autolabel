@@ -1,8 +1,12 @@
 """S2 dataset: load the labeled rev* trials onto the canonical grid, split by rev.
 
 The only labeled data is `data/labeled/rev*/csv/annotated_loco_rev*_trial_*.csv`
-(DOMAIN_NOTES §5.7): the derived rev2 view — four rotational features
+(DOMAIN_NOTES §5.7): the `lpf_view` family — four rotational features
 (`L/R_ang_LPF`, `L/R_angvel_LPF`) + `Label` (0=stand, 10=walk, -1=human-unknown).
+
+**Eight revisions, not one:** rev2, rev3, rev4, rev5, rev6, rev7, rev8, rev13. They all
+carry the same six columns, which is why the family is named for the representation and
+not for a revision (`config.FAMILY_MARKERS`).
 
 Two disciplines carried straight from S1, because they are not optional here either:
   - **Canonical grid.** rev* logs at ~494 Hz with jitter (§7). Every trial is put on
@@ -28,7 +32,8 @@ from stages.s1_clean.resample import resample_file
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LABELED_DIR = REPO_ROOT / "data" / "labeled"
 
-# The rev2 derived view. Names carry stray whitespace in some trials — normalized on read.
+# The `lpf_view` family's four channels. Names carry stray whitespace in some trials —
+# normalized on read.
 FEATURES = ("L_ang_LPF", "R_ang_LPF", "L_angvel_LPF", "R_angvel_LPF")
 LABEL_COL = "Label"
 TIME_COL = "Time"
@@ -84,13 +89,40 @@ def find_trials(labeled_dir: Path = LABELED_DIR,
                 excluded: set[tuple[str, int]] | None = None) -> list[Path]:
     """Every labeled trial, minus the quarantined ones.
 
-    `stages.s2_ml.audit` proposes exclusions with evidence; they take effect only once
-    written into `EXCLUDED_TRIALS` by hand. Pass `excluded=set()` to load the raw corpus,
-    which is what the audit itself does so it can still see what it flagged.
+    `stages.s3_physics.label_audit` proposes exclusions with evidence; they take effect
+    only once written into `EXCLUDED_TRIALS` by hand. Pass `excluded=set()` to load the raw
+    corpus, which is what the audit itself does so it can still see what it flagged.
     """
     excluded = EXCLUDED_TRIALS if excluded is None else excluded
     return sorted(p for p in labeled_dir.rglob("annotated_loco_*_trial_*.csv")
                   if (rev_of(p), trial_of(p)) not in excluded)
+
+
+# The input channels an experiment spec may ask a trial for. In the sibling repo this was
+# FEATURES plus an optional yaw channel, and the difference mattered: asking for the optional
+# one silently shrank the corpus to the trials that carried it. Here every labeled trial
+# carries exactly the sagittal four and nothing else, so the set is FEATURES itself and a
+# spec has no channel choice to make. `experiment.validate_spec` still checks against this
+# name, which is what makes the day a richer corpus arrives a one-line change rather than a
+# rediscovery of why the check existed.
+SELECTABLE_FEATURES = FEATURES
+
+
+def partition_trials(features: tuple[str, ...] = FEATURES,
+                     labeled_dir: Path = LABELED_DIR) -> tuple[list[Path], list[Path]]:
+    """Split the corpus by whether a trial carries every requested channel.
+
+    Reads only the header, so it costs nothing. Which trials lack a channel is a fact worth
+    REPORTING rather than discovering as a crash mid-fit — and a challenger measured on a
+    quietly smaller corpus is not comparable to a champion measured on the whole one, which
+    is the failure this exists to make visible.
+    """
+    want = {TIME_COL, *features, LABEL_COL}
+    have, lack = [], []
+    for p in find_trials(labeled_dir):
+        cols = {c.strip() for c in pd.read_csv(p, nrows=0).columns}
+        (have if want <= cols else lack).append(p)
+    return have, lack
 
 
 @dataclass
@@ -108,7 +140,9 @@ class Trial:
 
 def _read_raw(path: Path) -> pd.DataFrame:
     """Read a trial, strip header whitespace, keep Time + 4 features + Label by name."""
-    df = pd.read_csv(path)
+    # index_col=False for the same reason as the raw readers: no file in the labeled family
+    # is ragged today, and nothing should quietly start shifting if one ever is.
+    df = pd.read_csv(path, index_col=False)
     df.columns = [c.strip() for c in df.columns]
     want = [TIME_COL, *FEATURES, LABEL_COL]
     missing = [c for c in want if c not in df.columns]
@@ -171,21 +205,3 @@ def census(trials: list[Trial]) -> pd.DataFrame:
     return (df.groupby(["split", "rev"], as_index=False)
               [["rows", "stand", "walk", "unknown"]].sum()
               .sort_values(["split", "rev"]))
-
-
-def main() -> None:
-    trials = load_dataset()
-    c = census(trials)
-    print(f"[s2] loaded {len(trials)} trials from {LABELED_DIR}")
-    print(c.to_string(index=False))
-    tot = c.groupby("split")[["rows", "stand", "walk", "unknown"]].sum()
-    print("\nby split:")
-    print(tot.to_string())
-    src = sum(t.n_source_rows for t in trials)
-    dropped = sum(t.dropped_rows for t in trials)
-    print(f"\naccounting: {src:,} raw rows -> {dropped:,} dropped "
-          f"({100 * dropped / src:.3f}%, all 3.2 startup-burst fragments), rest resampled to 100 Hz")
-
-
-if __name__ == "__main__":
-    main()

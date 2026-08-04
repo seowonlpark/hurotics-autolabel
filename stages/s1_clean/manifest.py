@@ -115,12 +115,13 @@ def profile_file(path: Path, repo_root: Path) -> dict:
             "roles_present": {k: sorted(v) for k, v in sorted(res.roles_present.items())},
             "unknown_names": res.unknown_names,
             "label_columns": res.label_columns,
-            "legacy_algo_columns": res.legacy_algo_columns,
         }
     )
 
     try:
-        df = pd.read_csv(path, encoding="utf-8-sig")
+        # index_col=False: see stages/s1_clean/clean.py — a trailing comma otherwise makes
+        # pandas promote column 0 to the index, shifting every measured column left by one.
+        df = pd.read_csv(path, encoding="utf-8-sig", index_col=False)
         df = df.loc[:, [c for c in df.columns if not c.startswith("Unnamed")]]
     except Exception as exc:
         row["read_error"] = f"body: {exc}"

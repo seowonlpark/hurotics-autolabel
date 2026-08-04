@@ -17,7 +17,8 @@ ROLE_BY_NAME = {
     # 4.1). But units differ per side and axes are swapped — normalized in the clean
     # layer, detected per file. See the "Gyro trust / normalization" section below.
     **{f"{s}_Gyro_{a}": "imu_gyro" for s in ("L", "R", "B") for a in "XYZ"},
-    # Accelerometer = gravity reference. Required for axis/calibration checks.
+    # Accelerometer = gravity reference. Named so the census can account for it; no
+    # calibration check was ever built on it, and it is not in KEEP_MEASURED.
     **{f"{s}_Acc_{a}": "imu_acc" for s in ("L", "R", "B") for a in "XYZ"},
     "L LC": "load_cell",
     "R LC": "load_cell",
@@ -26,28 +27,37 @@ ROLE_BY_NAME = {
     "Hip_Deg_L": "hip_angle",
     "Hip_Deg_R": "hip_angle",
     "Label": "label",
-    # rev2 derived view
-    "L_ang_LPF": "rev2_angle",
-    "R_ang_LPF": "rev2_angle",
-    "L_angvel_LPF": "rev2_angvel",
-    "R_angvel_LPF": "rev2_angvel",
+    # The LPF view's four channels (see FAMILY_MARKERS below).
+    "L_ang_LPF": "lpf_angle",
+    "R_ang_LPF": "lpf_angle",
+    "L_angvel_LPF": "lpf_angvel",
+    "R_angvel_LPF": "lpf_angvel",
 }
 
 # Human ground-truth annotation.
 LABEL_COLUMNS = ("Label",)
 
-# The corpus holds two different products. "Stable prefix across everything" is a
-# meaningless question: raw device logs and the rev2 derived view share only Time.
-# Family is decided by a marker column, and contracts are per family.
+# The corpus holds two SHAPES of file. "Stable prefix across everything" is a meaningless
+# question: they share only `Time`. Family is decided by a marker column, and contracts
+# are per family.
+#
+#   raw_device  what a device writes: the full name-resolved superset.
+#   lpf_view    the four low-pass rotational channels the model eats, and nothing else.
+#
+# Both names describe a REPRESENTATION, not a product. `lpf_view` was `rev2_view` until
+# 2026-08-04; DOMAIN_NOTES 6.1 holds the three reasons that name was wrong and the
+# measurement that made the rename free. One copy of that argument is enough.
 FAMILY_MARKERS = {
     "raw_device": "L_Deg_X",
-    "rev2_view": "L_ang_LPF",
+    "lpf_view": "L_ang_LPF",
 }
 FAMILY_UNKNOWN = "unknown"
 
-# Outdated rule-based algorithm output. Recorded for provenance, never a feature,
-# never ground truth.
-LEGACY_ALGO_COLUMNS = ("loco",)
+# `loco` is outdated rule-based algorithm output: never a feature, never ground truth.
+# It had a LEGACY_ALGO_COLUMNS constant and its own manifest field until 2026-08-04.
+# Both are gone because they were redundant, not because the fact changed: `loco` has no
+# ROLE_BY_NAME entry, so every file carrying it already reports it under `unknown_names`.
+# Its exclusion from the canonical file is stated with the other exclusions further down.
 
 # --- Label encoding ----------------------------------------------------------
 # Two unknowns, opposite in kind. Never merge them.
@@ -96,19 +106,19 @@ DECIMATE_FILTER = "fir"
 NEAREST_ROLES = ("label",)
 
 # --- Gyro trust / normalization ----------------------------------------------
-# DOMAIN_NOTES 4.1b: gyro is reliable (Gyro == d(Deg)/dt) but its UNITS and AXES
-# are inconsistent within one file — B_Gyro is rad/s, L/R_Gyro is deg/s (a silent
-# 57.3x), and d(Deg_Y)/dt tracks Gyro_Z, not Gyro_Y. That is a measurement
-# property, so it is corrected here, in the clean layer, before any feature runs.
+# DOMAIN_NOTES 4.1b: gyro is reliable (Gyro == d(Deg)/dt) but its axes are transposed —
+# d(Deg_Y)/dt tracks Gyro_Z, not Gyro_Y. A measurement property, so it is resolved here,
+# in the clean layer, before any feature runs.
 #
-# It is DETECTED per file, never asserted from the table below: for each side we
-# regress d(Deg_A)/dt (deg/s) against every Gyro axis, for every Deg axis A. The
-# strongest-correlated gyro axis is A's counterpart (recovering the full
-# permutation); the regression slope reveals the unit (~1 -> already deg/s,
-# ~1/57.3 -> rad/s). This doubles as the channel-trust check PLAN S1 requires, and
-# it catches the files that break the corpus-wide rule (e.g. some B/trunk channels
-# map Y->Y, which is not a permutation at all).
-SIDES = ("L", "R", "B")
+# DETECTED per file, never asserted from the table below: for each side, regress
+# d(Deg_A)/dt (deg/s) against every Gyro axis, for every Deg axis A. The
+# strongest-correlated gyro axis is A's counterpart, recovering the permutation; the
+# slope gives the unit (~1 -> already deg/s, ~1/57.3 -> rad/s).
+#
+# L and R only. B/trunk left KEEP_MEASURED on 2026-08-04, and dropping it removed every
+# unit conversion in the corpus: B was the ONLY rad/s side (measured std-ratio 58.2
+# against L/R's 1.009) and the only source of axis anomalies.
+SIDES = ("L", "R")
 GYRO_AXES = "XYZ"
 RAD2DEG = 57.29577951308232
 
@@ -139,7 +149,7 @@ TRUST_R_FLOOR = 0.9
 
 # The documented convention, used only as the abstention fallback — never as the
 # first answer. Measured across the corpus (DOMAIN_NOTES 4.1b).
-DOCUMENTED_GYRO_UNIT = {"L": "deg/s", "R": "deg/s", "B": "rad/s"}
+DOCUMENTED_GYRO_UNIT = {"L": "deg/s", "R": "deg/s"}
 
 # --- Yaw / drift trust -------------------------------------------------------
 # DOMAIN_NOTES 4.2: a channel whose value tracks session TIME is measuring elapsed
@@ -166,30 +176,33 @@ DRIFT_MIN_SEGMENT_S = 5.0      # a segment must span this long for its drift to 
 #   2. Computed values depend on firmware version, so training on them partly
 #      learns which firmware produced the file. That is the era confound baked
 #      straight into the feature set.
+# NARROWED 2026-08-04, 30 columns to 13. The measured-vs-computed rule above is unchanged.
+# What changed is the case for keeping measured channels nothing reads: the superset was
+# justified by "a wide honest table can always be projected down" (§6.1), an argument about
+# a STORED table, and nothing is stored — the canonical-grid parquet went the same day. So
+# `B_*`, `*_Acc_*` and the load cells were read, held in memory and dropped. All recoverable
+# from `data/raw` by name, the same standing `loco` and `L/R_Ref_Force` have below.
+#
+# Dropping `B_*` also emptied the anomaly list: both confident axis anomalies in the corpus
+# were side B, a channel §4.3 calls suspect and the labeled family discards outright, and
+# each one became an item in the PAID exception agent's queue.
 KEEP_MEASURED = (
     "Time",
-    *[f"{s}_{k}_{a}" for s in ("L", "R", "B") for k in ("Deg", "Gyro", "Acc") for a in "XYZ"],
-    "L LC",
-    "R LC",
+    *[f"{s}_{k}_{a}" for s in ("L", "R") for k in ("Deg", "Gyro") for a in "XYZ"],
 )
 
 # Documented exceptions to the measured-only rule. Each needs a reason.
-# Currently EMPTY, and that is the finding, not an oversight (DOMAIN_NOTES 9).
+# Currently EMPTY, and that is the finding, not an oversight: an empty exception dict is a
+# stronger invariant than a populated one -- canonical == measured, no caveat.
 #
-# `Hip_Deg_L`/`Hip_Deg_R` lived here as a "bridge to the open-source gait dataset's
-# Hip_Flex_L/R". Removed 2026-07-20 — the exception failed every test it implied:
-#   - REDUNDANT: corr with same-side Deg_Y is 0.991 (vs ~0.02-0.21 on X/Z). It is
-#     the sagittal angle already kept, re-zeroed.
-#   - NOT a clean function of it: slope ~0.96-0.99 with a per-file offset of -75
-#     to -88 deg and max residual 4-152 deg. The unmodeled remainder IS the
-#     firmware's zeroing convention -- precisely the firmware-version signal the
-#     measured-only rule exists to strip.
-#   - DEAD on 12 of 180 (file, side) pairs: zero-variance, and twice frozen at a
-#     NONZERO constant, which no `!= 0` guard would catch.
-#   - The bridge had no far side: the open dataset is not in the repo (5.7), and
-#     nothing downstream ever read the column.
-# Recoverable by name from data/raw if that dataset ever lands -- same standing as
-# `loco` and `L/R_Ref_Force` below. The mechanism stays; the entry is gone.
+# The one former entry, `Hip_Deg_L/R`, was a "bridge to the open-source gait dataset's
+# Hip_Flex_L/R" and was cut 2026-07-20 for failing every premise of its own exception:
+# redundant at corr 0.991 with the same-side `Deg_Y` already kept, its residual carrying
+# nothing but the firmware's zeroing convention -- the exact signal this rule exists to
+# strip -- dead on 12 of 180 (file, side) pairs, and bridging to a dataset that is not in
+# the repo. DOMAIN_NOTES 9 carries the full measurements; this is the decision, not the
+# derivation. The mechanism stays and the column is recoverable by name from data/raw,
+# same standing as `loco` and `L/R_Ref_Force` below.
 KEEP_EXCEPTIONS: dict[str, str] = {}
 
 # Kept when present: human ground truth travels with the data.
@@ -198,10 +211,6 @@ KEEP_IF_PRESENT = ("Label",)
 # `loco` (outdated algorithm output) and `L/R_Ref_Force` (controller setpoints,
 # commanded not measured) are deliberately excluded. Both remain recoverable from
 # data/raw by name if a benchmark against the old algorithm is ever wanted.
-
-# Parquet, not CSV. Storage cost is a file-format problem, not a column-count
-# problem: ~5-10x smaller, ~10x faster to read, dtypes preserved.
-CLEAN_FORMAT = "parquet"
 
 # --- Session ---------------------------------------------------------------
 # data/raw/<YYYYMMDD[_n]>/<file>.csv — session date comes from the folder.

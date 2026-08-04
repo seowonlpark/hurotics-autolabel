@@ -14,14 +14,6 @@
 | `4bfd6ab2` | raw_device | 83 | 5 | 20251021, 20251215, 20260626 |
 | `86069795` | raw_device | 79 | 2 | 20260601 |
 
-## Stable prefix per family (the real contract)
-
-### raw_device — 45 columns
-
-```
-Time, L_Deg_X, L_Deg_Y, L_Deg_Z, L_Gyro_X, L_Gyro_Y, L_Gyro_Z, L_Acc_X, L_Acc_Y, L_Acc_Z, R_Deg_X, R_Deg_Y, R_Deg_Z, R_Gyro_X, R_Gyro_Y, R_Gyro_Z, R_Acc_X, R_Acc_Y, R_Acc_Z, B_Deg_X, B_Deg_Y, B_Deg_Z, B_Gyro_X, B_Gyro_Y, B_Gyro_Z, B_Acc_X, B_Acc_Y, B_Acc_Z, L LC, R LC, Batt_V, C_A, L_GCP, R_GCP, L_Ref_Force, R_Ref_Force, Hip_Deg_L, Hip_Deg_R, Hip_ROM_L, Hip_ROM_R, Stride Velocity_L, Stride Velocity_R, Stride Length_L, Stride Length_R, Total Gait Length
-```
-
 ## Names that change position within `raw_device`
 
 - `Cadence`: positions [45, 46]

@@ -40,9 +40,11 @@ from stages.s2_ml.dataset import (
     FEATURES,
     HUMAN_UNKNOWN,
     LABEL_COL,
+    STAND,
     TIME_COL,
     TRAIN_CLASSES,
     Trial,
+    WALK,
 )
 from stages.s2_ml.rest import (
     ANGLE_CHANNELS,
@@ -69,8 +71,47 @@ MAX_LAG_S = 1.0
 
 TRANSITION = "transition"
 
+# The tail excluded from each annotated class when measuring the ambiguity band below.
+# 1%, not 5%: at 5% the band narrows to roughly [6.5, 11.9]° and 11 of 41 trials contain
+# no band window at all, which makes the per-trial policy statistic in
+# `s3_physics.label_audit` undefined for a quarter of the corpus. At 1% one trial is empty.
+BAND_TAIL_PCT = 1.0
+
 META_COLUMNS = {"rev", "trial", "split", "segment", "t_start_ms", "start_row",
                 "label", "purity", "unknown_frac", "rest_trusted"}
+
+
+def amplitude_band(minhalf, labels, tail_pct: float = BAND_TAIL_PCT) -> tuple[float, float]:
+    """The interleg-amplitude interval where the two ANNOTATED classes overlap.
+
+    `ileg_minhalf` separates the classes better than anything else measured (§10.1, AUC
+    0.967/0.972) — but not perfectly, and *where* it fails is not noise. Below the low
+    edge, 99% of annotated walking sits above; above the high edge, 99% of annotated
+    standing sits below. Between them **both human labels genuinely occur**, so no
+    amplitude rule separates that region and neither does a model reading amplitude.
+
+    Both edges come from the annotation and one label-free descriptor. **No model output
+    goes into either**, which is what lets `s3_physics.label_audit` use this without
+    forfeiting its model-free property, and what makes a trial's disagreement with the
+    corpus about this band evidence about the LABELS rather than about the classifier.
+
+    Measured 2026-08-03: the band is 2.62–20.34°, holds 32% of windows and 84% of the
+    windows where physics contradicted the annotation — that share was measured on the S4
+    fusion run of that date, and S4 was deleted 2026-08-04; the band itself is label-side
+    and unaffected. The fraction of it annotated
+    `walk` ranges 0.38–1.00 across trials — i.e. the trials do not share a convention here.
+
+    Returns (lo, hi). Degenerate input (either class absent) returns an empty band
+    `(inf, -inf)`, which every `lo <= x <= hi` test reads as "no window is in the band".
+    """
+    minhalf = np.asarray(minhalf, dtype=float)
+    labels = np.asarray(labels)
+    walk = minhalf[(labels == WALK) & np.isfinite(minhalf)]
+    stand = minhalf[(labels == STAND) & np.isfinite(minhalf)]
+    if not len(walk) or not len(stand):
+        return float("inf"), float("-inf")
+    return (float(np.percentile(walk, tail_pct)),
+            float(np.percentile(stand, 100.0 - tail_pct)))
 
 
 @dataclass
@@ -398,21 +439,3 @@ def build_windows(trials: list[Trial], spec: WindowSpec | None = None) -> pd.Dat
 def feature_columns(df: pd.DataFrame) -> list[str]:
     """Feature columns only, never the metadata or the target."""
     return [c for c in df.columns if c not in META_COLUMNS]
-
-
-def main() -> None:
-    from stages.s2_ml.dataset import load_dataset
-
-    spec = WindowSpec()
-    df = build_windows(load_dataset(), spec)
-    pure = df[~df["label"].astype(str).isin([TRANSITION, "None"])]
-    print(f"[s2] window={spec.window_s}s stride={spec.stride_s}s @ {spec.fs_hz} Hz "
-          f"-> {len(df):,} windows, {len(feature_columns(df))} features")
-    print(f"[s2] label-pure: {len(pure):,}   transition (excluded from training): "
-          f"{len(df) - len(pure):,}")
-    print()
-    print(pd.crosstab(df["split"], df["label"].astype(str)).to_string())
-
-
-if __name__ == "__main__":
-    main()

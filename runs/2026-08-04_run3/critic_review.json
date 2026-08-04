@@ -1,0 +1,15 @@
+{
+  "verdict": "approve",
+  "reasons": [
+    "Premise verified: stages/s2_ml/champion_spec.json params = {n_estimators, random_state, n_jobs, class_weight} only — no bootstrap, no min_samples_leaf set, so ExtraTreesClassifier runs its real defaults (bootstrap=False, min_samples_leaf=1) exactly as claimed.",
+    "Premise verified: features.py:272-279 _min_over_parts docstring literally calls this 'the dominant residual error on this corpus,' describing a weight-shift standing bout spiking whole-window ptp while the min-over-parts stays low — matches the champion's actual error profile (157 of 225 total confusion-matrix errors are stand misread as walk).",
+    "Premise verified: experiments.jsonl entry 'regularize_min_samples_leaf10' shows macro_f1 0.8181 vs champion-then 0.8730, i.e. -0.0549, exactly as cited.",
+    "Minor inaccuracy, not load-bearing: that ledger entry ran on n_features=23 (drop_features=[]), not the '18-feature basis' the rationale states (18 features first appears later, in drop_static_offset_family). Doesn't undermine the actual distinguishing argument (RandomForest+bootstrap vs bootstrap-free ExtraTrees; leaf=10 vs leaf=2), but should be corrected in the record.",
+    "Not a repeat: no ledger entry sets min_samples_leaf on ExtraTrees; the only prior min_samples_leaf test was leaf=10 on bootstrapped RandomForest — a materially different model (bagging dilutes idiosyncratic leaves; ExtraTrees' full-sample training does not) and a 5x larger constraint.",
+    "Single-variable change (model_params.min_samples_leaf=2 only; drop_features=[], window_s=null) — clean attribution against the current champion.",
+    "min_samples_leaf=2 is within experiment.py's ALLOWED_MODEL_PARAMS bounds (1,100).",
+    "No contradiction with DOMAIN NOTES dead ends (signal-based sagittal detection, naive decimation)."
+  ],
+  "repeat_of": null,
+  "confidence": 0.78
+}

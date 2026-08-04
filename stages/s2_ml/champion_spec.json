@@ -1,0 +1,25 @@
+{
+  "name": "extratrees400_drop_moments38",
+  "rationale": "ExtraTrees over 38 features, non-overlapping 2 s windows at the canonical 100 Hz. Chosen against RandomForest on identical features, folds and params over 5 seeds: equal precision at threshold 0.85 while committing to 87.6% of windows against 81.9% (see the train.py docstring). The four dropped angular-velocity higher moments are removed for parsimony, NOT for a gain: measured at 42 vs 38 features, LORO macro-F1 0.9193 -> 0.9196 and coverage at 0.85 0.8780 -> 0.8800, both inside the +/-0.0003 five-seed noise band. Kurtosis and peak-ratio are noise-sensitive by construction and sat at the bottom of the importance table (0.0047-0.0055, ranks 39-42 of 42); four features that buy nothing measurable are four fewer things to explain and to keep trustworthy across a new subject.",
+  "rejected": [
+    "drop the zeroing family (L/R_angvel_LPF_mean, L/R_ang_med_rest): macro-F1 0.9193 -> 0.9168, coverage 0.8780 -> 0.8758. The per-subject cuff-zeroing argument that justified the sibling repo's static-offset drop does NOT transfer to this basis; these carry real signal. Low importance is not droppability.",
+    "drop the bottom 8 by importance: macro-F1 0.9193 -> 0.9176. The regression is the zeroing half above, not the moments."
+  ],
+  "model": "ExtraTreesClassifier",
+  "params": {
+    "n_estimators": 400,
+    "random_state": 0,
+    "n_jobs": -1,
+    "class_weight": "balanced"
+  },
+  "window_s": 2.0,
+  "stride_s": 2.0,
+  "fs_hz": 100.0,
+  "n_features": 38,
+  "drop_features": [
+    "L_angvel_kurt",
+    "R_angvel_kurt",
+    "L_angvel_peakratio",
+    "R_angvel_peakratio"
+  ]
+}

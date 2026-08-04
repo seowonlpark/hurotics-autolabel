@@ -1,9 +1,10 @@
-"""The raw -> rev2 feature bridge: reproduce the labeled columns from a raw CSV.
+"""The raw -> lpf_view bridge: reproduce the labeled columns from a raw CSV.
 
-The model trains on the labeled rev2 view (four rotational features) but must RUN on
+The model trains on the `lpf_view` family (four rotational features) but must RUN on
 raw device CSVs. This module is the bridge, and it reproduces HUROTICS' MATLAB
-(`LPF.m` / `csv2mat.m`) exactly — verified to ~1e-13 against 19 paired recordings
-(DOMAIN_NOTES §6.2). Any drift between this and the training features is silent
+(`LPF.m` / `csv2mat.m`) exactly — verified to ~1e-13 against every paired recording the
+corpus holds (18 as of 2026-08-03; DOMAIN_NOTES §6.2 records why the long-quoted "19"
+was never reproducible). Any drift between this and the training features is silent
 train/serve skew, so it is regression-tested against those pairs.
 
 Two things here are easy to get wrong:
@@ -35,7 +36,7 @@ is a required argument with an explicit opt-out rather than an optional one.
 `raw_csv_to_features` is the entry point a caller actually runs a file through: it resolves
 the variant from the header, opens that file's trust record, runs both guards, and refuses
 with a stated reason rather than returning a frame it cannot defend. Until 2026-08-03 no
-such entry point existed — the only caller was `verify_transform`, which passes
+such entry point existed — the only caller was a verification script passing
 TRUST_UNCHECKED, so `load_trust` had zero callers and `check_axis_trust` had never once run
 against a real record (caveats §3.1). The cost of that gap was not hypothetical: the
 sagittal axis for the majority variant was wrong the whole time (see the table below).
@@ -79,14 +80,13 @@ FC_ANGVEL_HZ = 1.0
 # variant — 62 of 91 raw files — so every serve-path read of those files would have fed the
 # classifier the frontal plane instead of the sagittal one, silently, with no downstream
 # check able to notice. It survived because nothing ever ran this module against a raw file
-# in anger (caveats §3.1) and `verify_transform` was not re-run after the rev13 raw files
-# landed; the moment it is run, it fails on exactly these six pairs. See caveats §5.
+# in anger (caveats §3.1) — an unexercised bridge cannot be wrong out loud, and it was. It
+# was found the day the serve path was built and read one. See caveats §5.
 #
-# Note what the corrected table no longer says: with every measured variant reading `Deg_Y`,
-# this corpus contains **no** variant whose sagittal plane differs. The per-variant shape is
-# kept anyway — sagittality is a hardware-revision property with no in-file signature (§6.2),
-# so "all three agree" is a fact about three revisions, not a licence to default an unknown
-# one to Y. Unknown variant still abstains.
+# Every measured variant reads `Deg_Y`, so this corpus contains no variant whose sagittal
+# plane differs. The per-variant shape is kept anyway: "all three agree" is a fact about
+# three revisions, not a licence to default a fourth (§6.2 argues it; §6.3 is the standing
+# ask for the two that are still unmapped). **Unknown variant still abstains.**
 SAGITTAL_DEG_AXIS_BY_VARIANT = {
     "fb5ea2c2": "Y",   # rev13 / rev14  (majority variant) — 7 pairs, all rev13
     "0fda484e": "Y",   # rev7  / rev8                      — 10 pairs
@@ -108,8 +108,8 @@ class UnknownVariantError(Exception):
 class NotRawDeviceError(Exception):
     """Raised when the file handed to the raw path is not a raw device log.
 
-    The two families share only `Time` (§1.3/config.FAMILY_MARKERS), so reading a rev2
-    view through here would resolve columns that do not exist. Named separately from a
+    The two families share only `Time` (§1.3/config.FAMILY_MARKERS), so reading an
+    `lpf_view` file through here would resolve columns that do not exist. Named separately from a
     bare KeyError because the remedy is different: this file wants the other path.
     """
 
@@ -119,7 +119,7 @@ class GyroUnitError(Exception):
 
     S1 records `scale_to_degps` per side and normalizes the CLEAN layer with it, but this
     path reads the raw CSV, which is un-normalized by construction. Converting here would
-    be defensible physics and is still refused: every one of the 90 trust records in this
+    be defensible physics and is still refused: every one of the 91 trust records in this
     corpus measures L and R at exactly 1.0, so a 57.3x rescale has never been checked
     against paired ground truth, and an unverified transform of the classifier's input is
     the same class of silent skew this module exists to prevent. Refuse, state it, and let
@@ -298,7 +298,7 @@ def check_gyro_unit(trust: dict | str) -> None:
         detail = ", ".join(f"{s}_Gyro measured {u} (x{sc}, {m})" for s, (u, sc, m) in off.items())
         raise GyroUnitError(
             f"gyro is not natively {CANONICAL_GYRO_UNIT} on this file: {detail}. The four "
-            f"rev2 features the model was trained on come from raw channels that were "
+            f"lpf_view features the model was trained on come from raw channels that were "
             f"already {CANONICAL_GYRO_UNIT} on every paired recording, so the conversion "
             f"has no ground truth behind it here. Verify it against one paired "
             f"raw+annotated rad/s recording and apply the scale explicitly — do not "
@@ -315,7 +315,10 @@ def load_raw_frame(path: Path) -> tuple[pd.DataFrame, str, str]:
     """
     header = read_header(path)
     names = [strip_prefix(c) for c in header]
-    df = pd.read_csv(path, encoding="utf-8-sig")
+    # index_col=False: without it a trailing comma (data one field wider than the header) makes
+    # pandas promote column 0 to the index, shifting every column left by one. The count check
+    # below cannot see that — the shift leaves the count correct — so it must not happen at all.
+    df = pd.read_csv(path, encoding="utf-8-sig", index_col=False)
     df = df.loc[:, [c for c in df.columns if not c.startswith("Unnamed")]]
     if len(df.columns) > len(names):
         raise NotRawDeviceError(
@@ -339,7 +342,7 @@ def serve_dt(time_ms: np.ndarray) -> tuple[float, float]:
     `matlab_dt`, not `safe_dt`, and the choice is measured rather than stylistic: the
     labeled features this model trained on were produced by the MATLAB, which filters a
     whole trial with its final interval. Substituting the median moves the features by up
-    to **20.1 deg** on the 17 verifiable pairs (worst `rev7_trial_1`, whose last interval
+    to **20.1 deg** across the paired recordings (worst `rev7_trial_1`, whose last interval
     is 12.0 ms against a 10.0 ms median). That is train/serve skew of the exact kind this
     module exists to prevent, so serve reproduces the upstream quirk deliberately — and
     guards the one case where the quirk is not merely odd but fatal.
@@ -372,7 +375,7 @@ def serve_dt(time_ms: np.ndarray) -> tuple[float, float]:
 def raw_to_features(df: pd.DataFrame, variant_id: str, *, trust: dict | str,
                     dt_s: float | None = None,
                     time_col: str = TIME_COL) -> pd.DataFrame:
-    """Build the four rev2 features from a name-resolved raw device frame.
+    """Build the four `lpf_view` features from a name-resolved raw device frame.
 
     `dt_s` defaults to the median interval; pass `matlab_dt(...)` to reproduce the
     training pipeline bit-for-bit on an un-resampled raw file.
@@ -402,7 +405,7 @@ def raw_to_features(df: pd.DataFrame, variant_id: str, *, trust: dict | str,
 def raw_csv_to_features(path: Path, *, repo_root: Path | None = None,
                         trust: dict | str | None = None
                         ) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """(raw rows as read, the four rev2 features, provenance) — or refuse with a reason.
+    """(raw rows as read, the four `lpf_view` features, provenance) — or refuse with a reason.
 
     The serve entry point. Every guard in this module runs here, against a real record,
     which is the whole point: the variant lookup says which axis SHOULD be sagittal, S1's
@@ -418,7 +421,7 @@ def raw_csv_to_features(path: Path, *, repo_root: Path | None = None,
     df, variant_id, family = load_raw_frame(path)
     if family != "raw_device":
         raise NotRawDeviceError(
-            f"{path.name} is family {family!r}, not 'raw_device'. A rev2 view is already "
+            f"{path.name} is family {family!r}, not 'raw_device'. An lpf_view file is already "
             f"the model's input and needs no bridge; anything else is unrecognized."
         )
     if trust is None:

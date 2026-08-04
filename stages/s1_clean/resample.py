@@ -71,11 +71,16 @@ def measure_hz(t: np.ndarray) -> float:
     return 1000.0 / med if med > 0 else float("nan")
 
 
-def rate_family(hz: float) -> float | None:
-    """Snap a measured rate to its nominal family, or None if it fits nowhere.
+def nominal_rate(hz: float) -> float | None:
+    """Snap a measured rate to its nominal acquisition rate, or None if it fits nowhere.
 
     99.3789 / 99.688 / 99.961 / 100.0 all snap to 100.0: same device, different
     timestamp quantization.
+
+    Named `rate_family` until 2026-08-04. "Family" already means something else in this
+    pipeline — the header family (raw_device / lpf_view) that census.family_of resolves
+    and the serve path dispatches on. A rate is not that, and the shared word made the
+    drop reason below read like a schema rejection.
     """
     if not np.isfinite(hz):
         return None
@@ -104,10 +109,16 @@ def resample_segment(
     t: np.ndarray, df: pd.DataFrame, seg: Segment
 ) -> tuple[pd.DataFrame | None, Segment]:
     """Put one gap-free segment on the canonical grid. Records its own method."""
-    nominal = rate_family(seg.source_hz)
+    nominal = nominal_rate(seg.source_hz)
 
     if nominal is None:
-        seg.usable, seg.reason = False, f"rate {seg.source_hz:.3f} Hz fits no known family"
+        # Wording is a cross-artifact contract: stages/breakdown.py buckets dropped
+        # segments on this string, and the segments.jsonl already in runs/ carries the
+        # older "fits no known family" phrasing. breakdown matches both — if you reword
+        # this again, add the new marker there rather than replacing the old one.
+        seg.usable, seg.reason = False, (
+            f"rate {seg.source_hz:.3f} Hz matches no known acquisition rate"
+        )
         return None, seg
     if seg.duration_s < MIN_SEGMENT_S:
         seg.usable, seg.reason = False, (

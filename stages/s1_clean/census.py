@@ -1,8 +1,4 @@
-"""Schema census: fingerprint every distinct header, resolve columns by name.
-
-The corpus has multiple header variants that differ in width AND in meaning at the
-same index. This module is the only place that decides what a column *is*.
-"""
+# align on what each col header is
 
 from __future__ import annotations
 
@@ -17,29 +13,30 @@ from stages.s1_clean.config import (
     FAMILY_MARKERS,
     FAMILY_UNKNOWN,
     LABEL_COLUMNS,
-    LEGACY_ALGO_COLUMNS,
     ROLE_BY_NAME,
 )
 
 _PREFIX = re.compile(COLUMN_PREFIX_PATTERN)
 
-
+# white space normalized
 def strip_prefix(raw_column: str) -> str:
-    """'47_loco' -> 'loco'. '28_L LC' -> 'L LC'. Whitespace normalized."""
     return _PREFIX.sub("", raw_column.strip()).strip()
 
-
+# just read the first row for header names
 def read_header(path: Path) -> list[str]:
-    """First row only. Trailing empty fields are tolerated and dropped."""
     with path.open("r", encoding="utf-8-sig", newline="") as fh:
         row = next(csv.reader(fh))
     while row and row[-1].strip() == "":
         row.pop()
     return row
 
-
+# Which of the two products this header is. Load-bearing at serve time, not a report
+# field: stages/s2_ml/label.py dispatches on it and transform.py refuses on it. The two
+# families share only `Time`, so a wrong answer here resolves columns that do not exist.
+#
+# Unrelated to `nominal_rate` in resample.py, which snaps a MEASURED RATE to its nominal
+# value. Same English word, different question. Keep them apart when reading.
 def family_of(names: list[str]) -> str:
-    """Which product this file belongs to. Contracts are per family, never global."""
     for family, marker in FAMILY_MARKERS.items():
         if marker in names:
             return family
@@ -48,48 +45,45 @@ def family_of(names: list[str]) -> str:
 
 @dataclass
 class Variant:
-    """One distinct header shape seen in the corpus."""
-
     variant_id: str
     family: str
     n_cols: int
-    raw_columns: list[str]
     names: list[str]
     files: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> dict:
-        return {
-            "variant_id": self.variant_id,
-            "family": self.family,
-            "n_cols": self.n_cols,
-            "n_files": len(self.files),
-            "names": self.names,
-            "files": sorted(self.files),
-        }
 
-
+# stable ids
 def fingerprint(raw_columns: list[str]) -> str:
-    """Stable id for a header. Keyed on names, not positions or widths."""
     joined = "|".join(strip_prefix(c) for c in raw_columns)
     return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:8]
 
 
 @dataclass
 class Resolution:
-    """What a single file's header actually contains, by name."""
+    """What one header is.
+
+    Only `index_by_name` (and `label_columns`, one name) is read by code: clean.py
+    resolves columns through it, manifest.py picks the label census from it. The rest
+    is measured for the manifest ledger and read by humans.
+
+    `roles_present` / `unknown_names` are kept deliberately, despite no code consumer:
+    they are the hole detector for ROLE_BY_NAME. A column a new firmware revision adds
+    appears in `unknown_names` and nowhere else in the pipeline. `loco` (the outdated
+    rule-based algorithm output) lands there too — it has no ROLE_BY_NAME entry, so it
+    needs no separate field to stay visible.
+    """
 
     variant_id: str
     family: str
     n_cols: int
     index_by_name: dict[str, int]
-    roles_present: dict[str, list[str]]   # role -> [names]
-    unknown_names: list[str]             # names with no registered role
+    roles_present: dict[str, list[str]]
+    unknown_names: list[str]
     label_columns: list[str]
-    legacy_algo_columns: list[str]
 
 
+# map header to role by name
 def resolve(raw_columns: list[str]) -> Resolution:
-    """Map a header to roles by name. Absence is a fact, not an error."""
     names = [strip_prefix(c) for c in raw_columns]
     index_by_name = {n: i for i, n in enumerate(names)}
 
@@ -110,12 +104,10 @@ def resolve(raw_columns: list[str]) -> Resolution:
         roles_present=roles,
         unknown_names=unknown,
         label_columns=[n for n in LABEL_COLUMNS if n in index_by_name],
-        legacy_algo_columns=[n for n in LEGACY_ALGO_COLUMNS if n in index_by_name],
     )
 
-
+# pass for all headers
 def build_registry(paths: list[Path], repo_root: Path) -> dict[str, Variant]:
-    """One pass over headers only. Cheap enough to run on every file."""
     registry: dict[str, Variant] = {}
     for p in paths:
         raw = read_header(p)
@@ -126,28 +118,12 @@ def build_registry(paths: list[Path], repo_root: Path) -> dict[str, Variant]:
                 variant_id=vid,
                 family=family_of(names),
                 n_cols=len(raw),
-                raw_columns=raw,
                 names=names,
             )
         registry[vid].files.append(str(p.relative_to(repo_root)))
     return registry
 
-
-def stable_prefix(registry: dict[str, Variant], family: str | None = None) -> list[str]:
-    """Longest run of leading names identical across every variant IN A FAMILY.
-
-    This is the real contract. Measured, not assumed. Computed across families it
-    is meaningless: raw device logs and the rev2 view share only Time.
-    """
-    variants = [v for v in registry.values() if family is None or v.family == family]
-    if not variants:
-        return []
-    name_lists = [v.names for v in variants]
-    shortest = min(len(n) for n in name_lists)
-    out: list[str] = []
-    for i in range(shortest):
-        col = {n[i] for n in name_lists}
-        if len(col) != 1:
-            break
-        out.append(col.pop())
-    return out
+# `stable_prefix` (longest column prefix common to every variant in a family) was removed
+# 2026-08-04 along with variants.json, its only output. It described a contract nothing
+# enforced: clean.py checks columns against config.KEEP_MEASURED and reports what is
+# missing, which is the actual contract. Recomputable from `build_registry` if ever wanted.

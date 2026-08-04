@@ -15,6 +15,29 @@ The second is the one that costs accuracy quietly: the model learns the corpus c
 
 Add confirmed cases to `dataset.EXCLUDED_TRIALS` with the evidence.
 
+## Nominated windows — run these to adjudicate
+
+12 window(s) across 1 rev(s), strongest contradiction first, spread at least 5 s apart so a reader can tell a swapped channel (wrong everywhere) from a misaligned label track (wrong in a stretch). Capped at 12 per trial; **47 further contradicting window(s) not listed**.
+
+A nomination is *not* a verdict. The swap rule can be wrong about a window, which is exactly why this hands you the raw trace instead of a decision.
+
+| rev | trial | t (s) | label | physics | swaps | interleg | command |
+|---|---|---|---|---|---|---|---|
+| rev13 | 4 | 1523.91 | `stand` | `WALKING` | 5 over 2.8 s | 49.91° | `python -m stages.s3_physics.inspect_window rev13 4 --t 1523.91` |
+| rev13 | 4 | 1507.91 | `stand` | `WALKING` | 4 over 3.7 s | 45.84° | `python -m stages.s3_physics.inspect_window rev13 4 --t 1507.91` |
+| rev13 | 4 | 1515.91 | `stand` | `WALKING` | 4 over 3.2 s | 56.15° | `python -m stages.s3_physics.inspect_window rev13 4 --t 1515.91` |
+| rev13 | 4 | 1541.91 | `stand` | `WALKING` | 4 over 3.0 s | 50.96° | `python -m stages.s3_physics.inspect_window rev13 4 --t 1541.91` |
+| rev13 | 4 | 1529.91 | `stand` | `WALKING` | 4 over 2.9 s | 61.25° | `python -m stages.s3_physics.inspect_window rev13 4 --t 1529.91` |
+| rev13 | 4 | 1535.91 | `stand` | `WALKING` | 4 over 3.1 s | 51.54° | `python -m stages.s3_physics.inspect_window rev13 4 --t 1535.91` |
+| rev13 | 4 | 1549.91 | `stand` | `WALKING` | 4 over 3.2 s | 45.48° | `python -m stages.s3_physics.inspect_window rev13 4 --t 1549.91` |
+| rev13 | 4 | 1555.91 | `stand` | `WALKING` | 4 over 3.1 s | 56.67° | `python -m stages.s3_physics.inspect_window rev13 4 --t 1555.91` |
+| rev13 | 4 | 1589.91 | `stand` | `WALKING` | 4 over 3.1 s | 58.24° | `python -m stages.s3_physics.inspect_window rev13 4 --t 1589.91` |
+| rev13 | 4 | 1561.91 | `stand` | `WALKING` | 4 over 3.0 s | 54.97° | `python -m stages.s3_physics.inspect_window rev13 4 --t 1561.91` |
+| rev13 | 4 | 1567.91 | `stand` | `WALKING` | 4 over 3.3 s | 46.76° | `python -m stages.s3_physics.inspect_window rev13 4 --t 1567.91` |
+| rev13 | 4 | 1573.91 | `stand` | `WALKING` | 4 over 3.1 s | 48.51° | `python -m stages.s3_physics.inspect_window rev13 4 --t 1573.91` |
+
+Machine-readable copy: `label_audit_windows.jsonl`.
+
 ## Divergent convention (`band walk`)
 
 | rev | trial | band windows | band walk | vs corpus | p |

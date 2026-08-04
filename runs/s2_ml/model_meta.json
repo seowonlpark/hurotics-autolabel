@@ -1,4 +1,11 @@
 {
+  "champion_spec": "extratrees400_drop_moments38",
+  "dropped_features": [
+    "L_angvel_kurt",
+    "L_angvel_peakratio",
+    "R_angvel_kurt",
+    "R_angvel_peakratio"
+  ],
   "model": "ExtraTreesClassifier",
   "params": {
     "n_estimators": 400,
@@ -28,9 +35,7 @@
     "L_angvel_dom_hz",
     "L_angvel_band_frac",
     "L_angvel_skew",
-    "L_angvel_kurt",
     "L_angvel_posfrac",
-    "L_angvel_peakratio",
     "L_angvel_hf_ratio",
     "L_angacc_rms",
     "L_cycle_s",
@@ -40,9 +45,7 @@
     "R_angvel_dom_hz",
     "R_angvel_band_frac",
     "R_angvel_skew",
-    "R_angvel_kurt",
     "R_angvel_posfrac",
-    "R_angvel_peakratio",
     "R_angvel_hf_ratio",
     "R_angacc_rms",
     "R_cycle_s",
@@ -53,6 +56,160 @@
     "ileg_minhalf",
     "ileg_minquarter",
     "ileg_swaps"
+  ],
+  "feature_importance": [
+    [
+      "ang_LR_corr",
+      0.11140991589338524
+    ],
+    [
+      "ileg_minhalf",
+      0.09183362916762686
+    ],
+    [
+      "ileg_swaps",
+      0.05228297131187473
+    ],
+    [
+      "L_ang_LPF_std",
+      0.04811161309907296
+    ],
+    [
+      "ileg_minquarter",
+      0.04703260261017108
+    ],
+    [
+      "R_ang_p95_p05",
+      0.045225725558790654
+    ],
+    [
+      "L_ang_LPF_ptp",
+      0.043847944458086464
+    ],
+    [
+      "R_ang_LPF_ptp",
+      0.04247468807999981
+    ],
+    [
+      "L_ang_p95_p05",
+      0.040368294944771545
+    ],
+    [
+      "R_angvel_LPF_absmean",
+      0.03618584009494558
+    ],
+    [
+      "R_ang_LPF_std",
+      0.03614881456089585
+    ],
+    [
+      "L_angvel_LPF_std",
+      0.03571742957109508
+    ],
+    [
+      "L_angvel_LPF_absmean",
+      0.034418068932774736
+    ],
+    [
+      "R_angvel_LPF_std",
+      0.029953418812736502
+    ],
+    [
+      "L_angvel_LPF_ptp",
+      0.02977548834096426
+    ],
+    [
+      "angvel_LR_corr",
+      0.02773389033011581
+    ],
+    [
+      "R_angvel_LPF_ptp",
+      0.02608185131571271
+    ],
+    [
+      "R_ang_p95_rest",
+      0.022199048746125893
+    ],
+    [
+      "L_ang_p95_rest",
+      0.017065219729951533
+    ],
+    [
+      "L_angacc_rms",
+      0.013791815983267936
+    ],
+    [
+      "L_angvel_posfrac",
+      0.01299906959800122
+    ],
+    [
+      "L_angvel_band_frac",
+      0.012157659064305429
+    ],
+    [
+      "R_angvel_posfrac",
+      0.011350236134947624
+    ],
+    [
+      "L_angvel_dom_hz",
+      0.01084156440652852
+    ],
+    [
+      "R_angacc_rms",
+      0.010581509619750813
+    ],
+    [
+      "R_angvel_hf_ratio",
+      0.010472086116009962
+    ],
+    [
+      "R_angvel_skew",
+      0.009754384666661524
+    ],
+    [
+      "L_cycle_s",
+      0.009718205405033186
+    ],
+    [
+      "L_angvel_hf_ratio",
+      0.009691307170484754
+    ],
+    [
+      "R_angvel_band_frac",
+      0.009226009440540951
+    ],
+    [
+      "L_angvel_skew",
+      0.008664499607862954
+    ],
+    [
+      "angvel_LR_lag_s",
+      0.008664045150141379
+    ],
+    [
+      "R_cycle_s",
+      0.008230777075258133
+    ],
+    [
+      "L_angvel_LPF_mean",
+      0.007648726135898366
+    ],
+    [
+      "R_angvel_dom_hz",
+      0.00741318289386918
+    ],
+    [
+      "L_ang_med_rest",
+      0.007262514191822081
+    ],
+    [
+      "R_ang_med_rest",
+      0.007034857948683328
+    ],
+    [
+      "R_angvel_LPF_mean",
+      0.006631093831835426
+    ]
   ],
   "train_revs": [
     "rev13",
@@ -65,7 +222,7 @@
   ],
   "n_train_windows": 5984,
   "cv": "LeaveOneGroupOut(rev)",
-  "macro_f1_cv": 0.9193053789761384,
+  "macro_f1_cv": 0.9195582010216896,
   "presets": {
     "high_coverage": 0.7,
     "balanced": 0.85,
@@ -95,9 +252,7 @@
       "L_angvel_dom_hz": 0.5,
       "L_angvel_band_frac": 0.7253716288732587,
       "L_angvel_skew": -1.5059672238406177,
-      "L_angvel_kurt": -1.5706282716553301,
       "L_angvel_posfrac": 0.0,
-      "L_angvel_peakratio": -0.1223147973656965,
       "L_angvel_hf_ratio": 0.0004405647529651035,
       "L_angacc_rms": 4.502644218104663,
       "L_cycle_s": 0.6,
@@ -107,9 +262,7 @@
       "R_angvel_dom_hz": 0.5,
       "R_angvel_band_frac": 0.7530636585034695,
       "R_angvel_skew": -1.5590956819872164,
-      "R_angvel_kurt": -1.5731899597288284,
       "R_angvel_posfrac": 0.0,
-      "R_angvel_peakratio": -0.10282795016570045,
       "R_angvel_hf_ratio": 0.0004019200581090191,
       "R_angacc_rms": 3.323375119728977,
       "R_cycle_s": 0.6,
@@ -139,9 +292,7 @@
       "L_angvel_dom_hz": 2.0,
       "L_angvel_band_frac": 0.9997805536218695,
       "L_angvel_skew": 2.234313578654526,
-      "L_angvel_kurt": 5.6144502577845525,
       "L_angvel_posfrac": 0.885,
-      "L_angvel_peakratio": 10.167520438115819,
       "L_angvel_hf_ratio": 0.339058425885304,
       "L_angacc_rms": 473.76911256944317,
       "L_cycle_s": 1.99,
@@ -151,9 +302,7 @@
       "R_angvel_dom_hz": 2.0,
       "R_angvel_band_frac": 0.9997917618040101,
       "R_angvel_skew": 2.0973385883179083,
-      "R_angvel_kurt": 5.294214264384826,
       "R_angvel_posfrac": 0.9058500000000004,
-      "R_angvel_peakratio": 11.105041653504413,
       "R_angvel_hf_ratio": 0.30498878971765,
       "R_angacc_rms": 561.9488824655314,
       "R_cycle_s": 1.99,

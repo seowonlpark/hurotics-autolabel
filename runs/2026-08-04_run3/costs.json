@@ -1,0 +1,17 @@
+{
+  "stages": [
+    {
+      "ts": "2026-08-04T03:27:14.284354+00:00",
+      "agent": "s2_experimenter",
+      "cost_usd": 0.9654609,
+      "num_turns": 9
+    },
+    {
+      "ts": "2026-08-04T03:28:57.471856+00:00",
+      "agent": "s2_critic",
+      "cost_usd": 0.56434635,
+      "num_turns": 13
+    }
+  ],
+  "total_usd": 1.529807
+}

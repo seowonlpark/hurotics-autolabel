@@ -1,3 +1,31 @@
+> # HISTORICAL RECORD — nothing regenerates this file
+>
+> Written by `stages/s3_physics/run.py` on **2026-08-03**. That module was deleted with the
+> S4 fusion stage on 2026-08-04, and with it the only thing that ever produced this page.
+> **The numbers below are a snapshot of that run and will not change again**, whatever
+> happens to the corpus, the window grid or the swap rule. Do not cite them as current
+> output; do not "fix" them by editing this file.
+>
+> Kept rather than deleted because two things in it exist nowhere else. The swap-verdict
+> tally (`AMBIGUOUS` 1,543 -> 380 under the stride-adaptive span) is the measured evidence
+> `DOMAIN_NOTES.md` §10.6/§10.7 rests on, and it came from `anchors.csv` — a 1.4 MB
+> per-window table that existed only to feed the fusion join and is gone. Regenerating that
+> tally today would mean reviving a stage deleted for having no reader.
+>
+> **Where the live equivalents are:**
+>
+> | this page's section | now produced by |
+> |---|---|
+> | rate-invariance audit | `python -m stages.s3_physics.rate_audit` -> `rate_audit.md` |
+> | swap-rule verdicts, per trial | `python -m stages.s3_physics.label_audit` -> `label_audit.md` |
+> | swap-rule verdicts, per window | **nothing** — this snapshot is the only record |
+>
+> The rate-audit table below is reproduced exactly by the live `rate_audit.md` (`antiphase`
+> 0.0005, `gyro_energy` 0.4994 rate-dependent), which is a useful check that the rule itself
+> did not drift when its driver was deleted and its audit re-homed.
+
+---
+
 # S3 Physics
 
 - windows: **6,339** across **7** revs

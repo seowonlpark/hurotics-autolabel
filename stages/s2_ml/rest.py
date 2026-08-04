@@ -23,7 +23,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from stages.s1_clean.config import CANONICAL_HZ
 from stages.s2_ml.dataset import FEATURES
 
 # Sensor noise gate (§10): 5x the measured standing noise came out 0.76-0.88 deg on
@@ -96,37 +95,9 @@ def rest_span_frame(frame: pd.DataFrame, span: int) -> pd.DataFrame | None:
     return best
 
 
-def stillest_rest_offset(frame: pd.DataFrame, span: int) -> float | None:
-    """Median interleg of the stillest rest span — this subject's mounting bias (§10.2)."""
-    best = rest_span_frame(frame, span)
-    return None if best is None else float(np.median(interleg(best)))
-
-
-def rest_anchor(frame: pd.DataFrame, fs: float = CANONICAL_HZ,
-                fallback_reference: float | None = None) -> tuple[float, bool]:
-    """(interleg zero, trusted) for one recording.
-
-    Preference order, most to least direct evidence:
-      1. the opening `REST_ANCHOR_S`, when the swap rule calls it standing (§10.2 — the
-         common case, and the one measured on this subject minutes before the trial)
-      2. the stillest rest span found anywhere else in the recording
-      3. a session-level reference from a sibling trial, when this one never rests
-      4. the whole-recording median, returned UNTRUSTED
-
-    Step 4 returns rather than raises: a recording that never rests still has to yield
-    features, and the flag says the zero is a fallback. Detect-don't-assert, the same
-    stance S1's channel trust takes when a file is too static to answer (§4.1b).
-    """
-    if frame.empty:
-        return 0.0, False
-    span = int(round(REST_ANCHOR_S * fs))
-    seg0 = frame[frame["segment"] == frame["segment"].min()]
-    d_open = interleg(seg0.iloc[:span])
-    if is_rest(d_open, span):
-        return float(np.median(d_open)), True
-    found = stillest_rest_offset(frame, span)
-    if found is not None:
-        return found, True
-    if fallback_reference is not None:
-        return fallback_reference, True
-    return float(np.median(interleg(frame))), False
+# The rest ZERO itself is not derived here. `features.rest_reference` is the single
+# implementation, because it must return the per-side postures and the interleg offset
+# from the SAME chosen span — two functions picking the span independently could centre
+# the angle features on one rest and the interleg features on another. A second
+# implementation of the search once lived here and had drifted into a slightly different
+# preference order; caveats.md §5 records what a duplicated threshold costs.

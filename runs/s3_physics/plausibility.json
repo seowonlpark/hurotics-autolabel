@@ -1,0 +1,429 @@
+{
+  "commitment_min": 0.02,
+  "physics_silent_max": 0.02,
+  "model_walk_min": 0.2,
+  "physics_loud_min": 0.5,
+  "model_walk_max": 0.05,
+  "min_rows": 3000,
+  "corpus_min_physics_walk_with_annotated_walk": 0.41743119266055045,
+  "corpus_corr_annotated_physics": 0.6263860808635557,
+  "trials": [
+    {
+      "rev": "rev13",
+      "trial": 4,
+      "split": "train",
+      "n_covered": 12700,
+      "annotated_walk_frac": 0.0,
+      "physics_walk_frac": 0.9429133858267716,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev7",
+      "trial": 1,
+      "split": "train",
+      "n_covered": 5450,
+      "annotated_walk_frac": 0.30844036697247706,
+      "physics_walk_frac": 0.41743119266055045,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev6",
+      "trial": 2,
+      "split": "train",
+      "n_covered": 22150,
+      "annotated_walk_frac": 0.34991812570852754,
+      "physics_walk_frac": 0.42437923250564336,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev5",
+      "trial": 1,
+      "split": "train",
+      "n_covered": 2400,
+      "annotated_walk_frac": 0.4180908711963318,
+      "physics_walk_frac": 0.5625,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev5",
+      "trial": 3,
+      "split": "train",
+      "n_covered": 2625,
+      "annotated_walk_frac": 0.45364364746280045,
+      "physics_walk_frac": 0.7904761904761904,
+      "rest_trusted": false
+    },
+    {
+      "rev": "rev8",
+      "trial": 4,
+      "split": "lockbox",
+      "n_covered": 17825,
+      "annotated_walk_frac": 0.6015494016303405,
+      "physics_walk_frac": 0.7559607293127629,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev5",
+      "trial": 2,
+      "split": "train",
+      "n_covered": 1500,
+      "annotated_walk_frac": 0.6364242828552368,
+      "physics_walk_frac": 0.8666666666666667,
+      "rest_trusted": false
+    },
+    {
+      "rev": "rev6",
+      "trial": 4,
+      "split": "train",
+      "n_covered": 44700,
+      "annotated_walk_frac": 0.6503449511692501,
+      "physics_walk_frac": 0.5413870246085011,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev6",
+      "trial": 1,
+      "split": "train",
+      "n_covered": 83600,
+      "annotated_walk_frac": 0.6599349025423197,
+      "physics_walk_frac": 0.6605861244019139,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev7",
+      "trial": 4,
+      "split": "train",
+      "n_covered": 12925,
+      "annotated_walk_frac": 0.6642913077525451,
+      "physics_walk_frac": 0.6731141199226306,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev6",
+      "trial": 6,
+      "split": "train",
+      "n_covered": 47725,
+      "annotated_walk_frac": 0.6766931557091966,
+      "physics_walk_frac": 0.6553169198533263,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev2",
+      "trial": 7,
+      "split": "train",
+      "n_covered": 12700,
+      "annotated_walk_frac": 0.6883496680366741,
+      "physics_walk_frac": 0.7244094488188977,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev8",
+      "trial": 3,
+      "split": "lockbox",
+      "n_covered": 3475,
+      "annotated_walk_frac": 0.6955104996379435,
+      "physics_walk_frac": 0.7553956834532374,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev4",
+      "trial": 1,
+      "split": "train",
+      "n_covered": 20825,
+      "annotated_walk_frac": 0.6969989385313133,
+      "physics_walk_frac": 0.7106842737094838,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev5",
+      "trial": 5,
+      "split": "train",
+      "n_covered": 8375,
+      "annotated_walk_frac": 0.7064516129032258,
+      "physics_walk_frac": 0.7970149253731343,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev2",
+      "trial": 6,
+      "split": "train",
+      "n_covered": 44750,
+      "annotated_walk_frac": 0.7149121744397335,
+      "physics_walk_frac": 0.6888268156424581,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev2",
+      "trial": 8,
+      "split": "train",
+      "n_covered": 29175,
+      "annotated_walk_frac": 0.7568222745532622,
+      "physics_walk_frac": 0.7754927163667523,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev5",
+      "trial": 4,
+      "split": "train",
+      "n_covered": 3600,
+      "annotated_walk_frac": 0.765,
+      "physics_walk_frac": 0.8958333333333334,
+      "rest_trusted": false
+    },
+    {
+      "rev": "rev7",
+      "trial": 5,
+      "split": "train",
+      "n_covered": 77975,
+      "annotated_walk_frac": 0.7788909817122858,
+      "physics_walk_frac": 0.8595703751202308,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev8",
+      "trial": 1,
+      "split": "lockbox",
+      "n_covered": 19725,
+      "annotated_walk_frac": 0.8110329241358056,
+      "physics_walk_frac": 0.7997465145754119,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev6",
+      "trial": 3,
+      "split": "train",
+      "n_covered": 77500,
+      "annotated_walk_frac": 0.816685459517607,
+      "physics_walk_frac": 0.73,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev7",
+      "trial": 6,
+      "split": "train",
+      "n_covered": 45100,
+      "annotated_walk_frac": 0.8293240932009507,
+      "physics_walk_frac": 0.7987804878048781,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev5",
+      "trial": 6,
+      "split": "train",
+      "n_covered": 4425,
+      "annotated_walk_frac": 0.8536861148801448,
+      "physics_walk_frac": 0.9491525423728814,
+      "rest_trusted": false
+    },
+    {
+      "rev": "rev3",
+      "trial": 1,
+      "split": "train",
+      "n_covered": 28200,
+      "annotated_walk_frac": 0.8539899939679949,
+      "physics_walk_frac": 0.8865248226950354,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev7",
+      "trial": 3,
+      "split": "train",
+      "n_covered": 82750,
+      "annotated_walk_frac": 0.8588554514060187,
+      "physics_walk_frac": 0.7734138972809668,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev13",
+      "trial": 2,
+      "split": "train",
+      "n_covered": 17325,
+      "annotated_walk_frac": 0.8775092175337976,
+      "physics_walk_frac": 0.8831168831168831,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev13",
+      "trial": 5,
+      "split": "train",
+      "n_covered": 6750,
+      "annotated_walk_frac": 0.8780017788319003,
+      "physics_walk_frac": 0.9222222222222223,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev5",
+      "trial": 7,
+      "split": "train",
+      "n_covered": 5675,
+      "annotated_walk_frac": 0.8786810086404514,
+      "physics_walk_frac": 0.920704845814978,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev13",
+      "trial": 3,
+      "split": "train",
+      "n_covered": 16425,
+      "annotated_walk_frac": 0.8972794924972551,
+      "physics_walk_frac": 0.9056316590563166,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev3",
+      "trial": 2,
+      "split": "train",
+      "n_covered": 25525,
+      "annotated_walk_frac": 0.9015475024485798,
+      "physics_walk_frac": 0.9118511263467189,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev13",
+      "trial": 6,
+      "split": "train",
+      "n_covered": 33000,
+      "annotated_walk_frac": 0.9171419902912621,
+      "physics_walk_frac": 0.9166666666666666,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev3",
+      "trial": 3,
+      "split": "train",
+      "n_covered": 53900,
+      "annotated_walk_frac": 0.9326095025983667,
+      "physics_walk_frac": 0.9322820037105751,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev2",
+      "trial": 1,
+      "split": "train",
+      "n_covered": 44850,
+      "annotated_walk_frac": 0.9446416535609975,
+      "physics_walk_frac": 0.9515050167224081,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev2",
+      "trial": 4,
+      "split": "train",
+      "n_covered": 71200,
+      "annotated_walk_frac": 0.9456946749556949,
+      "physics_walk_frac": 0.8033707865168539,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev5",
+      "trial": 8,
+      "split": "train",
+      "n_covered": 5900,
+      "annotated_walk_frac": 0.9525423728813559,
+      "physics_walk_frac": 1.0,
+      "rest_trusted": false
+    },
+    {
+      "rev": "rev2",
+      "trial": 3,
+      "split": "train",
+      "n_covered": 70175,
+      "annotated_walk_frac": 0.9570234209471454,
+      "physics_walk_frac": 0.9405058781617385,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev2",
+      "trial": 5,
+      "split": "train",
+      "n_covered": 69650,
+      "annotated_walk_frac": 0.9622817999971218,
+      "physics_walk_frac": 0.9411342426417804,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev13",
+      "trial": 7,
+      "split": "train",
+      "n_covered": 30225,
+      "annotated_walk_frac": 0.9888097997020361,
+      "physics_walk_frac": 0.9917287014061208,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev2",
+      "trial": 2,
+      "split": "train",
+      "n_covered": 25000,
+      "annotated_walk_frac": 0.9895736135340176,
+      "physics_walk_frac": 0.904,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev13",
+      "trial": 1,
+      "split": "train",
+      "n_covered": 132000,
+      "annotated_walk_frac": 0.9938102101190928,
+      "physics_walk_frac": 0.9918560606060606,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev8",
+      "trial": 2,
+      "split": "lockbox",
+      "n_covered": 2050,
+      "annotated_walk_frac": 1.0,
+      "physics_walk_frac": 1.0,
+      "rest_trusted": false
+    },
+    {
+      "rev": "rev6",
+      "trial": 5,
+      "split": "train",
+      "n_covered": 4500,
+      "annotated_walk_frac": NaN,
+      "physics_walk_frac": 0.29444444444444445,
+      "rest_trusted": true
+    },
+    {
+      "rev": "rev7",
+      "trial": 2,
+      "split": "train",
+      "n_covered": 275,
+      "annotated_walk_frac": NaN,
+      "physics_walk_frac": 0.0,
+      "rest_trusted": false
+    }
+  ],
+  "controls": [
+    {
+      "fault": "unmodified",
+      "model_walk_frac": 0.9935,
+      "physics_walk_frac": 0.9919,
+      "committed_frac": 0.9981,
+      "caught_by": "-- NOTHING --"
+    },
+    {
+      "fault": "duplicated_leg",
+      "model_walk_frac": 0.0,
+      "physics_walk_frac": 0.0,
+      "committed_frac": 0.0064,
+      "caught_by": "commitment_collapse"
+    },
+    {
+      "fault": "dead_sensor",
+      "model_walk_frac": 0.0,
+      "physics_walk_frac": 0.9894,
+      "committed_frac": 0.0066,
+      "caught_by": "commitment_collapse, physics_loud"
+    },
+    {
+      "fault": "swapped_legs",
+      "model_walk_frac": 0.9935,
+      "physics_walk_frac": 0.9919,
+      "committed_frac": 0.9981,
+      "caught_by": "-- NOTHING --"
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+file,session,labelled,variant,axis,rows,n_confident,confident_frac,n_stand,n_walk,top_reason,refusal,reason,implausible,plausibility
+data\raw\20251021\00203_30_2025_10_21_18_18_0_edit.csv,20251021,True,4bfd6ab2,Y,20850.0,17250.0,0.8273,3950.0,13300.0,near_transition,,,False,
+data\raw\20251024\00321_63_2025_10_24_15_32_0.csv,20251024,True,0fda484e,Y,5470.0,3900.0,0.713,2500.0,1400.0,near_transition,,,False,
+data\raw\20251024\00322_63_2025_10_24_15_34_0.csv,20251024,True,0fda484e,Y,300.0,275.0,0.9167,275.0,0.0,uncovered,,,False,rest_untrusted;too_short
+data\raw\20251024\00323_63_2025_10_24_15_35_0.csv,20251024,True,0fda484e,Y,82770.0,74375.0,0.8986,6825.0,67550.0,near_transition,,,False,
+data\raw\20251024\00324_63_2025_10_24_15_56_0.csv,20251024,True,0fda484e,Y,12940.0,12000.0,0.9274,3625.0,8375.0,near_transition,,,False,
+data\raw\20251024\00325_63_2025_10_24_15_56_0.csv,20251024,True,0fda484e,Y,77990.0,62225.0,0.7979,3575.0,58650.0,near_transition,,,False,
+data\raw\20251024\00326_63_2025_10_24_16_29_0.csv,20251024,True,0fda484e,Y,45130.0,39675.0,0.8791,5850.0,33825.0,model_split,,,False,
+data\raw\20251029\00328_63_2025_10_29_13_45_0.csv,20251029,True,0fda484e,Y,19760.0,13850.0,0.7009,725.0,13125.0,model_split,,,False,
+data\raw\20251029\00330_63_2025_10_29_13_45_0.csv,20251029,True,0fda484e,Y,2060.0,2050.0,0.9951,0.0,2050.0,uncovered,,,False,rest_untrusted;too_short
+data\raw\20251029\00331_63_2025_10_29_13_45_0.csv,20251029,True,0fda484e,Y,3510.0,3000.0,0.8547,625.0,2375.0,near_transition,,,False,
+data\raw\20251029\00332_63_2025_10_29_13_45_0.csv,20251029,True,0fda484e,Y,17860.0,13500.0,0.7559,1600.0,11900.0,near_transition,,,False,
+data\raw\20251215\00081_86_2025_12_12_14_54_0_edit.csv,20251215,True,4bfd6ab2,Y,188990.0,188825.0,0.9991,875.0,187950.0,near_transition,,,False,
+data\raw\20251215\00085_86_2025_12_12_17_13_0_edit.csv,20251215,True,4bfd6ab2,Y,181500.0,180825.0,0.9963,900.0,179925.0,near_transition,,,False,
+data\raw\20251226\00048_69_2025_12_26_14_27_0.csv,20251226,True,0fda484e,Y,8120.0,6699.0,0.825,5699.0,1000.0,model_split,,,False,
+data\raw\20251230\00026_69_2025_12_30_15_25_0.csv,20251230,True,fb5ea2c2,Y,8730.0,3172.0,0.3633,3172.0,0.0,model_split,,,True,physics_loud
+data\raw\20251230\00028_69_2025_12_30_15_29_0.csv,20251230,True,fb5ea2c2,Y,30350.0,9122.0,0.3006,8022.0,1100.0,model_split,,,False,
+data\raw\20251230\00029_69_2025_12_30_15_38_0.csv,20251230,True,fb5ea2c2,Y,34920.0,10124.0,0.2899,3999.0,6125.0,model_split,,,False,
+data\raw\20251230\00031_69_2025_12_30_15_49_0.csv,20251230,True,fb5ea2c2,Y,40690.0,14650.0,0.36,7825.0,6825.0,model_split,,,False,
+data\raw\20260107\00036_69_2026_1_7_16_52_0.csv,20260107,True,fb5ea2c2,Y,10490.0,2025.0,0.193,1650.0,375.0,model_split,,,False,
+data\raw\20260108\00038_69_2026_1_8_15_11_0.csv,20260108,True,fb5ea2c2,Y,30930.0,23471.0,0.7588,2596.0,20875.0,near_transition,,,False,
+data\raw\20260108\00040_69_2026_1_8_16_57_0.csv,20260108,True,fb5ea2c2,Y,33130.0,5874.0,0.1773,2574.0,3300.0,model_split,,,False,
+data\raw\20260108\00041_69_2026_1_8_17_19_0.csv,20260108,True,fb5ea2c2,Y,61180.0,22146.0,0.362,20121.0,2025.0,model_split,,,False,
+data\raw\20260109\00043_69_2025_11_6_14_28_0.csv,20260109,True,fb5ea2c2,Y,9630.0,1746.0,0.1813,1746.0,0.0,model_split,,,True,physics_loud
+data\raw\20260109\00044_69_2025_11_6_14_40_0.csv,20260109,True,fb5ea2c2,Y,9332.0,2121.0,0.2273,2121.0,0.0,model_split,,,False,
+data\raw\20260109\00045_69_2025_11_6_14_40_0.csv,20260109,True,fb5ea2c2,Y,10420.0,1549.0,0.1487,1549.0,0.0,model_split,,,False,
+data\raw\20260109\00046_69_2025_11_6_14_52_0.csv,20260109,True,fb5ea2c2,Y,68910.0,13875.0,0.2013,11650.0,2225.0,model_split,,,False,
+data\raw\20260109\00047_69_2025_11_6_16_46_0.csv,20260109,True,fb5ea2c2,Y,62120.0,24400.0,0.3928,18475.0,5925.0,model_split,,,False,
+data\raw\20260114\00001_69_2026_1_14_10_4_0.csv,20260114,True,fb5ea2c2,Y,132005.0,131846.0,0.9988,896.0,130950.0,near_transition,,,False,
+data\raw\20260114\00008_69_2026_1_14_10_48_0.csv,20260114,True,fb5ea2c2,Y,17340.0,16871.0,0.973,1746.0,15125.0,near_transition,,,False,
+data\raw\20260114\00009_69_2026_1_14_10_48_0.csv,20260114,True,fb5ea2c2,Y,16440.0,15924.0,0.9686,1149.0,14775.0,model_split,,,False,
+data\raw\20260114\00010_69_2026_1_14_11_2_0.csv,20260114,True,fb5ea2c2,Y,12700.0,12151.0,0.9568,250.0,11901.0,weight_shift_or_step,,,False,
+data\raw\20260114\00011_69_2026_1_14_11_2_0.csv,20260114,True,fb5ea2c2,Y,6750.0,6525.0,0.9667,424.0,6101.0,near_transition,,,False,
+data\raw\20260114\00012_69_2026_1_14_11_10_0.csv,20260114,True,fb5ea2c2,Y,32540.0,31883.0,0.9798,1738.0,30145.0,near_transition,,,False,
+data\raw\20260114\00013_69_2026_1_14_11_10_0.csv,20260114,True,fb5ea2c2,Y,30175.0,29994.0,0.994,94.0,29900.0,near_transition,,,False,
+data\raw\20260115\00031_69_2026_1_15_10_29_0.csv,20260115,True,fb5ea2c2,Y,85756.0,73900.0,0.8617,8325.0,65575.0,near_transition,,,False,
+data\raw\20260115\00038_69_2026_1_15_11_28_0.csv,20260115,True,fb5ea2c2,Y,5690.0,3749.0,0.6589,1374.0,2375.0,near_transition,,,False,
+data\raw\20260115\00051_69_2026_1_15_14_37_0.csv,20260115,True,fb5ea2c2,Y,16040.0,11500.0,0.717,1200.0,10300.0,model_split,,,False,
+data\raw\20260119\00070_69_2026_1_19_14_10_0.csv,20260119,True,fb5ea2c2,Y,7000.0,4071.0,0.5816,2371.0,1700.0,near_transition,,,False,
+data\raw\20260120\00057_69_2026_1_20_17_37_0.csv,20260120,True,fb5ea2c2,Y,1820.0,1625.0,0.8929,150.0,1475.0,near_transition,,,False,too_short
+data\raw\20260120\00058_69_2026_1_20_18_18_0.csv,20260120,True,fb5ea2c2,Y,13750.0,12200.0,0.8873,2150.0,10050.0,near_transition,,,False,
+data\raw\20260120\00059_69_2026_1_20_18_18_0.csv,20260120,True,fb5ea2c2,Y,12830.0,9700.0,0.756,2275.0,7425.0,out_of_distribution,,,False,
+data\raw\20260120\00060_69_2026_1_20_18_18_0.csv,20260120,True,fb5ea2c2,Y,240.0,224.0,0.9333,224.0,0.0,uncovered,,,False,rest_untrusted;too_short
+data\raw\20260120\00061_69_2026_1_20_18_18_0.csv,20260120,True,fb5ea2c2,Y,10740.0,8299.0,0.7727,750.0,7549.0,near_transition,,,False,
+data\raw\20260120\00062_69_2026_1_20_18_18_0.csv,20260120,True,fb5ea2c2,Y,7260.0,6349.0,0.8745,275.0,6074.0,near_transition,,,False,
+data\raw\20260120\00063_69_2026_1_20_18_56_0.csv,20260120,True,fb5ea2c2,Y,21257.0,19046.0,0.896,4846.0,14200.0,near_transition,,,False,
+data\raw\20260121\00016_69_2026_1_21_13_52_0.csv,20260121,True,fb5ea2c2,Y,2660.0,2125.0,0.7989,600.0,1525.0,near_transition,,,False,too_short
+data\raw\20260121\00017_69_2026_1_21_13_54_0.csv,20260121,True,fb5ea2c2,Y,30486.0,30295.0,0.9937,420.0,29875.0,near_transition,,,False,
+data\raw\20260121\00018_69_2026_1_21_14_4_0.csv,20260121,True,fb5ea2c2,Y,60980.0,60797.0,0.997,648.0,60149.0,near_transition,,,False,
+data\raw\20260121\00019_69_2026_1_21_14_20_0.csv,20260121,True,fb5ea2c2,Y,60460.0,60295.0,0.9973,321.0,59974.0,near_transition,,,False,rest_untrusted
+data\raw\20260121\00020_69_2026_1_21_15_33_0.csv,20260121,True,fb5ea2c2,Y,60600.0,60448.0,0.9975,648.0,59800.0,near_transition,,,False,
+data\raw\20260121\00021_69_2026_1_21_15_44_0.csv,20260121,True,fb5ea2c2,Y,62010.0,61849.0,0.9974,1624.0,60225.0,near_transition,,,False,
+data\raw\20260121\00073_69_2026_1_21_14_44_0.csv,20260121,True,fb5ea2c2,Y,5190.0,4325.0,0.8333,1450.0,2875.0,near_transition,,,False,
+data\raw\20260121\00074_69_2026_1_21_14_47_0.csv,20260121,True,fb5ea2c2,Y,9620.0,8649.0,0.8991,699.0,7950.0,model_split,,,False,
+data\raw\20260121\00075_69_2026_1_21_14_47_0.csv,20260121,True,fb5ea2c2,Y,2200.0,2050.0,0.9318,399.0,1651.0,near_transition,,,False,too_short
+data\raw\20260121\00076_69_2026_1_21_14_51_0.csv,20260121,True,fb5ea2c2,Y,27650.0,27450.0,0.9928,499.0,26951.0,near_transition,,,False,
+data\raw\20260121\00077_69_2026_1_21_14_51_0.csv,20260121,True,fb5ea2c2,Y,25730.0,25724.0,0.9998,0.0,25724.0,uncovered,,,False,rest_untrusted
+data\raw\20260121\00078_69_2026_1_21_15_5_0.csv,20260121,True,fb5ea2c2,Y,60920.0,60700.0,0.9964,700.0,60000.0,near_transition,,,False,
+data\raw\20260123\00060_69_2026_1_23_13_38_0.csv,20260123,True,fb5ea2c2,Y,21400.0,17825.0,0.8329,14750.0,3075.0,near_transition,,,False,
+data\raw\20260126\00061_69_2026_1_26_10_52_0.csv,20260126,True,fb5ea2c2,Y,11560.0,8775.0,0.7591,1225.0,7550.0,near_transition,,,False,
+data\raw\20260126\00062_69_2026_1_26_10_52_0.csv,20260126,True,fb5ea2c2,Y,3680.0,2899.0,0.7878,424.0,2475.0,near_transition,,,False,
+data\raw\20260126\00063_69_2026_1_26_10_58_0.csv,20260126,True,fb5ea2c2,Y,29760.0,20724.0,0.6964,9049.0,11675.0,near_transition,,,False,
+data\raw\20260128\00075_69_2026_1_28_14_26_0.csv,20260128,True,fb5ea2c2,Y,280.0,250.0,0.8929,250.0,0.0,uncovered,,,False,rest_untrusted;too_short
+data\raw\20260128\00076_69_2026_1_28_14_28_0.csv,20260128,True,fb5ea2c2,Y,4562.0,4399.0,0.9643,424.0,3975.0,near_transition,,,False,
+data\raw\20260128\00077_69_2026_1_28_14_28_0.csv,20260128,True,fb5ea2c2,Y,1100.0,1100.0,1.0,0.0,1100.0,,,,False,rest_untrusted;too_short
+data\raw\20260128\00078_69_2026_1_28_14_30_0.csv,20260128,True,fb5ea2c2,Y,94580.0,94349.0,0.9976,299.0,94050.0,near_transition,,,False,
+data\raw\20260128\00079_69_2026_1_28_14_30_0.csv,20260128,True,fb5ea2c2,Y,1800.0,1625.0,0.9028,124.0,1501.0,near_transition,,,False,too_short
+data\raw\20260128\00080_69_2026_1_28_14_52_0.csv,20260128,True,fb5ea2c2,Y,60800.0,60500.0,0.9951,0.0,60500.0,near_transition,,,False,rest_untrusted
+data\raw\20260128\00081_69_2026_1_28_15_10_0.csv,20260128,True,fb5ea2c2,Y,72940.0,72750.0,0.9974,550.0,72200.0,near_transition,,,False,
+data\raw\20260128\00082_69_2026_1_28_15_10_0.csv,20260128,True,fb5ea2c2,Y,220.0,199.0,0.9045,0.0,199.0,uncovered,,,False,rest_untrusted;too_short
+data\raw\20260128\00083_69_2026_1_28_15_10_0.csv,20260128,True,fb5ea2c2,Y,60540.0,60374.0,0.9973,374.0,60000.0,near_transition,,,False,
+data\raw\20260128\00084_69_2026_1_28_15_45_0.csv,20260128,True,fb5ea2c2,Y,64310.0,64075.0,0.9963,1125.0,62950.0,near_transition,,,False,
+data\raw\20260128\00085_69_2026_1_28_15_45_0.csv,20260128,True,fb5ea2c2,Y,55650.0,54700.0,0.9829,525.0,54175.0,near_transition,,,False,
+data\raw\20260128\00100_69_2026_1_28_13_32_0.csv,20260128,True,fb5ea2c2,Y,2020.0,1850.0,0.9158,625.0,1225.0,near_transition,,,False,too_short
+data\raw\20260128\00101_69_2026_1_28_13_38_0.csv,20260128,True,fb5ea2c2,Y,80530.0,80248.0,0.9965,998.0,79250.0,near_transition,,,False,
+data\raw\20260128\00102_69_2026_1_28_13_38_0.csv,20260128,True,fb5ea2c2,Y,45970.0,45524.0,0.9903,499.0,45025.0,out_of_distribution,,,False,
+data\raw\20260128\00103_69_2026_1_28_13_38_0.csv,20260128,True,fb5ea2c2,Y,54810.0,54474.0,0.9939,549.0,53925.0,near_transition,,,False,rest_untrusted
+data\raw\20260515\00095_70_2026_5_15_11_38_0.csv,20260515,False,,,,,,,,,UnknownVariantError,"no measured sagittal-axis mapping for variant 'e5f2660f'. Known: ['0fda484e', '4bfd6ab2', 'fb5ea2c2']. Signal-based detection scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired raw+annotated recording instead of guessing.",,
+data\raw\20260520\00220_100_2026_5_20_13_33_0.csv,20260520,False,,,,,,,,,UnknownVariantError,"no measured sagittal-axis mapping for variant 'e5f2660f'. Known: ['0fda484e', '4bfd6ab2', 'fb5ea2c2']. Signal-based detection scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired raw+annotated recording instead of guessing.",,
+data\raw\20260520\00221_100_2026_5_20_13_35_0.csv,20260520,False,,,,,,,,,UnknownVariantError,"no measured sagittal-axis mapping for variant 'e5f2660f'. Known: ['0fda484e', '4bfd6ab2', 'fb5ea2c2']. Signal-based detection scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired raw+annotated recording instead of guessing.",,
+data\raw\20260520\00222_100_2026_5_20_13_37_0.csv,20260520,False,,,,,,,,,UnknownVariantError,"no measured sagittal-axis mapping for variant 'e5f2660f'. Known: ['0fda484e', '4bfd6ab2', 'fb5ea2c2']. Signal-based detection scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired raw+annotated recording instead of guessing.",,
+data\raw\20260520\00225_100_2026_5_20_13_45_0.csv,20260520,False,,,,,,,,,UnknownVariantError,"no measured sagittal-axis mapping for variant 'e5f2660f'. Known: ['0fda484e', '4bfd6ab2', 'fb5ea2c2']. Signal-based detection scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired raw+annotated recording instead of guessing.",,
+data\raw\20260520\00226_100_2026_5_20_13_47_0.csv,20260520,False,,,,,,,,,UnknownVariantError,"no measured sagittal-axis mapping for variant 'e5f2660f'. Known: ['0fda484e', '4bfd6ab2', 'fb5ea2c2']. Signal-based detection scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired raw+annotated recording instead of guessing.",,
+data\raw\20260522\00054_69_2026_5_22_11_27_0.csv,20260522,False,,,,,,,,,UnknownVariantError,"no measured sagittal-axis mapping for variant 'e5f2660f'. Known: ['0fda484e', '4bfd6ab2', 'fb5ea2c2']. Signal-based detection scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired raw+annotated recording instead of guessing.",,
+data\raw\20260522\00055_69_2026_5_22_11_27_1.csv,20260522,False,,,,,,,,,UnknownVariantError,"no measured sagittal-axis mapping for variant 'e5f2660f'. Known: ['0fda484e', '4bfd6ab2', 'fb5ea2c2']. Signal-based detection scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired raw+annotated recording instead of guessing.",,
+data\raw\20260522\00056_69_2026_5_22_11_49_0.csv,20260522,False,,,,,,,,,UnknownVariantError,"no measured sagittal-axis mapping for variant 'e5f2660f'. Known: ['0fda484e', '4bfd6ab2', 'fb5ea2c2']. Signal-based detection scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired raw+annotated recording instead of guessing.",,
+data\raw\20260522\00057_69_2026_5_22_11_49_1.csv,20260522,False,,,,,,,,,UnknownVariantError,"no measured sagittal-axis mapping for variant 'e5f2660f'. Known: ['0fda484e', '4bfd6ab2', 'fb5ea2c2']. Signal-based detection scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired raw+annotated recording instead of guessing.",,
+data\raw\20260522\00058_69_2026_5_22_11_49_2.csv,20260522,False,,,,,,,,,UnknownVariantError,"no measured sagittal-axis mapping for variant 'e5f2660f'. Known: ['0fda484e', '4bfd6ab2', 'fb5ea2c2']. Signal-based detection scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired raw+annotated recording instead of guessing.",,
+data\raw\20260601\00192_100_2026_6_1_14_52_0.csv,20260601,False,,,,,,,,,UnknownVariantError,"no measured sagittal-axis mapping for variant '86069795'. Known: ['0fda484e', '4bfd6ab2', 'fb5ea2c2']. Signal-based detection scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired raw+annotated recording instead of guessing.",,
+data\raw\20260601\00194_100_2026_6_1_15_10_0.csv,20260601,False,,,,,,,,,UnknownVariantError,"no measured sagittal-axis mapping for variant '86069795'. Known: ['0fda484e', '4bfd6ab2', 'fb5ea2c2']. Signal-based detection scores below chance (DOMAIN_NOTES 6.2) — add a mapping from one paired raw+annotated recording instead of guessing.",,
+data\raw\20260626\00156_92_2026_6_26_9_52_0.csv,20260626,True,4bfd6ab2,Y,8820.0,8046.0,0.9122,1610.0,6436.0,near_transition,,,False,too_short
+data\raw\20260626\00157_92_2026_6_26_9_52_0.csv,20260626,True,4bfd6ab2,Y,2570.0,1970.0,0.7665,1090.0,880.0,near_transition,,,False,too_short

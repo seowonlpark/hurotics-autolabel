@@ -4,7 +4,7 @@
 
 S1 already refuses raw device logs it cannot trust — degenerate time base, unknown rate
 family, dead channels — and records the refusal in a quarantine ledger. This is that same
-job for the derived rev2 view: the four rotational channels plus `Time`, which is what the
+job for the `lpf_view` family: the four rotational channels plus `Time`, which is what the
 labelling path actually consumes.
 
 It belongs in S1 and not in S2 because nothing here needs a model, a label, or a training
@@ -28,8 +28,8 @@ import pandas as pd
 
 from stages.s1_clean.config import CANONICAL_HZ
 
-# The derived rev2 view this pipeline serves. Kept here rather than imported from S2 so the
-# gate does not depend on the stage it guards.
+# The `lpf_view` family this pipeline serves (config.FAMILY_MARKERS). Kept here rather than
+# imported from S2 so the gate does not depend on the stage it guards.
 TIME_COL = "Time"
 FEATURE_COLUMNS = ("L_ang_LPF", "R_ang_LPF", "L_angvel_LPF", "R_angvel_LPF")
 
@@ -125,7 +125,9 @@ def health_of_csv(path: Path, window_s: float = 2.0) -> Health:
     """Read a CSV, put it on the canonical grid, and judge it."""
     from stages.s1_clean.resample import resample_file
 
-    df = pd.read_csv(path, encoding="utf-8-sig")
+    # index_col=False: see stages/s1_clean/clean.py — a trailing comma otherwise shifts every
+    # column left by one, silently, under unchanged names.
+    df = pd.read_csv(path, encoding="utf-8-sig", index_col=False)
     df.columns = [c.strip() for c in df.columns]
     if (missing := check_columns(df)):
         return Health(usable=False, rows=len(df),
@@ -136,8 +138,8 @@ def health_of_csv(path: Path, window_s: float = 2.0) -> Health:
     frame, _segments = resample_file(df[[TIME_COL, *FEATURE_COLUMNS]], TIME_COL)
     if frame.empty:
         return Health(usable=False, rows=len(df),
-                      errors=["no segment survived resampling: rate fits no known family, "
-                              "or every run is too short"])
+                      errors=["no segment survived resampling: the measured rate matches "
+                              "no known acquisition rate, or every run is too short"])
     return health(frame, window_s)
 
 

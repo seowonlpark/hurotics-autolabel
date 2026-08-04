@@ -1,0 +1,76 @@
+```json
+[
+  {
+    "ref": "broken:rev13:t4",
+    "cause": "swapped_channel",
+    "action": "none",
+    "sections": ["10", "10.1", "10.4"],
+    "rationale": "contradiction_spread 0.9355 with disagree_frac 0.95 covers nearly the whole scored span at rest_trusted=true, and ileg_minhalf (45-61°) sits in the walking range every window — wrong everywhere, not a stretch; already in EXCLUDED_TRIALS so handled=true means no person is needed.",
+    "confidence": 0.85
+  },
+  {
+    "ref": "convention:rev8:t4",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "band_walk_frac 0.69 vs corpus 0.872 (p=0.00056) over 52 band windows is a self-consistent minority labeling of the genuinely-ambiguous swap band, not broken data, but handled=false means the pipeline commits it to training/eval untouched.",
+    "confidence": 0.75
+  },
+  {
+    "ref": "convention:rev6:t2",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "band_walk_frac 0.318 is far below corpus 0.872 (p=2.8e-9), a strong reversed-convention signal, though only 22 band windows makes the fraction borderline reliable; handled=false leaves it un-excluded.",
+    "confidence": 0.6
+  },
+  {
+    "ref": "convention:rev6:t4",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "139 band windows give a reliable band_walk_frac 0.777 vs corpus 0.872 (p=0.002), a modest but significant minority-convention shift in the ambiguous band; handled=false means nothing subtracts it.",
+    "confidence": 0.78
+  },
+  {
+    "ref": "convention:rev7:t5",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "135 band windows, band_walk_frac 0.719 vs corpus 0.872 (p=1.9e-6) — a stable minority convention in the ambiguity band, and handled=false confirms it flows into training unflagged.",
+    "confidence": 0.78
+  },
+  {
+    "ref": "convention:rev2:t4",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "79 band windows, band_walk_frac 0.987 vs corpus 0.872 (p=0.00053) — this trial calls the ambiguous band walk almost every time, a self-consistent opposite-direction convention; handled=false leaves it uncorrected.",
+    "confidence": 0.78
+  },
+  {
+    "ref": "convention:rev6:t1",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "170 band windows (largest sample here) give a reliable band_walk_frac 0.776 vs corpus 0.872 (p=0.00051), a mild but statistically solid convention shift; handled=false means no automatic handling.",
+    "confidence": 0.8
+  },
+  {
+    "ref": "convention:rev2:t5",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "133 band windows, band_walk_frac 1.0 vs corpus 0.872 (p=2.6e-8) — every ambiguous-band window called walk, a clean minority convention rather than contradiction (disagree_frac only 0.006); handled=false means it's un-excluded.",
+    "confidence": 0.8
+  },
+  {
+    "ref": "convention:rev2:t3",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "83 band windows, band_walk_frac 1.0 vs corpus 0.872 (p=2.0e-5), disagree_frac only 0.006 — same all-walk convention as rev2:t5, not broken data; handled=false leaves it uncorrected.",
+    "confidence": 0.78
+  }
+]
+```

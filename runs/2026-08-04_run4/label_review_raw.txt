@@ -1,0 +1,76 @@
+```json
+[
+  {
+    "ref": "broken:rev13:t4",
+    "cause": "swapped_channel",
+    "action": "none",
+    "sections": ["10.4", "4.1b"],
+    "rationale": "contradiction_spread=0.9355 (near 1.0) with disagree_frac=0.95 and rest_trusted=true shows the mismatch is wrong across nearly the whole scored span rather than a local stretch, and it is already excluded via EXCLUDED_TRIALS (handled=true) so no human action is needed.",
+    "confidence": 0.82
+  },
+  {
+    "ref": "convention:rev8:t4",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "band_walk_frac=0.692 vs corpus 0.872 (p=0.00056) with disagree_frac only 0.143 is a self-consistent minority convention confined to the ambiguity band, not contradiction, but handled=false means nothing subtracts it from training/eval so a human must decide whether to accept it.",
+    "confidence": 0.8
+  },
+  {
+    "ref": "convention:rev6:t2",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "band_walk_frac=0.318 vs 0.872 corpus (p=2.8e-9) is a strong stand-leaning convention with low disagree_frac (0.132), though band_windows=22 sits right at the ~20 reliability floor so confidence is reduced; handled=false requires a human call.",
+    "confidence": 0.6
+  },
+  {
+    "ref": "convention:rev6:t4",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "band_walk_frac=0.777 vs 0.872 (p=0.002) over 139 band windows with disagree_frac only 0.10 reflects a stable minority convention rather than broken data; handled=false means a human must decide.",
+    "confidence": 0.78
+  },
+  {
+    "ref": "convention:rev7:t5",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "band_walk_frac=0.719 vs 0.872 corpus (p=1.9e-6) with disagree_frac just 0.099 over 135 band windows is a self-consistent convention confined to the band; handled=false so it needs human review.",
+    "confidence": 0.8
+  },
+  {
+    "ref": "convention:rev2:t4",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "band_walk_frac=0.987, well above corpus 0.872 (p=0.0005), shows this annotator calls the ambiguity band almost always walk — an opposite but self-consistent convention, disagree_frac only 0.070; handled=false requires a human decision.",
+    "confidence": 0.8
+  },
+  {
+    "ref": "convention:rev6:t1",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "band_walk_frac=0.776 vs 0.872 (p=0.0005) across 170 band windows with disagree_frac just 0.029 is a stable minority convention, not contradiction; handled=false means a human must decide.",
+    "confidence": 0.82
+  },
+  {
+    "ref": "convention:rev2:t5",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "band_walk_frac=1.0 vs corpus 0.872 (p=2.6e-8) over 133 band windows with disagree_frac only 0.006 is a clean, consistent \"always walk\" band convention; handled=false so a human must decide whether to accept it.",
+    "confidence": 0.85
+  },
+  {
+    "ref": "convention:rev2:t3",
+    "cause": "divergent_convention",
+    "action": "human",
+    "sections": ["10"],
+    "rationale": "band_walk_frac=1.0 vs 0.872 (p=2.0e-5) over 83 band windows with disagree_frac 0.006 matches rev2's other trials' consistent \"band=walk\" convention; handled=false requires a human decision.",
+    "confidence": 0.85
+  }
+]
+```

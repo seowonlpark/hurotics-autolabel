@@ -1,10 +1,10 @@
-"""End-to-end guard for the raw serve path: does a device log label like its rev2 export?
+"""End-to-end guard for the raw serve path: does a device log label like its lpf_view export?
 
     python -m stages.s2_ml.verify_serve
 
 `verify_transform.py` checks the bridge's MATH — four columns reproduced to float roundoff.
 That is necessary and it is not the deliverable. This checks the thing a caller actually
-gets: feed the SAME recording in both shapes — the raw device CSV and the annotated rev2
+gets: feed the SAME recording in both shapes — the raw device CSV and the annotated lpf_view
 export HUROTICS' MATLAB produced from it — and assert `label.py` returns the same state,
 the same confidence and the same reason on every row.
 
@@ -143,7 +143,7 @@ def render_sweep(rows: list[dict]) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Verify the raw serve path against its rev2 export, end to end.")
+        description="Verify the raw serve path against its lpf_view export, end to end.")
     ap.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
     ap.add_argument("--threshold", type=float, default=None,
                     help="default: the champion's own default preset")
@@ -190,10 +190,10 @@ def main() -> None:
                 if r["fatal"] is None and r["n_mismatched"]:
                     print(f"FAIL: {r['pair']}: {r['mismatches']} "
                           f"(+{r['coverage_mismatch']} coverage)")
-            print("FAIL: a raw device log does not label like its own rev2 export.")
+            print("FAIL: a raw device log does not label like its own lpf_view export.")
             failed = True
         else:
-            print("PASS: raw and rev2 routes agree on every row of every pair.")
+            print("PASS: raw and lpf_view routes agree on every row of every pair.")
 
     if not args.skip_sweep:
         print()

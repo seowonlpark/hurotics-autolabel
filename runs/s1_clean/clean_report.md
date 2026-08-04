@@ -1,12 +1,12 @@
 # S1 Clean Report
 
-- source files: **91**, written: **90**, failed: **1**
-- **partition (gate): 90 clean + 1 quarantined = 91 of 91 raw files, 0 unaccounted**
-- segments: **138** (93 usable, 45 dropped)
+- source files: **91**, written: **91**, failed: **0**
+- **partition (gate): 91 clean + 0 quarantined = 91 of 91 raw files, 0 unaccounted**
+- segments: **141** (94 usable, 47 dropped)
 - canonical rate: **100.0 Hz**
-- usable duration: **477.9 min**
-- columns kept: **30 measured + 0 documented exceptions**
-- format: **parquet**
+- usable duration: **481.5 min**
+- columns kept: **13 measured + 0 documented exceptions**
+- persisted per file: **`channel_trust.json` only** — the canonical-grid frame is measured and dropped (see this module's docstring)
 
 Measured-only: every column that churns position between variants is a *computed* one,
 so this collapses every schema variant into a single canonical shape.
@@ -22,41 +22,35 @@ This resolves which gyro axis measures which angle axis. It does NOT resolve whi
 is SAGITTAL — that has no in-file signature (DOMAIN_NOTES 6.2) and is a variant lookup
 in stages/s2_ml/transform.py.
 
-- side-channels normalized rad/s -> deg/s: **90**
-- sides that abstained (too static; fell back to documented convention): **56**
-- confident anomalies (detected axis/unit disagree with the documented rule): **2**
+- side-channels normalized rad/s -> deg/s: **0**
+- sides that abstained (too static; fell back to documented convention): **33**
+- confident anomalies (detected axis/unit disagree with the documented rule): **0**
 
-- anomaly: `data\raw\20260114\00001_69_2026_1_14_10_4_0.csv` side B: conflicts=['Y'] map={'Y': 'Y', 'Z': 'Y'} unit=rad/s r=-0.9879 (documented: {'X': 'X', 'Y': 'Z', 'Z': 'Y'})
-- anomaly: `data\raw\20260115\00038_69_2026_1_15_11_28_0.csv` side B: conflicts=['Y'] map={'Y': 'Y'} unit=rad/s r=0.9583 (documented: {'X': 'X', 'Y': 'Z', 'Z': 'Y'})
+- anomalies: none
 
 ## Yaw / drift trust
 
 A Deg channel whose value tracks session time is measuring integration drift, not
 orientation (§4.2). Flagged per channel, not dropped — the raw superset is kept.
 
-- Deg channels flagged drift-contaminated (|corr(Deg,Time)| >= 0.9): **14** across **12** files
+- Deg channels flagged drift-contaminated (|corr(Deg,Time)| >= 0.9): **9** across **8** files
 
 - drift: `data\raw\20251024\00324_63_2025_10_24_15_56_0.csv` channel `L_Deg_Z`
 - drift: `data\raw\20260108\00041_69_2026_1_8_17_19_0.csv` channel `R_Deg_Z`
-- drift: `data\raw\20260109\00045_69_2025_11_6_14_40_0.csv` channel `B_Deg_Z`
 - drift: `data\raw\20260109\00046_69_2025_11_6_14_52_0.csv` channel `L_Deg_Z`
-- drift: `data\raw\20260109\00046_69_2025_11_6_14_52_0.csv` channel `B_Deg_Z`
 - drift: `data\raw\20260114\00008_69_2026_1_14_10_48_0.csv` channel `L_Deg_Z`
 - drift: `data\raw\20260115\00038_69_2026_1_15_11_28_0.csv` channel `R_Deg_Z`
-- drift: `data\raw\20260121\00020_69_2026_1_21_15_33_0.csv` channel `B_Deg_Z`
-- drift: `data\raw\20260121\00073_69_2026_1_21_14_44_0.csv` channel `B_Deg_Z`
 - drift: `data\raw\20260128\00078_69_2026_1_28_14_30_0.csv` channel `L_Deg_Z`
 - drift: `data\raw\20260128\00084_69_2026_1_28_15_45_0.csv` channel `L_Deg_Z`
 - drift: `data\raw\20260128\00101_69_2026_1_28_13_38_0.csv` channel `L_Deg_Z`
 - drift: `data\raw\20260128\00101_69_2026_1_28_13_38_0.csv` channel `R_Deg_Z`
-- drift: `data\raw\20260626\00156_92_2026_6_26_9_52_0.csv` channel `B_Deg_Z`
 
 ## Method
 
 | method | segments |
 |---|---|
 | `grid_aligned` | 73 |
-| `decimate_5x_fir` | 14 |
+| `decimate_5x_fir` | 15 |
 | `interp_to_grid` | 6 |
 
 ## Dropped segments
@@ -89,6 +83,8 @@ orientation (§4.2). Flagged per channel, not dropped — the raw superset is ke
 - `data\raw\20260128\00081_69_2026_1_28_15_10_0.csv` seg 0: 0.090 s < 1.0 s (10 rows @ 100.0 Hz)
 - `data\raw\20260128\00084_69_2026_1_28_15_45_0.csv` seg 0: 0.090 s < 1.0 s (10 rows @ 100.0 Hz)
 - `data\raw\20260128\00100_69_2026_1_28_13_32_0.csv` seg 0: 0.090 s < 1.0 s (10 rows @ 100.0 Hz)
+- `data\raw\20260515\00095_70_2026_5_15_11_38_0.csv` seg 0: 0.018 s < 1.0 s (9 rows @ 500.0 Hz)
+- `data\raw\20260515\00095_70_2026_5_15_11_38_0.csv` seg 1: rate nan Hz matches no known acquisition rate
 - `data\raw\20260520\00220_100_2026_5_20_13_33_0.csv` seg 0: 0.004 s < 1.0 s (3 rows @ 500.0 Hz)
 - `data\raw\20260520\00220_100_2026_5_20_13_33_0.csv` seg 1: 0.014 s < 1.0 s (7 rows @ 500.0 Hz)
 - `data\raw\20260520\00221_100_2026_5_20_13_35_0.csv` seg 0: 0.002 s < 1.0 s (2 rows @ 500.0 Hz)
@@ -104,9 +100,9 @@ orientation (§4.2). Flagged per channel, not dropped — the raw superset is ke
 - `data\raw\20260601\00192_100_2026_6_1_14_52_0.csv` seg 0: 0.010 s < 1.0 s (6 rows @ 500.0 Hz)
 - `data\raw\20260601\00192_100_2026_6_1_14_52_0.csv` seg 1: 0.008 s < 1.0 s (4 rows @ 500.0 Hz)
 - `data\raw\20260601\00194_100_2026_6_1_15_10_0.csv` seg 0: 0.016 s < 1.0 s (8 rows @ 500.0 Hz)
-- `data\raw\20260626\00156_92_2026_6_26_9_52_0.csv` seg 0: rate 248.062 Hz fits no known family
-- `data\raw\20260626\00157_92_2026_6_26_9_52_0.csv` seg 0: rate 248.062 Hz fits no known family
+- `data\raw\20260626\00156_92_2026_6_26_9_52_0.csv` seg 0: rate 248.062 Hz matches no known acquisition rate
+- `data\raw\20260626\00157_92_2026_6_26_9_52_0.csv` seg 0: rate 248.062 Hz matches no known acquisition rate
 
 ## Quarantined files (whole-file rejects -> quarantine.jsonl ledger)
 
-- `data\raw\20260515\00095_70_2026_5_15_11_38_0.csv`: degenerate time base: median dt <= 0 (duplicate/backward timestamps) (needs_human)
+none
