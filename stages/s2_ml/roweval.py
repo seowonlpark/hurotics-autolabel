@@ -18,6 +18,7 @@ from stages.s2_ml.locoeval import DEFAULT_THRESHOLDS
 from stages.s2_ml import transitions as transitions_mod
 from stages.report import add_report_flag
 from freshness import stamp_inputs
+from runslayout import REGEN, keep_dir_for
 from stages.s2_ml.train import (
     CHAMPION_SPEC_PATH, PRESETS, build_model, load_spec, reference_stats, select_features,
     trainable,
@@ -100,6 +101,16 @@ def _committed_under(v: pd.DataFrame, conf: np.ndarray, thr: float,
     return (conf >= eff) & ~band
 
 
+# the worst-scoring subject and its accuracy. The NAME is the actionable half: a bare minimum
+# says a subject is bad, not which one to go and look at, and it is unrecoverable afterwards
+def _worst_rev(correct: np.ndarray, revs: np.ndarray,
+               keep: np.ndarray) -> tuple[float, str | None]:
+    per = [(float(correct[keep & (revs == r)].mean()), str(r)) for r in pd.unique(revs)
+           if (keep & (revs == r)).any()]
+    # ties break on the rev name, so the column does not wander between runs
+    return min(per) if per else (float("nan"), None)
+
+
 # does the physics floor/ceiling beat simply moving the threshold?
 def physics_gate_table(df: pd.DataFrame, threshold: float) -> dict:
     v = df[df["truth"].isin(TRAIN_CLASSES) & df["p_walk"].notna()]
@@ -110,11 +121,11 @@ def physics_gate_table(df: pd.DataFrame, threshold: float) -> dict:
     agrees, contradicts = _physics_masks(v)
 
     def point(k: np.ndarray) -> dict:
-        per = [correct[k & (revs == r)].mean()
-               for r in pd.unique(revs) if (k & (revs == r)).any()]
+        worst_acc, worst_rev = _worst_rev(correct, revs, k)
         return {"coverage": float(k.mean()), "n_committed": int(k.sum()),
                 "selective_accuracy": float(correct[k].mean()) if k.any() else float("nan"),
-                "worst_rev_accuracy": float(min(per)) if per else float("nan"),
+                "worst_rev_accuracy": worst_acc,
+                "worst_rev": worst_rev,
                 "errors_kept": int((~correct[k]).sum())}
 
     # The OFF arm swept finely, so any gated coverage can be matched against it
@@ -171,13 +182,14 @@ def curve(df: pd.DataFrame) -> list[dict]:
     rows = []
     for thr in DEFAULT_THRESHOLDS:
         k = _committed(v, conf, thr)
-        per = [correct[k & (revs == r)].mean() for r in pd.unique(revs) if (k & (revs == r)).any()]
+        worst_acc, worst_rev = _worst_rev(correct, revs, k)
         rows.append({
             "threshold": float(thr),
             "coverage": float(k.mean()),
             "n_labeled": int(k.sum()),
             "selective_accuracy": float(correct[k].mean()) if k.any() else float("nan"),
-            "worst_rev_accuracy": float(min(per)) if per else float("nan"),
+            "worst_rev_accuracy": worst_acc,
+            "worst_rev": worst_rev,
             "errors_kept": int((~correct[k]).sum()),
         })
     return rows
@@ -263,6 +275,12 @@ def unknown_agreement(df: pd.DataFrame) -> dict:
     }
 
 
+# the worst-subject cell, named where the artifact carries a name; older artifacts do not
+def _worst_cell(r: dict) -> str:
+    acc = f"{r['worst_rev_accuracy']:.4f}"
+    return f"{acc} (`{r['worst_rev']}`)" if r.get("worst_rev") else acc
+
+
 # the floor/ceiling section
 def render_physics_gate(g: dict) -> list[str]:
     if not g:
@@ -295,7 +313,7 @@ def render_physics_gate(g: dict) -> list[str]:
                        f"(thr {m['threshold']:.4f})")
             verdict += " — **worse**" if d > 0 else (" — better" if d < 0 else " — tied")
         lines.append(f"| `{r['policy']}` | {r['coverage']:.4f} | "
-                     f"{r['selective_accuracy']:.4f} | {r['worst_rev_accuracy']:.4f} | "
+                     f"{r['selective_accuracy']:.4f} | {_worst_cell(r)} | "
                      f"{r['errors_kept']:,} | {verdict} |")
     lines += [
         "", "**How to read the last column.** A policy that changes coverage cannot be "
@@ -341,7 +359,7 @@ def render(tag: str, c: list[dict], reasons: pd.DataFrame, unk: dict, revs: list
              "|---|---|---|---|---|"]
     for r in c:
         lines.append(f"| {r['threshold']:.2f} | {r['coverage']:.4f} | "
-                     f"{r['selective_accuracy']:.4f} | {r['worst_rev_accuracy']:.4f} | "
+                     f"{r['selective_accuracy']:.4f} | {_worst_cell(r)} | "
                      f"{r['errors_kept']:,} |")
     if by_rev:
         lines += ["", f"## Per subject, at the shipped threshold {threshold:.2f}", "",
@@ -404,12 +422,17 @@ def render(tag: str, c: list[dict], reasons: pd.DataFrame, unk: dict, revs: list
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="runs/s2_ml")
+    ap.add_argument("--out", default=str(REGEN / "s2_ml"))
     add_report_flag(ap)
-    ap.add_argument("--threshold", type=float, default=PRESETS["balanced"])
     ap.add_argument("--lockbox", action="store_true",
                     help="SINGLE USE: fit on all training revs, score the sealed revs")
     args = ap.parse_args()
+
+    # NOT a flag. `curve` below sweeps every threshold and the sweep is in the `.json`, so an
+    # override would only re-pick which row of it the per-rev and confusion tables are cut at --
+    # and this stage is THE accuracy claim, which the repo quotes at the declared operating point.
+    # Read another point off the curve; do not re-run the stage to move the headline.
+    threshold = PRESETS["balanced"]
 
     out_dir = (REPO_ROOT / args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -431,7 +454,7 @@ def main() -> None:
         model, ref = fit_on(train_df, feats, None)
         meta = {**base_meta, "reference_stats": ref}
         held = [t for t in trials if t.split == "lockbox"]
-        parts.append(score_trials(model, meta, held, args.threshold))
+        parts.append(score_trials(model, meta, held, threshold))
         tag = "LOCKBOX (single use)"
     else:
         for rev in sorted(train_df["rev"].unique()):
@@ -439,7 +462,7 @@ def main() -> None:
             meta = {**base_meta, "reference_stats": ref}
             held = [t for t in trials if t.split == "train" and t.rev == rev]
             print(f"[rowe] scoring held-out {rev} ({len(held)} trials)")
-            parts.append(score_trials(model, meta, held, args.threshold))
+            parts.append(score_trials(model, meta, held, threshold))
         tag = "leave-one-rev-out"
 
     df = pd.concat(parts, ignore_index=True)
@@ -447,16 +470,16 @@ def main() -> None:
     reasons = reason_report(df)
     unk = unknown_agreement(df)
     revs = sorted(df["rev"].unique())
-    by_rev = per_rev(df, args.threshold)
-    conf = confusion(df, args.threshold)
+    by_rev = per_rev(df, threshold)
+    conf = confusion(df, threshold)
 
     print(f"\n[rowe] {tag}: {len(df):,} rows over {revs}")
     for r in c:
         if r["threshold"] in tuple(PRESETS.values()):
             print(f"[rowe]   thr {r['threshold']:.2f}: coverage {r['coverage']:.4f}  "
                   f"selective_acc {r['selective_accuracy']:.4f}  "
-                  f"worst_subject {r['worst_rev_accuracy']:.4f}")
-    print(f"[rowe] per subject at threshold {args.threshold:.2f}:")
+                  f"worst_subject {r['worst_rev_accuracy']:.4f} ({r.get('worst_rev') or '?'})")
+    print(f"[rowe] per subject at threshold {threshold:.2f}:")
     for r in by_rev:
         print(f"[rowe]   {r['rev']:<6} scored={r['rows_scored']:>7,}  "
               f"committed={r['rows_committed']:>7,}  coverage {r['coverage']:>6.1%}  "
@@ -475,7 +498,7 @@ def main() -> None:
         print(f"\n[rowe] abstains on {unk['abstain_rate_on_human_unknown']:.1%} of human `-1` "
               f"rows vs {unk['abstain_rate_elsewhere']:.1%} elsewhere")
 
-    gate = physics_gate_table(df, args.threshold)
+    gate = physics_gate_table(df, threshold)
     ce, cec = gate["committed_errors"], gate["committed_errors_contradicted"]
     print(f"\n[rowe] physics gate: of {ce:,} committed errors, physics contradicts "
           f"{cec:,} ({cec / ce:.1%})" if ce else "\n[rowe] physics gate: no committed errors")
@@ -493,17 +516,23 @@ def main() -> None:
     t_spec = WindowSpec(window_s=base_meta["window_s"],
                         stride_s=base_meta["inference_stride_s"],
                         fs_hz=base_meta["fs_hz"])
+    # The lockbox pass reads a split that is spent once (dataset.py), so its two reports are the
+    # only ones that exist and no re-run legitimately replaces them: they go to the keep-half.
+    # The LORO pass refits from the spec on demand, so it stays with the rest of the stage output.
+    dest = keep_dir_for(out_dir) if args.lockbox else out_dir
+    dest.mkdir(parents=True, exist_ok=True)
+
     t_stem = "transitions_lockbox" if args.lockbox else "transitions_loro"
-    t_sum = transitions_mod.run(df, t_spec, out_dir, t_stem, tag, report=args.report)
+    t_sum = transitions_mod.run(df, t_spec, dest, t_stem, tag, report=args.report)
     transitions_mod.print_summary(t_sum)
 
     stem = "roweval_lockbox" if args.lockbox else "roweval_loro"
     if args.report:
-        (out_dir / f"{stem}.md").write_text(
-            render(tag, c, reasons, unk, revs, by_rev, args.threshold, conf, gate),
+        (dest / f"{stem}.md").write_text(
+            render(tag, c, reasons, unk, revs, by_rev, threshold, conf, gate),
             encoding="utf-8")
-    (out_dir / f"{stem}.json").write_text(json.dumps(
-        {"tag": tag, "threshold": args.threshold, "revs": revs,
+    (dest / f"{stem}.json").write_text(json.dumps(
+        {"tag": tag, "threshold": threshold, "revs": revs,
          # recorded so a stale artifact is identifiable: which model produced this curve
          "n_features": len(feats), "features": feats,
          "curve": c,
@@ -512,10 +541,13 @@ def main() -> None:
         encoding="utf-8")
     # This is the accuracy claim the repo quotes, and it is re-fitted from the spec rather than
     # loaded, so a promotion between this run and a reader silently changes what it describes.
-    stamp_inputs(out_dir, {"champion_spec": CHAMPION_SPEC_PATH}, stage=stem)
+    # The stamp follows the report into `dest`: it is the record of what THAT file describes, and
+    # for the lockbox it is the only warning a reader gets, since the read cannot be redone.
+    stamp_inputs(dest, {"champion_spec": CHAMPION_SPEC_PATH}, stage=stem)
 
-    print(f"\n[rowe] -> {out_dir / (stem + '.md')}")
-    print(f"[rowe] -> {out_dir / (t_stem + '.md')}")
+    ext = ".md" if args.report else ".json"
+    print(f"\n[rowe] -> {dest / (stem + ext)}")
+    print(f"[rowe] -> {dest / (t_stem + ext)}")
 
 
 if __name__ == "__main__":

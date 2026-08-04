@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from scipy.signal import decimate
 
+from freshness import stamp_inputs
 from stages.console import use_replacement_encoding
 from stages.report import add_report_flag
 from stages.s1_clean.config import CANONICAL_HZ, DECIMATE_FILTER
@@ -17,8 +18,10 @@ from stages.s2_ml.dataset import FEATURES, Trial, load_dataset
 from stages.s2_ml.features import WindowSpec, rest_reference
 from stages.s3_physics.anchors import ANCHOR_NAMES, WALKING, window_anchors
 
+from runslayout import REGEN
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-S3_OUT_DIR = REPO_ROOT / "runs" / "s3_physics"
+S3_OUT_DIR = REGEN / "s3_physics"
 
 # Halve the rate: a genuine bandwidth cut, not timestamp quantization at the same rate
 AUDIT_FACTOR = 2
@@ -199,7 +202,7 @@ def main() -> None:
     # Declared rather than left unstamped, so "no model dependency" and "never checked" stay distinct.
     stamp_inputs(out_dir, {}, stage="rate_audit")
 
-    print(f"[rate] -> {out_dir / 'rate_audit.md'}")
+    print(f"[rate] -> {out_dir / ('rate_audit.md' if args.report else 'rate_audit.json')}")
 
     # the gate; artifacts written first, so a run that stops here leaves the page explaining why
     new = sorted(a for a in ANCHOR_NAMES

@@ -37,8 +37,10 @@ from stages.s2_ml.transform import (
     raw_csv_to_features,
 )
 
+from runslayout import REGEN
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MODEL_DIR = REPO_ROOT / "runs" / "s2_ml"
+DEFAULT_MODEL_DIR = REGEN / "s2_ml"
 
 RAW_DEVICE, LPF_VIEW = "raw_device", "lpf_view"
 

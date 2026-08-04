@@ -19,12 +19,12 @@ when you are iterating on one stage by hand.
 |---|---|---|
 | `python run_pipeline.py` | **the pipeline.** `data/raw` → `runs/breakdown.md`, every stage gated on its output artifact. `--with-agents` adds the paid reviews, `--from KEY` resumes | after new data lands, or any change to a stage |
 | `python -m stages.s2_ml.label FILE` | **the deliverable.** One recording in, one row out per row in, carrying `Label` / `guess` / `confidence` / `ambiguous` / `reason`. Takes a raw device log or an `lpf_view` file | labelling one recording |
-| `python -m stages.s2_ml.label_all` | the deliverable over the whole of `data/raw` in one sweep, same code path per file | labelling the corpus |
+| `python -m stages.s2_ml.label_all` | the deliverable over the whole of `data/raw` in one sweep, same code path per file. Also step 16 of the pipeline, so a full run produces it | labelling the corpus off a champion you did not just fit |
 | `python -m stages.s1_clean.validate FILE` | **is this recording usable at all?** Label-free, model-free pre-flight: rate, gaps, segment length, channel presence. Answers before you spend anything | a new recording arrives and you want to know if it can be scored |
 | `python -m stages.s3_physics.inspect_window REV TRIAL --t SECONDS` | **adjudicate one suspect window by eye.** Prints the raw interleg trace and the ±1° crossings the swap rule counted, around one timestamp | a review flagged a window as a suspected mislabel and a person has to settle it |
 
 The heading carries no count on purpose. It said "Five." once, drifted, and the drift is
-recorded in `needtowrite.md` §4 as a defect worth not repeating.
+recorded in `archive/needtowrite.md` §4 as a defect worth not repeating.
 
 ---
 
@@ -35,8 +35,9 @@ recorded in `needtowrite.md` §4 as a defect worth not repeating.
 | **`DOMAIN_NOTES.md`** | Everything the corpus taught us the hard way. Injected into every agent's prompt. **Read before touching any data.** |
 | **`caveats.md`** | What this pipeline is shaky about: thin constants, accepted imperfections, unverified paths, deliberate omissions. Read before trusting a number. |
 | **`OPERATING_POINTS.md`** | The abstention threshold: what each preset costs and buys, and why the default is 0.85. |
-| **`needtowrite.md`** | The spec this file was rewritten from, the house style it is written in, and the claims from the deleted originals that no stage regenerates. |
 | this file | How to run it. |
+| **`RUNBOOK.md`** | What each command *touches*: every input path, every step's gate, every file it writes. Derived by reading the code, not from the other docs. Read it when this file says what to run and you need to know what landed where. |
+| **`runs/README.md`** | The `runs/` tree itself — what is safe to delete, what can never be rebuilt, and why. |
 
 `DOMAIN_NOTES.md` is not background reading — it is the reason this pipeline is shaped the
 way it is. Every entry carries a provenance tag: **[measured]** (reproducible by re-running
@@ -78,11 +79,20 @@ source of `ModuleNotFoundError` here.
 ## Data layout
 
 ```
-data/raw/<YYYYMMDD[_n]>/*.csv    unlabeled device logs, exactly as the device wrote them
-data/labeled/rev*/csv/*.csv      the golden annotated corpus, never mixed into raw
-data/clean/<session>/*.parquet   S1 output: canonical 100 Hz, measured columns only,
-                                 gyro normalized to deg/s, + a channel_trust.json sidecar
+data/raw/<YYYYMMDD[_n]>/*.csv       unlabeled device logs, exactly as the device wrote them
+data/labeled/rev*/csv/*.csv         the golden annotated corpus, never mixed into raw
+data/clean/<session>/
+    <stem>.channel_trust.json       S1 output, and the ONLY thing it persists per file: the
+                                    measured gyro unit and Deg->Gyro permutation for that
+                                    recording, plus which axes abstained
 ```
+
+**S1's product is a verdict, not a copy of the corpus.** Clean resamples each file onto the
+canonical 100 Hz grid, keeps measured columns only and normalizes gyro to deg/s — then
+*measures the frame and drops it*. Nothing downstream reads a cleaned frame: `label.py`
+rebuilds features from the raw log at label time and consults that file's
+`channel_trust.json` to know which axis it may read, and S2 trains from `data/labeled`.
+A persisted second copy of the signal would be a second thing to keep in step with raw.
 
 **Session date comes from the FOLDER, not from the filename or any column** (§manifest).
 Filenames carry a date that is sometimes the export date and sometimes wrong; the directory
@@ -93,21 +103,28 @@ variant.** Raw is unlabeled by definition — a `Label` there means annotated da
 copied into the input tree, and every accuracy number computed afterwards is worthless.
 
 **Quarantine is a ledger, not a deletion.** A file S1 cannot clean is recorded in
-`runs/s1_clean/quarantine.jsonl` with the reason and stays on disk. Nothing in this
+`runs/regen/s1_clean/quarantine.jsonl` with the reason and stays on disk. Nothing in this
 pipeline deletes raw data.
 
 ### What is and is not in git
 
-`data/` in its entirety, `.env`, and `tracker/` are gitignored. **Nothing from HUROTICS
-leaves the machine via git.**
+`data/` in its entirety, `.env`, `tracker/`, and anything new under `archive/` are
+gitignored. **Nothing from HUROTICS leaves the machine via git.**
 
-`runs/` and `labeled_raw/` are split rather than ignored wholesale, and the split is the
-point: the *regenerable* artifacts stay out (fitted models, per-row scores, parquet, the
-few-GB per-session labelled CSVs — `train.py` and `label_all.py` rebuild them on demand),
-while the *measurements* are versioned alongside the claims they support.
-`runs/s2_ml/roweval_lockbox.json` is the single-use rev8 read and can never be regenerated;
-`runs/s2_ml/experiments.jsonl` is the only record of how the feature set got to where it is.
-See `.gitignore`, which explains itself.
+`runs/` and `labeled_raw/` are filtered on **size**, not on worth: what stays out is the
+heavy binaries — fitted models, per-row scores, and the few-GB per-session labelled CSVs,
+all of which `train.py` and `label_all.py` rebuild on demand. Everything else there is
+small and is evidence for a claim made in code or in `OPERATING_POINTS.md`, so it travels
+with the claim. See `.gitignore`, which explains itself.
+
+**That is a different question from `runs/regen` vs `runs/keep`,** which splits on whether a
+full run can rebuild a file at all — `rm -rf runs/regen` is safe and sometimes the right
+move; nothing under `runs/keep` can be recovered at any price.
+`runs/keep/s2_ml/roweval_lockbox.json` is the single-use rev8 read,
+`runs/keep/s2_ml/experiments.jsonl` is the only record of how the feature set got to where
+it is, and `runs/keep/ablations/` holds the LOCO evaluations behind `champion_spec.json`'s
+rejected lines. `runs/README.md` is the index; `runslayout.py` is the single definition of
+every path under `runs/`, imported rather than restated by each stage.
 
 ---
 
@@ -131,11 +148,38 @@ failure prints `--from <key>` to resume at that step.
 yet. It is also the way to see the step keys `--from` accepts.
 
 The individual commands below are what the runner invokes; run them by hand when iterating
-on one stage. If you do, note that `runs/` is overwritten in place, so re-running one stage
-alone leaves the downstream reports describing inputs that no longer exist. `freshness.py`
-stamps the sha256 of every artifact a stage consumed into that stage's `_inputs.json`, and
-`stages.breakdown` checks all of them at the end of every run. **It reports; it does not
-delete.**
+on one stage. If you do, note that `runs/regen/` is overwritten in place, so re-running one
+stage alone leaves the downstream reports describing inputs that no longer exist.
+`freshness.py` stamps the sha256 of every artifact a stage consumed into
+`_inputs.<stage>.json` in that stage's output directory — **one stamp per stage, not per
+directory**, so `train`, `roweval` and `raweval` sharing `runs/regen/s2_ml` cannot vouch for
+each other. `stages.breakdown` checks every directory `runslayout.checkable_dirs()` names at
+the end of every run, stamped or not: a stage that never declared its inputs raises an
+`unchecked` flag rather than reading as clean. **It reports; it does not delete.**
+
+`RUNBOOK.md` §3 has the whole thing as one table — every step, its gate, and every file it
+writes.
+
+### The `.md` is opt-in; the `.json` is not
+
+Every stage writes its machine-readable artifact on every run and renders the human-facing
+report **only under `--report`**:
+
+```powershell
+python -m stages.s1_clean.run --report      # adds census.md beside manifest.jsonl
+python -m stages.s2_ml.train  --report      # adds locoeval.md beside locoeval.json
+```
+
+The flag is registered from one place, `stages/report.py`, so it cannot drift between
+stages, and each stage's stdout names whichever artifact it actually wrote. **A gate always
+names the machine-read artifact, never the `.md`** — nothing in this repo parses a `.md`
+under `runs/`, so gating on a rendered page would have made deleting a report you had
+finished reading look like a stage that never ran. Each `.md` is a pure render of its twin
+and holds no number the twin does not.
+
+`runs/breakdown.md` is the deliberate exception to `--report`: it is assembled from every
+stage's `.json` rather than rendered from one of them, so it is the one page written to be
+read, and it is never behind a flag.
 
 ### The checks that read no data
 
@@ -151,19 +195,21 @@ stopped firing looks exactly like a pipeline with nothing wrong.
 ### S1 — census, then clean
 
 ```powershell
-python -m stages.s1_clean.run    --out runs\s1_census   # measure the corpus, judge nothing
-python -m stages.s1_clean.clean  --out runs\s1_clean    # resample onto the canonical grid
+python -m stages.s1_clean.run      # measure the corpus, judge nothing -> runs\regen\s1_census
+python -m stages.s1_clean.clean    # resample onto the canonical grid -> runs\regen\s1_clean
 ```
 
-The census produces `census.md` and `manifest.jsonl` (one row per file: session, variant,
-measured rate, jitter, gaps, label codes). The clean stage writes `data/clean/**.parquet`
-with a per-file `channel_trust.json` sidecar, plus `segments.jsonl`, `observations.jsonl`,
-`quarantine.jsonl` and `clean_report.md`.
+The census produces `manifest.jsonl` (one row per file: session, variant, measured rate,
+jitter, gaps, label codes), and `census.md` under `--report`. The clean stage writes the
+per-file `channel_trust.json` into `data/clean/`, plus `segments.jsonl`,
+`observations.jsonl` and `quarantine.jsonl` into its run directory — and `clean_report.md`
+under `--report`. Both default their `--out` to the right place; pass it only to send a run
+somewhere scratch.
 
 ### S2 — train, then measure what a caller receives
 
 ```powershell
-python -m stages.s2_ml.train      # champion + leave-one-rev-out window CV -> locoeval.md
+python -m stages.s2_ml.train      # champion + leave-one-rev-out window CV -> locoeval.json
 python -m stages.s2_ml.roweval    # the ROW-level curve, per-subject table, reason validation
 python -m stages.s2_ml.raweval    # the same accuracy, measured on the RAW device route
 ```
@@ -172,8 +218,15 @@ python -m stages.s2_ml.raweval    # the same accuracy, measured on the RAW devic
 and gets **rows**, and the two differ — rows are scored by averaging every window that
 covers them, which changes both the accuracy and the confidence ordering the threshold is
 set from. `roweval` runs the real `label.py` path rather than a reimplementation, and is
-the number this repo quotes. It also writes `transitions_loro.md`, which measures what the
+the number this repo quotes. It also writes `transitions_loro.json`, which measures what the
 largest abstention bucket is actually made of.
+
+Under `--lockbox`, `roweval` writes to `runs/keep/s2_ml` instead: that read is spent once
+and no re-run legitimately replaces it, so its report and its input stamp live on the side
+of the tree nothing rebuilds. The LORO pass refits from the spec on demand and stays in
+`runs/regen/s2_ml` with the rest of the stage. **`roweval_lockbox.md` cannot be recovered by
+re-running the stage — do not try.** Its numbers survive in the tracked
+`runs/keep/s2_ml/roweval_lockbox.json`, and `roweval.render()` re-renders the page from it.
 
 `raweval` closes the last link in the chain: `roweval` measures the `lpf_view` export,
 `verify_serve` shows the raw route agrees with that export row for row but drops `Label`
@@ -198,7 +251,7 @@ behind a flag, because slow is not a reason to skip a check.
 ```powershell
 python -m stages.s3_physics.label_audit   # which trials contradict their own labels
 python -m stages.s3_physics.rate_audit    # body or clock? gyro_energy must FAIL
-python -m stages.s3_physics.plausibility --calibrate --control   # file-level bounds
+python -m stages.s3_physics.plausibility  # file-level bounds: calibrate, then fire at faults
 ```
 
 S3 does three things at three different strengths and the ordering is deliberate, because
@@ -209,21 +262,22 @@ no trained parameter and never sees a label), it bounds a **file** against the m
 that sizes them.
 
 `rate_audit` asks whether an anchor describes the body or the sampling grid; `gyro_energy`
-is its negative control and is *expected* to fail. `plausibility --control` injects
-synthetic channel faults into a clean recording and reports which bounds catch them,
-because a bound that has never fired is not evidence that the data is clean.
+is its negative control and is *expected* to fail. `plausibility` injects synthetic channel
+faults into a clean recording and reports which bounds catch them — on every run, not under
+a flag, because a bound that has never fired is not evidence that the data is clean.
 
 ### The breakdown — every stage on one page
 
 ```powershell
-python -m stages.breakdown --out runs     # runs/breakdown.md + breakdown.json
+python -m stages.breakdown     # -> runs/breakdown.md
 ```
 
 **The last step of every run**, and the only one that reads all three stages plus the
 corpus sweep. It **measures nothing** — every number is copied from the artifact that owns
 it and the artifact is named beside it, so it cannot disagree with a stage. Read
-`breakdown.md` to see the whole pipeline at once; read the stage's own report to change a
-number.
+`breakdown.md` to see the whole pipeline at once; go to the stage that owns a number to
+change it. There is no `breakdown.json` — it was the machine-readable twin nothing ever
+read, and `build()` still returns the structure if a reader ever turns up.
 
 Two things it does that no stage report can. It **states its own gaps**: an artifact that
 was not there is printed in §B with the command that produces it, because a stage that did
@@ -244,6 +298,10 @@ python -m stages.s2_ml.label some_annotated_trial.csv --preset high_precision
 python -m stages.s2_ml.label_all                      # every raw file -> labeled_raw\
 python -m stages.s2_ml.label_all --summary-only       # sweep only, writes no per-file CSVs
 ```
+
+`label_all` also runs as step 16 of `run_pipeline.py`, after the champion is final, so a
+full run leaves `labeled_raw/` describing the model everything else in that run describes.
+Call it by hand when you want a different threshold, a subset, or a scratch `--out`.
 
 Takes **either** shape of file, dispatched on the header's family marker resolved by name:
 a raw device log, or an `lpf_view` file. A raw log is bridged to the four `lpf_view`
@@ -347,7 +405,7 @@ documented.
 | stage | deterministic core | agent role |
 |---|---|---|
 | **S1 clean** | schema census, rate normalization, gap segmentation, channel trust | `s1_exception` — triage the exception queue |
-| **S2 ml** | windowing + features, train + locoeval, row-level labelling with abstention, row and raw evaluation | `s2_experiment` — propose a challenger; `locoeval` decides, not the agent |
+| **S2 ml** | windowing + features, train + locoeval, row-level labelling with abstention, row and raw evaluation, the corpus sweep | `s2_experiment` — propose a challenger; `locoeval` decides, not the agent |
 | **S3 physics** | swap-rule anchors, rate-invariance audit, annotation audit, file-level plausibility | `s3_label_review` — judge what the annotation audit flagged |
 
 ### The four non-negotiables
@@ -358,13 +416,13 @@ documented.
    written rationale, low confidence escalates to `needs_human`.
 3. **"Best" is defined by `locoeval`, not by an agent's opinion.** An agent may propose a
    declarative `ExperimentSpec`; `experiment.py` runs it, scores it, applies the promotion
-   rule, and logs every outcome — rejections included — to `runs/s2_ml/experiments.jsonl`.
+   rule, and logs every outcome — rejections included — to `runs/keep/s2_ml/experiments.jsonl`.
    The champion changes only via a logged, metric-justified promotion.
 4. **Every stage closes with a `DOMAIN_NOTES.md` update.** Discoveries become permanent,
    not conversational.
 
 Agents are never authorized to delete raw data, edit `DOMAIN_NOTES.md` without human
-review, or retrain the champion. Each writes into its own `runs/<date>_runN/` containing
+review, or retrain the champion. Each writes into its own `runs/keep/agent_runs/<date>_runN/` containing
 `run_meta.json` (the commit that produced it), `costs.json` (per-agent spend), and
 `system_prompt.txt` (exactly what the agent was told). A `run_log.jsonl` appears alongside
 via a `PostToolUse` hook — one line per tool call, so a run whose agent used no tools writes
@@ -385,8 +443,10 @@ none.
 | **S3** label audit | complete — two trial-level detectors, both model-free |
 | **S3** label review agent | complete — assigns a cause to each flagged trial; nominates, never enacts |
 | **S3** plausibility | complete — file-level bounds with synthetic-fault controls |
+| **S2** corpus sweep | complete — `label_all` on the spine after the champion is final, so `labeled_raw/` describes the run's own model |
 | breakdown | complete — final step of every run, reads every stage, states its own gaps, raises mechanical flags |
-| hardening + handoff | not started |
+| handoff docs | complete — `RUNBOOK.md` (every path, command and output, read off the code), `runs/README.md` (what is safe to delete), `archive/README.md` (what was retired and why) |
+| hardening | not started |
 
 ---
 
@@ -399,10 +459,11 @@ none.
 At the shipped threshold of 0.85, on development subjects held out one at a time:
 **coverage 84.66% at accuracy 0.9901, worst subject `rev5` at 0.9525.**
 
-That pair is copied from **`runs/s2_ml/roweval_loro.json`** and **re-running
+That pair is copied from **`runs/regen/s2_ml/roweval_loro.json`** and **re-running
 `s2_roweval` invalidates it.** `stages/breakdown.py` checks mechanically that this file
 still quotes the live pair and flags it the moment the champion or the threshold moves —
-read `runs/s2_ml/roweval_loro.md` if the two disagree, never this table.
+if the two disagree, believe `runs/regen/s2_ml/roweval_loro.json` and never this table
+(`python -m stages.s2_ml.roweval --report` renders it as a page).
 
 > **These are development-subject numbers.** The sealed lockbox subject `rev8` scores
 > **0.9308 on the rows it commits to**, at 76.4% coverage — the target is missed there, and

@@ -15,6 +15,8 @@ from stages.s2_ml.dataset import FEATURES, LABEL_COL, STAND, WALK, load_dataset
 from stages.s2_ml.features import WindowSpec, rest_reference
 from stages.s3_physics.serve import STANDING, WALKING, row_verdict, segment_verdicts
 
+from runslayout import REGEN
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ---- the bounds; each a JUDGEMENT sited outside a measured range, not a tuned threshold ----
@@ -146,7 +148,7 @@ def summarize(findings_by_file: dict[str, list[dict]], n_files: int = 0) -> list
         lines += [f"**No file tripped a hard bound** across {n_files} labelled file(s). "
                   f"A bound that never fires is not evidence that everything passed "
                   f"(§11.1) — the synthetic controls in `plausibility.py` are what show it "
-                  f"can fire at all: `python -m stages.s3_physics.plausibility --control`.",
+                  f"can fire at all: `python -m stages.s3_physics.plausibility`.",
                   ""]
     else:
         lines += [f"**{len({f for f, _ in hard})} file(s) tripped a hard bound.**", ""]
@@ -259,17 +261,16 @@ def run_controls(rev: str = "rev13", trial: int = 1) -> pd.DataFrame:
 
 def main() -> None:
     use_replacement_encoding()
+    # Run as a module this REGENERATES the reference numbers: it calibrates and it runs the
+    # controls, both, every time. They used to be two opt-in flags with an error when neither was
+    # passed, which made the only correct invocation the one the spine already hardcodes -- and
+    # made half a `plausibility.json` a thing that could be written. A bound sited against the
+    # corpus but never fired at an injected fault is a number with no evidence it works.
     ap = argparse.ArgumentParser(
-        description="File-level sanity bounds on a labelled file.")
-    ap.add_argument("--calibrate", action="store_true",
-                    help="recompute the corpus numbers the bounds are sited against")
-    ap.add_argument("--control", action="store_true",
-                    help="inject the synthetic channel faults and report what is caught")
-    ap.add_argument("--out", type=Path, default=REPO_ROOT / "runs" / "s3_physics")
+        description="Re-site the file-level sanity bounds: calibrate against the corpus and "
+                    "fire them at injected faults. (Serving uses this module as a library.)")
+    ap.add_argument("--out", type=Path, default=REGEN / "s3_physics")
     args = ap.parse_args()
-    if not (args.calibrate or args.control):
-        ap.error("nothing to do: this is a library for `label_all`. Pass --calibrate "
-                 "and/or --control to regenerate the reference numbers.")
 
     out_dir = args.out if args.out.is_absolute() else REPO_ROOT / args.out
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -279,52 +280,51 @@ def main() -> None:
                      "physics_loud_min": PHYSICS_LOUD_MIN,
                      "model_walk_max": MODEL_WALK_MAX, "min_rows": MIN_ROWS}
 
-    if args.calibrate:
-        df = corpus_calibration()
-        has = df[df["annotated_walk_frac"] > 0.05]
-        print(df.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
-        print(f"\n[calib] >5% annotated walk: n={len(has)}  "
-              f"min physics {has['physics_walk_frac'].min():.4f}  "
-              f"p05 {has['physics_walk_frac'].quantile(0.05):.4f}  "
-              f"median {has['physics_walk_frac'].median():.4f}")
-        print(f"[calib] PHYSICS_SILENT_MAX={PHYSICS_SILENT_MAX} sits "
-              f"{has['physics_walk_frac'].min() / PHYSICS_SILENT_MAX:.0f}x below it")
-        corr = df[["annotated_walk_frac", "physics_walk_frac"]].corr().iloc[0, 1]
-        print(f"[calib] corr(annotated, physics) = {corr:.4f}")
-        payload["corpus_min_physics_walk_with_annotated_walk"] = float(
-            has["physics_walk_frac"].min())
-        payload["corpus_corr_annotated_physics"] = float(corr)
-        payload["trials"] = df.to_dict("records")
+    df = corpus_calibration()
+    has = df[df["annotated_walk_frac"] > 0.05]
+    print(df.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
+    print(f"\n[calib] >5% annotated walk: n={len(has)}  "
+          f"min physics {has['physics_walk_frac'].min():.4f}  "
+          f"p05 {has['physics_walk_frac'].quantile(0.05):.4f}  "
+          f"median {has['physics_walk_frac'].median():.4f}")
+    print(f"[calib] PHYSICS_SILENT_MAX={PHYSICS_SILENT_MAX} sits "
+          f"{has['physics_walk_frac'].min() / PHYSICS_SILENT_MAX:.0f}x below it")
+    corr = df[["annotated_walk_frac", "physics_walk_frac"]].corr().iloc[0, 1]
+    print(f"[calib] corr(annotated, physics) = {corr:.4f}")
+    payload["corpus_min_physics_walk_with_annotated_walk"] = float(
+        has["physics_walk_frac"].min())
+    payload["corpus_corr_annotated_physics"] = float(corr)
+    payload["trials"] = df.to_dict("records")
 
-    if args.control:
-        ctl = run_controls()
-        print()
-        print(ctl.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
-        missed = ctl[(ctl["fault"] != "unmodified")
-                     & (ctl["caught_by"] == "-- NOTHING --")]["fault"].tolist()
-        print(f"\n[control] uncaught faults: {', '.join(missed) if missed else 'none'}")
-        if "swapped_legs" in missed:
-            print("[control]   `swapped_legs` is EXPECTED here: swapping the legs negates "
-                  "L-R and swap_count thresholds symmetrically, so the rule cannot see it.")
-        if ctl.loc[ctl["fault"] == "unmodified", "caught_by"].iloc[0] != "-- NOTHING --":
-            print("[control] WARNING: the unmodified control tripped a bound. The bound is "
-                  "wrong, not the file.")
-        payload["controls"] = ctl.to_dict("records")
+    ctl = run_controls()
+    print()
+    print(ctl.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
+    missed = ctl[(ctl["fault"] != "unmodified")
+                 & (ctl["caught_by"] == "-- NOTHING --")]["fault"].tolist()
+    print(f"\n[control] uncaught faults: {', '.join(missed) if missed else 'none'}")
+    if "swapped_legs" in missed:
+        print("[control]   `swapped_legs` is EXPECTED here: swapping the legs negates "
+              "L-R and swap_count thresholds symmetrically, so the rule cannot see it.")
+    if ctl.loc[ctl["fault"] == "unmodified", "caught_by"].iloc[0] != "-- NOTHING --":
+        print("[control] WARNING: the unmodified control tripped a bound. The bound is "
+              "wrong, not the file.")
+    payload["controls"] = ctl.to_dict("records")
 
     (out_dir / "plausibility.json").write_text(
         json.dumps(payload, indent=2, default=float), encoding="utf-8")
 
-    # The bounds themselves are model-free, so an empty stamp is the honest declaration -- but
-    # `--control` scores the fault injections through the FITTED champion, and a refit moves the
-    # "caught_by" column under this file. Stamp what was actually read, not what could have been.
-    # Imported here, not at module scope: label.py imports this module, so a top-level import
-    # would close the cycle.
+    # The bounds themselves are model-free, but the controls score the fault injections through the
+    # FITTED champion, and a refit moves the "caught_by" column under this file. Stamp what was
+    # actually read. (This is also why the controls are no longer optional: the stamp used to be
+    # empty on a `--calibrate`-only run, so two runs wrote the same filename with different
+    # staleness rules.) Imported here, not at module scope: label.py imports this module, so a
+    # top-level import would close the cycle.
     from stages.s2_ml.label import DEFAULT_MODEL_DIR
-    # `stage=`, because runs/s3_physics holds rate_audit's and label_audit's outputs too -- an
+    # `stage=`, because runs/regen/s3_physics holds rate_audit's and label_audit's outputs too -- an
     # unnamed stamp there goes stale without saying which of the three stopped matching.
     stamp_inputs(out_dir, {"champion": DEFAULT_MODEL_DIR / "champion.joblib",
-                           "model_meta": DEFAULT_MODEL_DIR / "model_meta.json"}
-                 if args.control else {}, stage="plausibility")
+                           "model_meta": DEFAULT_MODEL_DIR / "model_meta.json"},
+                 stage="plausibility")
 
     print(f"[plaus] -> {out_dir / 'plausibility.json'}")
 

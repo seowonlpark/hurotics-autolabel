@@ -9,7 +9,7 @@ threatens that number belongs here.
 
 Current measured position, **development subjects** (leave-one-rev-out, 7 revs,
 1,244,292 scored rows): **coverage 84.66% at 0.9901, worst subject `rev5` 0.9525**. Every
-operating point in `runs/s2_ml/roweval_loro.md` clears the target, and
+operating point in `runs/regen/s2_ml/roweval_loro.md` clears the target, and
 `OPERATING_POINTS.md` is where the curve and the per-subject split are read.
 
 There used to be a second pair quoted here — S4 fusion's window-grid coverage/accuracy.
@@ -170,7 +170,7 @@ bucket of a curve that does not otherwise trend. Left as a candidate, not a chan
 Maximising coverage subject to the >=95% target always drives the threshold to its
 minimum, producing a policy that ignores the model's probability entirely. The threshold
 is a judgement about how much coverage a point of accuracy is worth. The whole curve is
-re-measured every run in `runs/s2_ml/roweval_loro.md`, and `OPERATING_POINTS.md` marks
+re-measured every run in `runs/regen/s2_ml/roweval_loro.md`, and `OPERATING_POINTS.md` marks
 the shipped value on it with the reason: **0.85 is the lowest threshold at which every
 held-out development subject independently clears 95%.**
 
@@ -668,7 +668,7 @@ Recorded because both sibling repos still carry the originals.
   measurement added 2026-08-04** — `stages/s2_ml/transitions.py` scores the raw `truth`
   column with the unknowns left in rather than filtering first, over the leave-one-rev-out
   frame, and reports **308 candidates, 267 timeable, 170 of 266 within ±1 s**
-  (`runs/s2_ml/transitions_loro.md`). Neither figure is derivable from the other and the
+  (`runs/regen/s2_ml/transitions_loro.md`). Neither figure is derivable from the other and the
   older pair predates the deleted S4 window grid, so **[open]** — settle it before quoting
   either.
 - **`MIN_SEGMENT_SAMPLES` meant 1 s at 100 Hz and 0.2 s at 500 Hz.** Now a duration.

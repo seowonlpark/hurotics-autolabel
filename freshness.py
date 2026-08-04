@@ -11,7 +11,7 @@ _CHUNK = 1 << 20
 REPO_ROOT = Path(__file__).resolve().parent
 
 
-# One stamp per STAGE, not per directory. `runs/s2_ml` holds three reports with three separate
+# One stamp per STAGE, not per directory. `runs/regen/s2_ml` holds three reports with three separate
 # lifetimes -- train's locoeval, roweval's curve, raweval's raw-path read -- and a single shared
 # stamp would let whichever stage ran last refresh the record for all of them. That is worse than
 # no check: a promotion between `train` and `roweval` would leave locoeval.md stale and the stamp
@@ -89,19 +89,29 @@ def _check_stamp(stamp: Path, where: str) -> list[str]:
     return out
 
 
+# How a directory is named in a complaint. `.name` alone stopped being unique when runs/ split:
+# regen/s2_ml and keep/s2_ml are different stage halves and both are called "s2_ml", so a bare
+# name told the reader to go re-run the wrong one. Repo-relative, and absolute outside the repo.
+def _where(out_dir: Path) -> str:
+    try:
+        return Path(out_dir).resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(out_dir)
+
+
 # complaints about `out_dir`; an ABSENT stamp reports the same as stale- the caller decides
 def check_inputs(out_dir: Path) -> list[str]:
     out_dir = Path(out_dir)
+    where = _where(out_dir)
     stamps = stamp_paths(out_dir)
     if not stamps:
-        return [f"{out_dir.name}: no {INPUTS_FILENAME}; cannot tell which inputs produced it"]
+        return [f"{where}: no {INPUTS_FILENAME}; cannot tell which inputs produced it"]
     # Every stage that writes here is checked on its own record, so one stage's fresh run
     # cannot vouch for another's report sitting in the same directory.
     out = []
     for s in stamps:
         stage = stage_of(s)
-        out += _check_stamp(s, out_dir.name if stage is None
-                            else f"{out_dir.name} [{stage}]")
+        out += _check_stamp(s, where if stage is None else f"{where} [{stage}]")
     return out
 
 
@@ -145,7 +155,7 @@ def _self_test() -> list[str]:
     stamp_inputs(empty, {})
     expect("a stage that declared no upstream", check_inputs(empty), False)
 
-    # Two stages sharing ONE directory, as train/roweval/raweval share runs/s2_ml. The stale one
+    # Two stages sharing ONE directory, as train/roweval/raweval share runs/regen/s2_ml. The stale one
     # must still be caught after the fresh one runs; a per-directory stamp would have let the
     # second run vouch for the first's report, which is the failure this split exists to stop.
     shared, dep = tmp / "two-stages", tmp / "spec2.json"
@@ -197,9 +207,6 @@ def main() -> None:
         description="Is every run artifact newer than the inputs it describes?")
     ap.add_argument("--self-test", action="store_true",
                     help="exercise every complaint against a case built to trip it")
-    ap.add_argument("--check", nargs="*", metavar="DIR",
-                    help="report staleness for these stage directories (default: every "
-                         "runs/* carrying a stamp, plus labeled_raw/)")
     args = ap.parse_args()
 
     if args.self_test:
@@ -211,13 +218,15 @@ def main() -> None:
         print("[freshness] self-test OK: every complaint fires on its own case")
         return
 
-    # Every stage directory, not only the stamped ones. Selecting on "has a stamp" meant checking
-    # exactly the dirs that could pass, so a stage that never declared its inputs read as clean and
-    # the run reported 0 complaints. Agent run dirs are skipped: never overwritten, so never stale.
-    dirs = [Path(d) for d in args.check] if args.check else [
-        *(d for d in (REPO_ROOT / "runs").glob("*") if d.is_dir() and "_run" not in d.name),
-        *([REPO_ROOT / "labeled_raw"] if (REPO_ROOT / "labeled_raw").is_dir() else []),
-    ]
+    # Every stage directory, not only the stamped ones, and NOT a set anyone names on the command
+    # line. Selecting on "has a stamp" meant checking exactly the dirs that could pass, so a stage
+    # that never declared its inputs read as clean and the run reported 0 complaints; a hand-passed
+    # `--check DIR` was the same hole with a person holding it open. Which dirs those are is
+    # runslayout's call, not this file's: it owns the keep/regen split and therefore the question
+    # of what can go stale.
+    from runslayout import checkable_dirs
+
+    dirs = checkable_dirs()
     complaints = check_all(dirs)
     for c in complaints:
         print(f"[freshness] {c}")

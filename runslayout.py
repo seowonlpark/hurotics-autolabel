@@ -4,7 +4,7 @@
 # commit? That question, not which stage wrote it, is what a reader needs before deleting
 # anything, so it is the folder boundary.
 #
-#   runs/regen/  yes. `python run_pipeline.py --all` reproduces every byte. Safe to delete.
+#   runs/regen/  yes. A full `python run_pipeline.py` reproduces every byte. Safe to delete.
 #   runs/keep/   no. Deleting it destroys evidence for a claim made in code or in a document,
 #                and no command brings it back. Versioned in git alongside the claims.
 #
@@ -34,6 +34,10 @@ KEEP_S2 = KEEP / "s2_ml"              # the ledger, the proposals and the spent 
 # the one page written to be read, and the only .md the pipeline still emits
 BREAKDOWN_MD = RUNS / "breakdown.md"
 
+# outside runs/ but written by a pipeline stage and checked for staleness like one, so it is
+# defined here with the rest rather than restated by every file that needs it
+LABELED_RAW = REPO_ROOT / "labeled_raw"
+
 # Files that live in KEEP_S2 even though the stage that writes them outputs to REGEN/"s2_ml".
 # Named here rather than in each writer so `runs/README.md` and the writers cannot drift.
 LEDGER_FILENAME = "experiments.jsonl"
@@ -52,9 +56,8 @@ def checkable_dirs() -> list[Path]:
     dirs = sorted(d for d in REGEN.glob("*") if d.is_dir())
     if KEEP_S2.is_dir():
         dirs.append(KEEP_S2)
-    labeled = REPO_ROOT / "labeled_raw"
-    if labeled.is_dir():
-        dirs.append(labeled)
+    if LABELED_RAW.is_dir():
+        dirs.append(LABELED_RAW)
     return dirs
 
 

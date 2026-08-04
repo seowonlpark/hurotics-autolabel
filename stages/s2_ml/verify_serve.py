@@ -109,62 +109,56 @@ def render_sweep(rows: list[dict]) -> str:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(
-        description="Verify the raw serve path against its lpf_view export, end to end.")
-    ap.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
-    ap.add_argument("--threshold", type=float, default=None,
-                    help="default: the champion's own default preset")
-    ap.add_argument("--skip-pairs", action="store_true")
-    ap.add_argument("--skip-sweep", action="store_true")
-    args = ap.parse_args()
+    # No arguments, on purpose. This is a differential check with one question -- does a raw device
+    # log label like its own lpf_view export? -- and every knob it used to take could only make the
+    # answer weaker: a `--threshold` other than the champion's own default preset asks it about a
+    # model nobody serves, and `--skip-pairs` / `--skip-sweep` each turn a PASS into a PASS about
+    # half of it. It runs whole or it does not run.
+    argparse.ArgumentParser(
+        description="Verify the raw serve path against its lpf_view export, end to end."
+    ).parse_args()
 
-    _model, meta = load_champion(args.model_dir)
-    threshold = (args.threshold if args.threshold is not None
-                 else meta["presets"][meta["default_preset"]])
+    _model, meta = load_champion(DEFAULT_MODEL_DIR)
+    threshold = meta["presets"][meta["default_preset"]]
 
-    failed = False
+    pairs = find_pairs(index_raw_files())
+    if not pairs:
+        raise SystemExit("no paired recordings found — cannot verify the serve path")
+    print(f"[verify_serve] {len(pairs)} paired recordings, threshold {threshold:.2f}\n")
+    results = []
+    for i, (ann_path, raw_path, _raw_df, _vid) in enumerate(pairs, 1):
+        r = compare_pair(ann_path, Path(raw_path), DEFAULT_MODEL_DIR, threshold)
+        results.append(r)
+        if r["fatal"]:
+            print(f"  {i:>2}/{len(pairs)} {ann_path.name:<34} FATAL {r['fatal']}")
+            continue
+        verdict = "ok" if r["n_mismatched"] == 0 else f"{r['n_mismatched']} MISMATCHED"
+        print(f"  {i:>2}/{len(pairs)} {ann_path.name:<34} {r['variant']} "
+              f"Deg_{r['axis']}  {r['rows']:>7,} rows  "
+              f"max|Δconfidence|={r['conf_delta']:.3g}  {verdict}")
 
-    if not args.skip_pairs:
-        pairs = find_pairs(index_raw_files())
-        if not pairs:
-            raise SystemExit("no paired recordings found — cannot verify the serve path")
-        print(f"[verify_serve] {len(pairs)} paired recordings, threshold {threshold:.2f}\n")
-        results = []
-        for i, (ann_path, raw_path, _raw_df, _vid) in enumerate(pairs, 1):
-            r = compare_pair(ann_path, Path(raw_path), args.model_dir, threshold)
-            results.append(r)
-            if r["fatal"]:
-                print(f"  {i:>2}/{len(pairs)} {ann_path.name:<34} FATAL {r['fatal']}")
-                continue
-            verdict = "ok" if r["n_mismatched"] == 0 else f"{r['n_mismatched']} MISMATCHED"
-            print(f"  {i:>2}/{len(pairs)} {ann_path.name:<34} {r['variant']} "
-                  f"Deg_{r['axis']}  {r['rows']:>7,} rows  "
-                  f"max|Δconfidence|={r['conf_delta']:.3g}  {verdict}")
+    total_rows = sum(r["rows"] or 0 for r in results)
+    total_bad = sum(r["n_mismatched"] for r in results if r["fatal"] is None)
+    worst_conf = max((r["conf_delta"] for r in results if r["fatal"] is None), default=0.0)
+    fatal = [r for r in results if r["fatal"]]
+    print(f"\n{len(results)} pairs, {total_rows:,} rows compared")
+    print(f"disagreeing verdicts: {total_bad}")
+    print(f"worst max-abs confidence difference: {worst_conf:.3g} "
+          f"(tolerance {CONFIDENCE_TOLERANCE:g})")
+    failed = bool(fatal or total_bad or worst_conf > CONFIDENCE_TOLERANCE)
+    if failed:
+        for r in fatal:
+            print(f"FAIL: {r['pair']}: {r['fatal']}")
+        for r in results:
+            if r["fatal"] is None and r["n_mismatched"]:
+                print(f"FAIL: {r['pair']}: {r['mismatches']} "
+                      f"(+{r['coverage_mismatch']} coverage)")
+        print("FAIL: a raw device log does not label like its own lpf_view export.")
+    else:
+        print("PASS: raw and lpf_view routes agree on every row of every pair.")
 
-        total_rows = sum(r["rows"] or 0 for r in results)
-        total_bad = sum(r["n_mismatched"] for r in results if r["fatal"] is None)
-        worst_conf = max((r["conf_delta"] for r in results if r["fatal"] is None),
-                         default=0.0)
-        fatal = [r for r in results if r["fatal"]]
-        print(f"\n{len(results)} pairs, {total_rows:,} rows compared")
-        print(f"disagreeing verdicts: {total_bad}")
-        print(f"worst max-abs confidence difference: {worst_conf:.3g} "
-              f"(tolerance {CONFIDENCE_TOLERANCE:g})")
-        if fatal or total_bad or worst_conf > CONFIDENCE_TOLERANCE:
-            for r in fatal:
-                print(f"FAIL: {r['pair']}: {r['fatal']}")
-            for r in results:
-                if r["fatal"] is None and r["n_mismatched"]:
-                    print(f"FAIL: {r['pair']}: {r['mismatches']} "
-                          f"(+{r['coverage_mismatch']} coverage)")
-            print("FAIL: a raw device log does not label like its own lpf_view export.")
-            failed = True
-        else:
-            print("PASS: raw and lpf_view routes agree on every row of every pair.")
-
-    if not args.skip_sweep:
-        print()
-        print(render_sweep(sweep(RAW_DIR)))
+    print()
+    print(render_sweep(sweep(RAW_DIR)))
 
     sys.exit(1 if failed else 0)
 

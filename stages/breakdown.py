@@ -18,9 +18,10 @@ from stages.console import use_replacement_encoding
 # the hand-edited exclusion list, imported not restated: a copy answers "acted on?" wrongly
 from stages.s2_ml.dataset import EXCLUDED_TRIALS
 
+from runslayout import ABLATIONS, AGENT_RUNS, KEEP_S2, LABELED_RAW, REGEN, checkable_dirs
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNS = REPO_ROOT / "runs"
-LABELED_RAW = REPO_ROOT / "labeled_raw"
 
 BREAKDOWN_MD = "breakdown.md"
 
@@ -28,7 +29,7 @@ ACCURACY_TARGET = 0.95
 
 # which headline each checked-in document quotes, explicit per artifact and hand-maintained
 PROSE_CLAIMS = {
-    "S2 row-level": ["README.md", "caveats.md", "OPERATING_POINTS.md", "needtowrite.md"],
+    "S2 row-level": ["README.md", "caveats.md", "OPERATING_POINTS.md"],
 }
 
 # below this a file commits to less than half its rows- structural; a reporting line, not a policy
@@ -119,13 +120,21 @@ def _missing(what: str, produced_by: str) -> list[str]:
     return [f"> **Not present.** `{what}` was not found. Produce it with `{produced_by}`.", ""]
 
 
+# a path as the reader would type it; absolute only for something outside the repo
+def _rel(p: Path) -> str:
+    try:
+        return Path(p).resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(p)
+
+
 # ---- Sections; each reads only what it needs, so one absent stage blanks one section ----
 
 # what the corpus is; the three populations that get conflated constantly
 def section_corpus(src: Source) -> list[str]:
     summary = src.csv(LABELED_RAW / "label_summary.csv", "python -m stages.s2_ml.label_all")
-    meta = src.json(RUNS / "s2_ml" / "model_meta.json", "python -m stages.s2_ml.train")
-    loco = src.json(RUNS / "s2_ml" / "locoeval.json", "python -m stages.s2_ml.train")
+    meta = src.json(REGEN / "s2_ml" / "model_meta.json", "python -m stages.s2_ml.train")
+    loco = src.json(REGEN / "s2_ml" / "locoeval.json", "python -m stages.s2_ml.train")
 
     raw_dir = REPO_ROOT / "data" / "raw"
     n_raw = len(list(raw_dir.rglob("*.csv"))) if raw_dir.is_dir() else None
@@ -152,8 +161,8 @@ def section_corpus(src: Source) -> list[str]:
             "Development subjects (everything below is measured on these): "
             f"**{', '.join(meta['train_revs'])}**.", "",
         ]
-    if (RUNS / "s2_ml" / "roweval_lockbox.json").is_file():
-        lb = src.json(RUNS / "s2_ml" / "roweval_lockbox.json", "python -m stages.s2_ml.roweval --lockbox")
+    if (KEEP_S2 / "roweval_lockbox.json").is_file():
+        lb = src.json(KEEP_S2 / "roweval_lockbox.json", "python -m stages.s2_ml.roweval --lockbox")
         if lb:
             out += [f"Sealed lockbox subject: **{', '.join(lb['revs'])}** — single use. "
                     f"See §2 for what it scored and `caveats.md` §3.2 before quoting it.", ""]
@@ -163,7 +172,7 @@ def section_corpus(src: Source) -> list[str]:
     # only the other direction -- judged bad and still IN -- so without this the removals are
     # the one edit to the corpus that nothing reports.
     if EXCLUDED_TRIALS:
-        audit = src.json(RUNS / "s3_physics" / "label_audit.json",
+        audit = src.json(REGEN / "s3_physics" / "label_audit.json",
                          "python -m stages.s3_physics.label_audit")
         seen = {(t["rev"], int(t["trial"])): t for t in (audit or {}).get("trials", [])}
         rows = []
@@ -216,13 +225,13 @@ def section_corpus(src: Source) -> list[str]:
 
 # S1; what was cleaned, what was thrown away, and what was flagged but kept
 def section_s1(src: Source) -> list[str]:
-    out = ["## §1 — S1 clean", "", "*Source: `runs/s1_clean/`*", ""]
+    out = ["## §1 — S1 clean", "", "*Source: `runs/regen/s1_clean/`*", ""]
     produced_by = "python -m stages.s1_clean.clean"
-    segs = src.jsonl(RUNS / "s1_clean" / "segments.jsonl", produced_by)
-    quar = src.jsonl(RUNS / "s1_clean" / "quarantine.jsonl", produced_by)
-    obs = src.jsonl(RUNS / "s1_clean" / "observations.jsonl", produced_by)
+    segs = src.jsonl(REGEN / "s1_clean" / "segments.jsonl", produced_by)
+    quar = src.jsonl(REGEN / "s1_clean" / "quarantine.jsonl", produced_by)
+    obs = src.jsonl(REGEN / "s1_clean" / "observations.jsonl", produced_by)
     if segs is None:
-        return out + _missing("runs/s1_clean/segments.jsonl", produced_by)
+        return out + _missing("runs/regen/s1_clean/segments.jsonl", produced_by)
 
     usable = [s for s in segs if s.get("usable")]
     dropped = [s for s in segs if not s.get("usable")]
@@ -324,20 +333,20 @@ def section_s1(src: Source) -> list[str]:
 
 # the champion/challenger ledger: what was proposed, measured, promoted and refused
 def _section_s2_ledger(src: Source) -> list[str]:
-    ledger = src.jsonl(RUNS / "s2_ml" / "experiments.jsonl",
-                       "python -m stages.s2_ml.experiment --seed")
+    ledger = src.jsonl(KEEP_S2 / "experiments.jsonl",
+                       "python run_pipeline.py --from s2_experiment --with-agents")
     if not ledger:
         return []
 
-    champ = src.json(RUNS / "s2_ml" / "champion.json",
-                     "python -m stages.s2_ml.experiment --seed")
+    champ = src.json(REGEN / "s2_ml" / "champion.json",
+                     "python run_pipeline.py --from s2_experiment --with-agents")
     # grouping only, NOT the gate: it keeps a superseded basis out of the column beside a current one
     ref = (champ or {}).get("corpus")
     current = [e for e in ledger if e.get("corpus") and e["corpus"] == ref]
     prior = [e for e in ledger if e not in current]
 
     out = ["### The champion/challenger ledger", "",
-           "*Source: `runs/s2_ml/experiments.jsonl`, `proposals.jsonl` — written by the "
+           "*Source: `runs/keep/s2_ml/experiments.jsonl`, `proposals.jsonl` — written by the "
            "`s2_experiment` step. An agent proposes and a second criticises; neither can "
            "promote. `experiment.decide()` gates on measured macro-F1 and logs the reason "
            "either way.*", ""]
@@ -365,7 +374,7 @@ def _section_s2_ledger(src: Source) -> list[str]:
                         "promoted then" if e["promoted"] else "rejected"]
                        for e in prior])
 
-    stopped = [p for p in (src.jsonl(RUNS / "s2_ml" / "proposals.jsonl",
+    stopped = [p for p in (src.jsonl(KEEP_S2 / "proposals.jsonl",
                                      "(written by the s2_experiment step)") or [])
                if not p["ran"]]
     if stopped:
@@ -379,13 +388,13 @@ def _section_s2_ledger(src: Source) -> list[str]:
 
 # S2; which model, why that one, and how well it does on seen vs unseen subjects
 def section_s2(src: Source) -> list[str]:
-    out = ["## §2 — S2 ml", "", "*Source: `runs/s2_ml/`, `stages/s2_ml/champion_spec.json`*", ""]
+    out = ["## §2 — S2 ml", "", "*Source: `runs/regen/s2_ml/`, `runs/keep/s2_ml/`, `stages/s2_ml/champion_spec.json`*", ""]
     train_cmd = "python -m stages.s2_ml.train"
-    loco = src.json(RUNS / "s2_ml" / "locoeval.json", train_cmd)
-    meta = src.json(RUNS / "s2_ml" / "model_meta.json", train_cmd)
+    loco = src.json(REGEN / "s2_ml" / "locoeval.json", train_cmd)
+    meta = src.json(REGEN / "s2_ml" / "model_meta.json", train_cmd)
     spec = src.json(REPO_ROOT / "stages" / "s2_ml" / "champion_spec.json", "(checked in)")
     if loco is None or meta is None:
-        return out + _missing("runs/s2_ml/locoeval.json", train_cmd)
+        return out + _missing("runs/regen/s2_ml/locoeval.json", train_cmd)
 
     out += ["### The champion", ""]
     out += _table(["", ""], [
@@ -419,7 +428,7 @@ def section_s2(src: Source) -> list[str]:
     out += _section_s2_ledger(src)
 
     # The measured comparison behind the choice, if the sweep is still around
-    sweep = RUNS / "s2_ml_seedsweep.json"
+    sweep = ABLATIONS / "s2_ml_seedsweep.json"
     if sweep.is_file():
         rows_by_model: dict[str, list[dict]] = {}
         for r in json.loads(sweep.read_text(encoding="utf-8")):
@@ -437,21 +446,54 @@ def section_s2(src: Source) -> list[str]:
         out += ["The deciding line is coverage at equal precision: same quality of answer, "
                 "more answers.", ""]
 
+    # The resolution limit every ablation below has to be read against. Seeds vary WITHIN each
+    # feature set, so a between-set gap can be compared to the spread of a single draw- the
+    # 5-seed standard error is ~6x smaller and reading one against the other is how the
+    # zeroing family spent a year documented as load-bearing on a seed-0 artifact.
+    fset = ABLATIONS / "s2_ml_featseedsweep.json"
+    band = None
+    if fset.is_file():
+        by_set: dict[str, list[dict]] = {}
+        for r in json.loads(fset.read_text(encoding="utf-8")):
+            by_set.setdefault(r["feature_set"], []).append(r)
+        rows, spreads = [], []
+        for name, rs in by_set.items():
+            f1 = [r["macro_f1"] for r in rs]
+            spreads.append(max(f1) - min(f1))
+            rows.append([f"`{name}`", f"{rs[0]['n_features']}", f"{len(rs)}",
+                         _f(sum(f1) / len(f1)), _f(min(f1)), _f(max(f1)),
+                         _f(max(f1) - min(f1)),
+                         _f(sum(r["coverage"] for r in rs) / len(rs))])
+        band = max(spreads)
+        out += ["#### Feature-set resolution — 5 seeds *within* each feature set", ""]
+        out += _table(["feature set", "features", "seeds", "mean macro-F1", "min", "max",
+                       "spread", "mean coverage @0.85"], rows)
+        out += [f"**Single-seed macro-F1 differences below ~{band:.4f} are not interpretable "
+                f"at this corpus size.** The spread is not constant across feature sets, so "
+                f"there is no one noise band to quote; compare means over seeds and carry the "
+                f"within-set spread alongside.", ""]
+
     # Ablations, if their run dirs survive; each is a full locoeval, so they compare directly
-    abl = sorted(RUNS.glob("s2_ml_abl_*"))
+    abl = sorted(ABLATIONS.glob("s2_ml_abl_*"))
     if abl:
-        rows = [["**shipped**", f"{len(meta['features'])}", _f(loco["macro_f1"]),
-                 _f(loco["accuracy"]), "—"]]
+        rows = [["**shipped**", f"{len(meta['features'])}", _f(loco["macro_f1"]), "—"]]
         for d in abl:
             a = src.json(d / "locoeval.json", f"(ablation run {d.name})")
             if a:
-                rows.append([f"`{d.name.replace('s2_ml_abl_', '')}`", "—", _f(a["macro_f1"]),
-                             _f(a["accuracy"]),
-                             "**rejected**" if a["macro_f1"] < loco["macro_f1"] else "tie"])
-        out += ["#### Feature ablations", ""]
-        out += _table(["variant", "features", "macro-F1", "accuracy", "verdict"], rows)
-        out += ["Low importance is not droppability — the rejected rows are the useful part "
-                "of this table.", ""]
+                delta = a["macro_f1"] - loco["macro_f1"]
+                # one draw each, so anything inside the measured spread is a tie, not a loss
+                verdict = ("**below resolution**" if band is None or abs(delta) < band
+                           else ("**worse**" if delta < 0 else "**better**"))
+                rows.append([f"`{d.name.replace('s2_ml_abl_', '')}`",
+                             f"{len(a_meta['features'])}"
+                             if (a_meta := src.json(d / "model_meta.json", d.name)) else "—",
+                             _f(a["macro_f1"]), verdict])
+        out += ["#### Feature ablations — single seed each", ""]
+        out += _table(["variant", "features", "macro-F1", "vs shipped"], rows)
+        out += ["Every row is one seed, so the verdict column is read against the spread "
+                "above, not against zero. Low importance is not droppability *and* low "
+                "importance is not evidence of droppability — at this resolution most of "
+                "these rows say nothing either way, which is the honest reading.", ""]
 
     out += ["### Leave-one-rev-out — the headline", "",
             f"**macro-F1 {loco['macro_f1']:.4f}** · accuracy {loco['accuracy']:.4f} · "
@@ -507,13 +549,23 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
            "Coverage and accuracy are quoted together everywhere. Either alone is "
            "meaningless: abstain on all but the easiest window and accuracy reads 1.000.", ""]
     shipped = meta["presets"][meta["default_preset"]]
+    # loaded here, not at its own section below, because the row-level table quotes it too;
+    # reading it twice would report the same absent artifact as two gaps
+    lock = src.json(KEEP_S2 / "roweval_lockbox.json",
+                    "python -m stages.s2_ml.roweval --lockbox  (SINGLE USE)")
+
+    # named where the artifact carries a name — a bare minimum says a subject is worst, not
+    # which one, and the eval drops the name unless it was written (`roweval._worst_rev`)
+    def _worst(r: dict) -> str:
+        acc = _f(r["worst_rev_accuracy"])
+        return f"{acc} (`{r['worst_rev']}`)" if r.get("worst_rev") else acc
 
     def curve_table(curve: list[dict], unit: str) -> list[str]:
         rows = []
         for r in curve:
             mark = " ← shipped" if abs(r["threshold"] - shipped) < 1e-9 else ""
             rows.append([f"{r['threshold']:.2f}{mark}", _pct(r["coverage"], 2),
-                         _f(r["selective_accuracy"]), _f(r["worst_rev_accuracy"]),
+                         _f(r["selective_accuracy"]), _worst(r),
                          f"{r['errors_kept']:,}"])
         return _table([f"threshold", "coverage", "selective acc", "worst subject",
                        f"wrong {unit} kept"], rows)
@@ -522,7 +574,7 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
         out += ["#### Window level (`locoeval.json`)", ""]
         out += curve_table(loco["selective_curve"], "windows")
 
-    row = src.json(RUNS / "s2_ml" / "roweval_loro.json",
+    row = src.json(REGEN / "s2_ml" / "roweval_loro.json",
                    "python -m stages.s2_ml.roweval")
     if row:
         out += ["#### Row level (`roweval_loro.json`) — the deliverable's own unit", "",
@@ -535,6 +587,40 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
                 f"{ACCURACY_TARGET:.0%} target from 0.50 onward, so pooling is the wrong "
                 f"number to set a threshold by. {shipped:g} is the lowest threshold at which "
                 f"every held-out development subject independently clears it.", ""]
+
+        # The `worst subject` column above is the worst DEVELOPMENT subject, and the sealed
+        # subject is worse at every operating point that ships. Kept out of that column
+        # deliberately -- one cell holding two populations is the conflation §0 exists to
+        # prevent -- and stated here, beside the number it corrects, rather than only in §A.
+        if lock and lock.get("curve"):
+            lb_by_thr = {round(r["threshold"], 4): r for r in lock["curve"]}
+            rows = []
+            for r in row["curve"]:
+                lb = lb_by_thr.get(round(r["threshold"], 4))
+                if not lb:
+                    continue
+                mark = " ← shipped" if abs(r["threshold"] - shipped) < 1e-9 else ""
+                lower = lb["selective_accuracy"] < r["worst_rev_accuracy"]
+                rows.append([f"{r['threshold']:.2f}{mark}", _worst(r),
+                             f"**{_f(lb['selective_accuracy'])}**" if lower
+                             else _f(lb["selective_accuracy"]),
+                             _pct(lb["coverage"], 1),
+                             "**lockbox is worse**" if lower else "development is worse"])
+            if rows:
+                out += [f"**That column is the worst *development* subject.** "
+                        f"`{', '.join(lock['revs'])}` — sealed, single-use, and never seen by "
+                        f"feature, model or threshold selection — is not in it and is worse. "
+                        f"It is kept out on purpose: one cell holding both populations is "
+                        f"exactly the conflation §0 warns about, and re-running it to keep the "
+                        f"column tidy is the trade §7 forbids. Read the two side by side; the "
+                        f"right-hand column is the floor a genuinely new subject is drawn "
+                        f"from.", ""]
+                out += _table(["threshold", "worst development subject",
+                               f"`{', '.join(lock['revs'])}` (lockbox, spent)",
+                               "lockbox coverage", "which is lower"], rows)
+                out += ["The lockbox column is **not** monotonic — see the note under the "
+                        "lockbox table below — so it is a floor that a higher threshold does "
+                        "not raise.", ""]
 
         if row.get("reasons"):
             out += ["#### Ambiguity reasons — each validated by what it suppressed", "",
@@ -553,7 +639,7 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
                     f"training, so the agreement is not circular.", ""]
 
     # the route, not the population: everything above scores lpf_view, a caller feeds a raw log
-    raw = src.json(RUNS / "s2_ml" / "raweval.json", "python -m stages.s2_ml.raweval")
+    raw = src.json(REGEN / "s2_ml" / "raweval.json", "python -m stages.s2_ml.raweval")
     if raw:
         o, tr = raw["overall"], raw.get("transitive_lpf_view")
         out += ["#### Raw device path (`raweval.json`) — end to end, against human labels",
@@ -568,7 +654,8 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
                        "worst subject"], [
             [f"raw device — {', '.join(raw['revs'])}", f"{o['rows_scored']:,}",
              f"**{_pct(o['coverage'], 2)}**", f"**{_f(o['selective_accuracy'])}**",
-             _f(o["worst_subject"])],
+             _f(o["worst_subject"]) + (f" (`{o['worst_subject_rev']}`)"
+                                       if o.get("worst_subject_rev") else "")],
         ] + ([[f"`lpf_view` route, same subjects", f"{tr['rows_scored']:,}",
                _pct(tr["coverage"], 2), _f(tr["selective_accuracy"]), "—"]] if tr else []))
         out += [f"**Two subjects fewer than the table above, and no lockbox.** `rev8` is "
@@ -593,8 +680,6 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
                 "channel would show up as one row sitting apart from the others, which is "
                 "the check the transitive argument could not perform at all.", ""]
 
-    lock = src.json(RUNS / "s2_ml" / "roweval_lockbox.json",
-                    "python -m stages.s2_ml.roweval --lockbox  (SINGLE USE)")
     if lock:
         dev = next((r for r in (row or {}).get("curve", [])
                     if abs(r["threshold"] - shipped) < 1e-9), None)
@@ -643,7 +728,7 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
 
 # which way the errors go- the one cut pooled accuracy hides completely
 def _section_error_direction(src: Source) -> list[str]:
-    row = src.json(RUNS / "s2_ml" / "roweval_loro.json", "python -m stages.s2_ml.roweval")
+    row = src.json(REGEN / "s2_ml" / "roweval_loro.json", "python -m stages.s2_ml.roweval")
     if not row:
         return []
     conf = row.get("confusion")
@@ -677,8 +762,8 @@ def _section_error_direction(src: Source) -> list[str]:
 
 # S3; what a window is, what the label-free rule says, and where labels look wrong
 def section_s3(src: Source) -> list[str]:
-    out = ["## §3 — S3 physics", "", "*Source: `runs/s3_physics/`*", ""]
-    meta = src.json(RUNS / "s2_ml" / "model_meta.json", "python -m stages.s2_ml.train")
+    out = ["## §3 — S3 physics", "", "*Source: `runs/regen/s3_physics/`*", ""]
+    meta = src.json(REGEN / "s2_ml" / "model_meta.json", "python -m stages.s2_ml.train")
 
     # the unit everything downstream is counted in, read from the card so a retrain cannot lie here
     if meta:
@@ -719,7 +804,7 @@ def section_s3(src: Source) -> list[str]:
             "gate against simply raising the threshold rather than leaving it an argument.",
             ""]
 
-    rate = src.json(RUNS / "s3_physics" / "rate_audit.json",
+    rate = src.json(REGEN / "s3_physics" / "rate_audit.json",
                     "python -m stages.s3_physics.rate_audit")
     if rate:
         failed = [a for a, r in rate.items() if r["verdict"] == "rate_dependent"]
@@ -742,7 +827,7 @@ def section_s3(src: Source) -> list[str]:
                    "**It did not fire, which is a problem** — an audit that rejects "
                    "nothing is not evidence that everything passed (§11.1).") , ""]
 
-    audit = src.json(RUNS / "s3_physics" / "label_audit.json",
+    audit = src.json(REGEN / "s3_physics" / "label_audit.json",
                      "python -m stages.s3_physics.label_audit")
     if audit:
         trials = audit["trials"]
@@ -905,11 +990,11 @@ def _section_operating_points(src: Source) -> list[str]:
 
     out = ["", "### Operating points — what each costs here, what each buys there", "",
            "*Coverage from `labeled_raw/preset_sweep.json` (this corpus, no ground truth); "
-           "accuracy from `runs/s2_ml/roweval_loro.json` (annotated corpus, held out per "
+           "accuracy from `runs/regen/s2_ml/roweval_loro.json` (annotated corpus, held out per "
            "subject). Two populations — read across the row, never down one column.*", ""]
 
     # the accuracy half; absent is fine and stated- the coverage half still says what a point costs
-    row = src.json(RUNS / "s2_ml" / "roweval_loro.json", "python -m stages.s2_ml.roweval")
+    row = src.json(REGEN / "s2_ml" / "roweval_loro.json", "python -m stages.s2_ml.roweval")
     acc_by_thr = {round(c["threshold"], 4): c for c in row["curve"]} if row else {}
 
     presets = {round(v, 4): k for k, v in (sweep.get("presets") or {}).items()}
@@ -931,7 +1016,8 @@ def _section_operating_points(src: Source) -> list[str]:
             f"{int(c['committed']):,}",
             f"{c['files_below_half']}",
             _f(a["selective_accuracy"]) if a else "—",
-            _f(a["worst_rev_accuracy"]) if a else "—",
+            (_f(a["worst_rev_accuracy"]) + (f" (`{a['worst_rev']}`)"
+                                            if a.get("worst_rev") else "")) if a else "—",
         ])
     out += _table(["threshold", "coverage HERE", "rows committed", "files < 50%",
                    "accuracy THERE", "worst subject THERE"], rows)
@@ -1006,13 +1092,13 @@ def _quotes(text: str, coverage: float, accuracy: float) -> tuple[bool, bool]:
 # does the checked-in prose still quote the live headlines?
 def _flag_stale_prose(src: Source, meta: dict | None) -> list[Flag]:
     pairs: dict[str, tuple[float, float, str]] = {}
-    row = src.json(RUNS / "s2_ml" / "roweval_loro.json", "python -m stages.s2_ml.roweval")
+    row = src.json(REGEN / "s2_ml" / "roweval_loro.json", "python -m stages.s2_ml.roweval")
     if row and meta:
         thr = meta["presets"][meta["default_preset"]]
         r = next((c for c in row["curve"] if abs(c["threshold"] - thr) < 1e-9), None)
         if r:
             pairs["S2 row-level"] = (r["coverage"], r["selective_accuracy"],
-                                     "runs/s2_ml/roweval_loro.json")
+                                     "runs/regen/s2_ml/roweval_loro.json")
 
     out = []
     for claim, (cov, acc, artifact) in pairs.items():
@@ -1023,7 +1109,7 @@ def _flag_stale_prose(src: Source, meta: dict | None) -> list[Flag]:
                 out.append(Flag(
                     "gap", f"`{name}` is listed as quoting the {claim} headline but is missing",
                     f"nothing checks the {claim} pair against prose until it is rewritten. "
-                    f"`needtowrite.md` holds the spec and the un-regenerable content; drop "
+                    f"`archive/` holds the un-regenerable content of retired documents; drop "
                     f"the entry from `PROSE_CLAIMS` if the document is gone for good."))
                 continue
             has_cov, has_acc = _quotes(p.read_text(encoding="utf-8", errors="replace"),
@@ -1042,7 +1128,7 @@ def _flag_stale_prose(src: Source, meta: dict | None) -> list[Flag]:
 
 
 def _flag_lockbox(src: Source, meta: dict | None) -> list[Flag]:
-    lock = src.json(RUNS / "s2_ml" / "roweval_lockbox.json", "roweval --lockbox")
+    lock = src.json(KEEP_S2 / "roweval_lockbox.json", "roweval --lockbox")
     if not lock or not meta:
         return []
     thr = meta["presets"][meta["default_preset"]]
@@ -1109,7 +1195,7 @@ def _latest_reviews() -> tuple[Path | None, dict[tuple[str, int], dict]]:
         date, _, run = p.name.partition("_run")
         return date, int(run) if run.isdigit() else 0
 
-    for d in sorted((p for p in RUNS.glob("*_run*") if p.is_dir()), key=order, reverse=True):
+    for d in sorted((p for p in AGENT_RUNS.glob("*_run*") if p.is_dir()), key=order, reverse=True):
         path = d / "label_review.jsonl"
         if not path.is_file():
             continue
@@ -1178,11 +1264,9 @@ def collect_flags(src: Source, loco: dict | None, meta: dict | None,
     # freshness first: it invalidates every other number rather than sitting beside them.
     # Every stage directory is considered, not only the ones already carrying a stamp -- filtering
     # on `_inputs.json` was checking exactly the dirs that could pass and skipping the ones that
-    # could not, so a stage that never declared its inputs read as clean. Agent run dirs are
-    # excluded on purpose: they are never overwritten (§4), so nothing can go stale under them.
-    dirs = [d for d in RUNS.glob("*") if d.is_dir() and "_run" not in d.name]
-    if LABELED_RAW.is_dir():
-        dirs.append(LABELED_RAW)
+    # could not, so a stage that never declared its inputs read as clean. The list itself is
+    # runslayout's, so this page and `freshness --check` cannot disagree about what was checked.
+    dirs = checkable_dirs()
     stamped, blind = [], []
     for d in dirs:
         (stamped if stamp_paths(d) else blind).append(d)
@@ -1194,7 +1278,9 @@ def collect_flags(src: Source, loco: dict | None, meta: dict | None,
     if blind:
         flags.append(Flag(
             "unchecked", "some stage output cannot be checked for staleness",
-            "No `_inputs.json` in " + ", ".join(f"`runs/{d.name}`" for d in blind)
+            # repo-relative, not `d.name`: `s2_ml` alone is now ambiguous between the regen half
+            # and the keep half, and the reader needs to know which one to go re-run.
+            "No `_inputs.json` in " + ", ".join(f"`{_rel(d)}`" for d in blind)
             + ". These predate input stamping, so there is no record of which champion spec "
               "or model produced them and no way to tell whether they still describe it. "
               "Re-running the stage stamps it; until then, read those numbers as undated."))
@@ -1237,11 +1323,11 @@ def section_gaps(src: Source) -> list[str]:
 # ----------------------------------------------------------------------------------------
 
 def build(src: Source) -> tuple[str, dict]:
-    loco = src.json(RUNS / "s2_ml" / "locoeval.json", "python -m stages.s2_ml.train")
-    meta = src.json(RUNS / "s2_ml" / "model_meta.json", "python -m stages.s2_ml.train")
+    loco = src.json(REGEN / "s2_ml" / "locoeval.json", "python -m stages.s2_ml.train")
+    meta = src.json(REGEN / "s2_ml" / "model_meta.json", "python -m stages.s2_ml.train")
     summary = src.csv(LABELED_RAW / "label_summary.csv", "python -m stages.s2_ml.label_all")
     abst = src.jsonl(LABELED_RAW / "abstentions.jsonl", "python -m stages.s2_ml.label_all")
-    audit = src.json(RUNS / "s3_physics" / "label_audit.json",
+    audit = src.json(REGEN / "s3_physics" / "label_audit.json",
                      "python -m stages.s3_physics.label_audit")
     flags = collect_flags(src, loco, meta, summary, abst, audit)
 

@@ -86,7 +86,7 @@ of and subjects it claims 76.5% of.
 
 **Then read the two recalls, because the accuracy column hides them.** The classes are
 wildly unbalanced on the committed set — 90% of committed errors are stand called walk
-(`runs/s2_ml/roweval_loro.md`) — so a subject can hold a high accuracy while missing most of
+(`runs/regen/s2_ml/roweval_loro.md`) — so a subject can hold a high accuracy while missing most of
 its standing. `rev5` holds 0.9525 accuracy while getting **a third of its standing wrong**:
 0.6647 stand recall against 1.0000 walk recall, over 4,175 committed stand rows.
 
@@ -101,7 +101,7 @@ the reader to watch stand recall since it was written, and no table reported it 
 development subject after `rev4` — 34,482 rows. A worst-subject floor set by one small
 subject is a thin basis, which is §11.4's point, and it is why the lockbox mattered. It is
 also the subject the transition audit times worst — median |offset| 6.41 s against a corpus
-median of 0.73 s (`runs/s2_ml/transitions_loro.md`). Whether the bad timing and the missing
+median of 0.73 s (`runs/regen/s2_ml/transitions_loro.md`). Whether the bad timing and the missing
 standing are one finding or two is open.
 
 ## Full curve (development subjects)
@@ -195,7 +195,7 @@ Independent check: the model abstains on **55.8%** of rows a human marked `-1` v
 15.3% elsewhere. `-1` never enters training, so the agreement is not circular (§5.2).
 
 `near_transition` is the largest bucket and the weakest guess, and as of 2026-08-04 it is
-measured rather than assumed. `runs/s2_ml/transitions_loro.md` times all 267 timeable
+measured rather than assumed. `runs/regen/s2_ml/transitions_loro.md` times all 267 timeable
 annotated boundaries against the model's own predicted state changes: the flag catches
 **82%** of them, but **43% of its 384 contiguous regions contain no annotated boundary at
 all** within a window. Read the 0.6090 against that — part of this bucket is the model
@@ -308,10 +308,10 @@ argue.
 ```powershell
 python -m stages.s2_ml.train                        # champion + window-level CV
 python -m stages.s2_ml.roweval                      # the tables above, incl. the gate sweep
-                                                    #   + runs/s2_ml/transitions_loro.md
+                                                    #   + runs/regen/s2_ml/transitions_loro.md
 python -m stages.s3_physics.label_audit             # which trials contradict their labels
 python -m stages.s3_physics.rate_audit              # body or clock? gyro_energy must FAIL
-python -m stages.s3_physics.plausibility --calibrate --control   # file-level bounds
+python -m stages.s3_physics.plausibility  # file-level bounds: calibrate, then fire at faults
 ```
 
 `roweval --lockbox` exists but **rev8 is spent** (read twice, 2026-08-03, both logged in

@@ -11,6 +11,8 @@ import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 from scipy.stats import binomtest
 
+from freshness import stamp_inputs
+from runslayout import REGEN
 from stages.s2_ml.dataset import LABEL_COL, STAND, WALK, Trial, load_dataset
 from stages.report import add_report_flag
 from stages.s2_ml.features import WindowSpec, amplitude_band
@@ -271,7 +273,7 @@ def render(df: pd.DataFrame, band: tuple[float, float], corpus: float,
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="runs/s3_physics")
+    ap.add_argument("--out", default=str(REGEN / "s3_physics"))
     add_report_flag(ap)
     ap.add_argument("--include-lockbox", action="store_true")
     args = ap.parse_args()
@@ -342,7 +344,12 @@ def main() -> None:
     (out_dir / "label_audit_windows.jsonl").write_text(
         "".join(json.dumps(r, default=float) + "\n" for r in noms.to_dict("records")),
         encoding="utf-8")
-    print(f"\n[audit] -> {out_dir / 'label_audit.md'}")
+    # Model-free like `rate_audit`: this reads the annotations and the anchors, never the champion.
+    # Declared empty rather than left unstamped, so it says "checked, nothing upstream" instead of
+    # "nobody can tell" -- and so no stage sharing runs/regen/s3_physics is silently exempt from the check.
+    stamp_inputs(out_dir, {}, stage="label_audit")
+
+    print(f"\n[audit] -> {out_dir / ('label_audit.md' if args.report else 'label_audit.json')}")
 
 
 if __name__ == "__main__":

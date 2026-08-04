@@ -11,8 +11,10 @@ from stages.s1_clean.census import build_registry
 from stages.s1_clean.manifest import profile_file
 from stages.report import add_report_flag
 
+from runslayout import REGEN
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-S1_CENSUS_OUT_DIR = REPO_ROOT / "runs" / "s1_census"
+S1_CENSUS_OUT_DIR = REGEN / "s1_census"
 
 
 def find_csvs(raw_dir: Path) -> list[Path]:

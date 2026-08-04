@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from runmeta import git_sha
+from runslayout import LEDGER_FILENAME, PROPOSALS_FILENAME, REGEN, keep_dir_for
 from stages.s2_ml.dataset import (
     FEATURES,
     # this corpus carries no optional channel, so the selectable set IS the required one
@@ -25,7 +26,9 @@ from stages.s2_ml.taxonomy import aggregate, bucket_errors
 # estimator and window filter come from train.py; restating them here is the wrong that still scores
 from stages.s2_ml.train import MODEL_PARAMS, build_model, trainable
 
-LEDGER_FILENAME = "experiments.jsonl"
+# Beside the model it names, and rewritten whole on every promotion, so it regenerates. The
+# ledger and the proposals log next to it do NOT -- both are append-only records of cycles whose
+# code is already gone, so they are written to keep_dir_for(out_dir) instead.
 CHAMPION_FILENAME = "champion.json"
 
 # the champion's spec, tracked in git; record() rewrites it on every promotion so it cannot drift
@@ -354,7 +357,9 @@ def record(out_dir: Path, result: ExperimentResult, promoted: bool, reason: str,
     }
     if critic:
         entry["critic"] = critic
-    with (out_dir / LEDGER_FILENAME).open("a", encoding="utf-8") as fh:
+    keep = keep_dir_for(out_dir)
+    keep.mkdir(parents=True, exist_ok=True)
+    with (keep / LEDGER_FILENAME).open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     if promoted:
@@ -371,13 +376,11 @@ def record(out_dir: Path, result: ExperimentResult, promoted: bool, reason: str,
     return entry
 
 
-PROPOSALS_FILENAME = "proposals.jsonl"
-
-
 # log every proposal and its fate, critic-stopped included, so the next cycle sees what was refused
 def record_proposal(out_dir: Path, proposal: dict, critic: dict, ran: bool,
                     note: str = "") -> dict:
-    out_dir.mkdir(parents=True, exist_ok=True)
+    keep = keep_dir_for(out_dir)
+    keep.mkdir(parents=True, exist_ok=True)
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "git_sha": git_sha(),
@@ -386,7 +389,7 @@ def record_proposal(out_dir: Path, proposal: dict, critic: dict, ran: bool,
         "ran": ran,
         "note": note,
     }
-    with (out_dir / PROPOSALS_FILENAME).open("a", encoding="utf-8") as fh:
+    with (keep / PROPOSALS_FILENAME).open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
     return entry
 
@@ -400,12 +403,12 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 # every logged proposal, in order
 def proposals(out_dir: Path) -> list[dict]:
-    return _read_jsonl(out_dir / PROPOSALS_FILENAME)
+    return _read_jsonl(keep_dir_for(out_dir) / PROPOSALS_FILENAME)
 
 
 # every measured experiment, in order
 def ledger(out_dir: Path) -> list[dict]:
-    return _read_jsonl(out_dir / LEDGER_FILENAME)
+    return _read_jsonl(keep_dir_for(out_dir) / LEDGER_FILENAME)
 
 
 # split the ledger by corpus fingerprint; no fingerprint sorts earlier- unshown ground is not ground
@@ -434,42 +437,33 @@ def seed(out_dir: Path, trials=None, *, taxonomy: bool = True) -> dict:
     return entry
 
 
+# This CLI READS. It cannot start a cycle -- that needs the agents, so it runs from
+# run_pipeline.py -- and it no longer offers to seed the incumbent either: `_s2_cycle` seeds
+# whenever the ledger has no champion measured over the corpus in front of it, which is every
+# occasion a hand-run `--seed` was for, minus the chance to do it at the wrong moment.
 def main() -> None:
     import argparse
 
-    ap = argparse.ArgumentParser(description="S2 champion/challenger ledger")
-    ap.add_argument("--out", default="runs/s2_ml")
-    ap.add_argument("--seed", action="store_true",
-                    help="re-measure the tracked champion and record it as the incumbent")
-    ap.add_argument("--no-taxonomy", action="store_true",
-                    help="skip the row-level error taxonomy (faster; loses the tiebreaker)")
-    ap.add_argument("--show", action="store_true", help="print the ledger and exit")
+    ap = argparse.ArgumentParser(
+        description="print the S2 champion/challenger ledger (a cycle runs from run_pipeline.py)")
+    ap.add_argument("--out", default=str(REGEN / "s2_ml"))
     args = ap.parse_args()
 
     out_dir = (Path(__file__).resolve().parents[2] / args.out).resolve()
 
-    if args.show:
-        champ = load_champion(out_dir)
-        print(f"champion: {champ['spec']['name']} at macro-F1 {champ['macro_f1']:.4f}"
-              if champ else "champion: none recorded")
-        current, prior = ledger_by_basis(out_dir, champ)
-        for label, rows in (("this basis", current), ("an earlier basis", prior)):
-            for e in rows:
-                mark = "PROMOTED" if e["promoted"] else "rejected"
-                print(f"  [{label}] {e['ts'][:19]}  {e['spec']['name']:<34} "
-                      f"{e['macro_f1']:.4f}  {mark}: {e['decision_reason'][:80]}")
-        for p in proposals(out_dir):
-            if not p["ran"]:
-                print(f"  [not run] {p['ts'][:19]}  "
-                      f"{p['proposal'].get('name', '(unparsed)'):<34} {p['note'][:80]}")
-        return
-
-    if args.seed:
-        seed(out_dir, taxonomy=not args.no_taxonomy)
-        return
-
-    ap.error("nothing to do: pass --seed or --show. a cycle runs from run_pipeline.py, "
-             "which needs the agents.")
+    champ = load_champion(out_dir)
+    print(f"champion: {champ['spec']['name']} at macro-F1 {champ['macro_f1']:.4f}"
+          if champ else "champion: none recorded")
+    current, prior = ledger_by_basis(out_dir, champ)
+    for label, rows in (("this basis", current), ("an earlier basis", prior)):
+        for e in rows:
+            mark = "PROMOTED" if e["promoted"] else "rejected"
+            print(f"  [{label}] {e['ts'][:19]}  {e['spec']['name']:<34} "
+                  f"{e['macro_f1']:.4f}  {mark}: {e['decision_reason'][:80]}")
+    for p in proposals(out_dir):
+        if not p["ran"]:
+            print(f"  [not run] {p['ts'][:19]}  "
+                  f"{p['proposal'].get('name', '(unparsed)'):<34} {p['note'][:80]}")
 
 
 if __name__ == "__main__":

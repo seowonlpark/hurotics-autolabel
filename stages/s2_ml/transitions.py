@@ -227,7 +227,7 @@ def render(tag: str, s: dict, by_rev: list[dict], trans: pd.DataFrame) -> str:
         "What the deliverable's biggest abstention bucket is actually made of. "
         f"`near_transition` suppresses more rows than any other reason and its suppressed "
         f"guess is the least accurate of any; until now nothing measured the boundaries it "
-        f"fires on (`needtowrite.md` §5.4, gap 5).", "",
+        f"fires on (`archive/needtowrite.md` §5.4, gap 5).", "",
         f"**{n} timeable transitions**, from "
         f"{n + s['n_rejected_total']} annotated stand/walk boundaries. Rejected: "
         + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in rej.items()) + ".", "",

@@ -1,4 +1,20 @@
 # S2 train: fit the champion, score it leave-one-rev-out, write the artifacts; lockbox untouched
+#
+# WHY ExtraTrees and not RandomForest -- `champion_spec.json`'s rationale points here for this,
+# so it lives here rather than in the spec, where every edit re-trips the input stamps of three
+# stages that declare it. Both fitted on identical features, folds and params, 5 seeds each
+# (`runs/keep/ablations/s2_ml_seedsweep.json`):
+#
+#   ExtraTrees     macro-F1 0.9194   coverage @0.85 0.8760   selective accuracy 0.9887
+#   RandomForest   macro-F1 0.9138   coverage @0.85 0.8189   selective accuracy 0.9889
+#
+# The precision a caller gets is the same to within a thousandth. What differs is how much of
+# the corpus is left to be precise ABOUT: RandomForest abstains on nearly one window in five,
+# ExtraTrees on one in eight. The usual explanation -- randomized splits decorrelate the trees,
+# so the vote spreads out instead of piling up against the threshold -- is not measured here;
+# what is measured is the coverage gap, and it is what the choice rests on.
+# `runs/keep/ablations/s2_ml_rf42` is the earlier single-seed RF fit at 42 features that the
+# sweep supersedes; it is kept because it is the only copy of that measurement.
 
 from __future__ import annotations
 
@@ -12,6 +28,7 @@ from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.model_selection import LeaveOneGroupOut
 
 from freshness import stamp_inputs
+from runslayout import REGEN
 from stages.s2_ml.dataset import STAND, TRAIN_CLASSES, WALK, load_dataset
 from stages.s2_ml.features import (
     WindowSpec,
@@ -53,7 +70,7 @@ def select_features(all_feats: list[str], drop: list[str]) -> list[str]:
     if (unknown := [f for f in drop if f not in all_feats]):
         raise SystemExit(
             f"[s2] cannot drop {unknown}: not in the {len(all_feats)} features this corpus "
-            f"builds. Check the spelling against runs/s2_ml/model_meta.json."
+            f"builds. Check the spelling against runs/regen/s2_ml/model_meta.json."
         )
     return [f for f in all_feats if f not in drop]
 
@@ -124,9 +141,12 @@ def reference_stats(df: pd.DataFrame, feats: list[str]) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="runs/s2_ml")
+    ap.add_argument("--out", default=str(REGEN / "s2_ml"))
     add_report_flag(ap)
-    ap.add_argument("--window-s", type=float, default=None)
+    # The ONE override here, because it is the one whose output is read: an ablation's `locoeval`
+    # sits beside the champion's in `breakdown`. There is deliberately no `--window-s` twin -- the
+    # window is a field of `ExperimentSpec`, so a window change belongs in the ledger, where it is
+    # recorded with the rationale that motivated it and the decision it drew.
     ap.add_argument("--drop", nargs="+", metavar="FEATURE", default=None,
                     help="ablation: train without these features instead of the spec's "
                          "drop_features. Marks the run an experiment, not the champion.")
@@ -135,8 +155,7 @@ def main() -> None:
     out_dir = (REPO_ROOT / args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    spec = (WindowSpec(window_s=args.window_s, stride_s=args.window_s)
-            if args.window_s else WindowSpec())
+    spec = WindowSpec()
     trials = load_dataset()
     windows = build_windows(trials, spec)
 
@@ -151,15 +170,11 @@ def main() -> None:
     print(f"[s2] window={spec.window_s}s  train windows={len(train_df):,}  "
           f"features={len(feats)}  revs={len(revs)} {revs}")
 
-    # `--window-s` and `--drop` are experiments, not refits, so say the declaration cannot hold
-    is_experiment = bool(args.window_s or args.drop is not None)
+    # `--drop` is an experiment, not a refit, so say the declaration cannot hold
+    is_experiment = args.drop is not None
     if is_experiment:
-        why = []
-        if args.window_s:
-            why.append(f"--window-s {args.window_s} over spec {champion['window_s']}")
-        if args.drop is not None:
-            why.append(f"--drop {len(dropped)} feature(s): {' '.join(dropped)}")
-        print(f"[s2] NOTE: experiment, not the champion ({'; '.join(why)})")
+        print(f"[s2] NOTE: experiment, not the champion "
+              f"(--drop {len(dropped)} feature(s): {' '.join(dropped)})")
     else:
         assert_matches_spec(champion, build_model(), spec, feats, dropped)
         print(f"[s2] champion spec '{champion['name']}' matches the code")
@@ -181,7 +196,8 @@ def main() -> None:
         if row["threshold"] in tuple(PRESETS.values()):
             print(f"[s2]   thr {row['threshold']:.2f}: coverage {row['coverage']:.4f}  "
                   f"selective_acc {row['selective_accuracy']:.4f}  "
-                  f"worst_rev {row['worst_rev_accuracy']:.4f}")
+                  f"worst_rev {row['worst_rev_accuracy']:.4f} "
+                  f"({row.get('worst_rev') or '?'})")
 
     # Champion: refit on every training rev; the lockbox stays sealed
     model = build_model()

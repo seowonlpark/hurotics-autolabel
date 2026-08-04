@@ -25,9 +25,11 @@ from stages.s1_clean.manifest import session_of
 from stages.s1_clean.resample import resample_file
 from stages.report import add_report_flag
 
+from runslayout import REGEN
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLEAN_DIR = REPO_ROOT / "data" / "clean"
-S1_CLEAN_OUT_DIR = REPO_ROOT / "runs" / "s1_clean"
+S1_CLEAN_OUT_DIR = REGEN / "s1_clean"
 
 
 # a ledger entry, not a copy- the raw file never moves; always needs_human

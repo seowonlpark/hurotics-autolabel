@@ -113,17 +113,21 @@ def selective_curve(y_true: np.ndarray, p_walk: np.ndarray,
     for thr in thresholds:
         keep = conf >= thr
         n_keep = int(keep.sum())
-        worst = float("nan")
+        worst, worst_rev = float("nan"), None
         if g is not None and n_keep:
-            per = [correct[keep & (g == name)].mean() for name in pd.unique(g)
+            # carry the NAME, not just the minimum: which subject is worst is the actionable
+            # half and it cannot be recovered from the artifact once it is dropped here
+            per = [(float(correct[keep & (g == name)].mean()), str(name)) for name in pd.unique(g)
                    if (keep & (g == name)).any()]
-            worst = float(min(per)) if per else float("nan")
+            # ties break on the name, so the column does not wander between runs
+            worst, worst_rev = min(per) if per else (float("nan"), None)
         rows.append({
             "threshold": float(thr),
             "coverage": float(keep.mean()) if keep.size else 0.0,
             "n_labeled": n_keep,
             "selective_accuracy": float(correct[keep].mean()) if n_keep else float("nan"),
             "worst_rev_accuracy": worst,
+            "worst_rev": worst_rev,
             "errors_kept": int((~correct[keep]).sum()),
         })
     return rows
@@ -164,8 +168,11 @@ def render(result: EvalResult, curve: list[dict] | None = None,
                   "| threshold | coverage | selective acc | worst rev | errors kept |",
                   "|---|---|---|---|---|"]
         for r in curve:
+            worst = f"{r['worst_rev_accuracy']:.4f}"
+            if r.get("worst_rev"):
+                worst += f" (`{r['worst_rev']}`)"
             lines.append(f"| {r['threshold']:.2f} | {r['coverage']:.4f} | "
-                         f"{r['selective_accuracy']:.4f} | {r['worst_rev_accuracy']:.4f} | "
+                         f"{r['selective_accuracy']:.4f} | {worst} | "
                          f"{r['errors_kept']:,} |")
     return "\n".join(lines)
 

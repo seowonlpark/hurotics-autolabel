@@ -1,6 +1,6 @@
 {
-  "generated": "2026-08-04T06:03:22.892737+00:00",
-  "model_dir": "C:\\Users\\\ubc15\uc11c\uc6d0\\Desktop\\h-care-champion-5219cd5\\runs\\s2_ml",
+  "generated": "2026-08-04T09:05:17.564280+00:00",
+  "model_dir": "C:\\Users\\\ubc15\uc11c\uc6d0\\Desktop\\h-care-champion-5219cd5\\runs\\regen\\s2_ml",
   "shipped_threshold": 0.85,
   "presets": {
     "high_coverage": 0.7,

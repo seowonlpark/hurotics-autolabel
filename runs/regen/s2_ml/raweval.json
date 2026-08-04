@@ -89,7 +89,8 @@
     "coverage": 0.9090912920490424,
     "selective_accuracy": 0.9914390702760812,
     "errors_kept": 3695,
-    "worst_subject": 0.9821313287157097
+    "worst_subject": 0.9821313287157097,
+    "worst_subject_rev": "rev7"
   },
   "per_rev": {
     "rev13": {

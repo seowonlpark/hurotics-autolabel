@@ -5,13 +5,14 @@ data/raw/
 data/labeled
 data/clean/
 tracker/
+archive/
 
-# runs/ holds two different things. The regenerable artifacts (fitted models, per-row
-# scores) stay out -- they are tens of MB and `train.py` rebuilds them on demand. The
-# measurements do NOT: `roweval_lockbox.json` is the single-use rev8 read (see
-# dataset.py) and can never be regenerated, and `experiments.jsonl` is the only record
-# of how the feature set got from 23 to 42. Those are evidence for claims made in code
-# and in OPERATING_POINTS.md, so they are versioned alongside the claims.
+# runs/ is split by whether a file can be rebuilt: runs/regen/ can, runs/keep/ cannot,
+# and runs/README.md is the index. Both halves are versioned -- the split is about what
+# is safe to DELETE, not about what is worth committing -- so this list is only about
+# size. The heavy binaries (fitted models, per-row scores) stay out at tens of MB each;
+# `train.py` rebuilds them on demand. Everything else in runs/ is small and is evidence
+# for a claim made in code or in OPERATING_POINTS.md, so it travels with the claim.
 runs/**/*.joblib
 runs/**/*.pkl
 runs/**/*.csv

@@ -31,6 +31,7 @@ from stages.s2_ml.features import WindowSpec, build_windows, feature_columns
 from stages.s2_ml.label import label_csv
 from stages.s2_ml.roweval import fit_on
 from freshness import stamp_inputs
+from runslayout import REGEN
 from stages.s2_ml.train import (
     CHAMPION_SPEC_PATH, PRESETS, load_spec, select_features, trainable,
 )
@@ -153,9 +154,12 @@ def summarize(df: pd.DataFrame) -> dict:
                 & (v["guess"].to_numpy(float) == g_cls)
             conf[f"{t_name}->{g_name}"] = int(k.sum())
 
-    worst = min((r["selective_accuracy"] for r in per_rev.values()), default=float("nan"))
+    # the name travels with the minimum; a bare figure says a subject is worst, not which one
+    worst, worst_rev = min(((r["selective_accuracy"], rev) for rev, r in per_rev.items()),
+                           default=(float("nan"), None))
     return {
-        "overall": {**point(committed, correct, len(v)), "worst_subject": float(worst)},
+        "overall": {**point(committed, correct, len(v)),
+                    "worst_subject": float(worst), "worst_subject_rev": worst_rev},
         "per_rev": per_rev,
         "per_variant": per_variant,
         "confusion": conf,
@@ -190,7 +194,8 @@ def render(res: dict, threshold: float, pairs: list, transitive: dict | None) ->
         "|---|---|",
         f"| coverage | **{o['coverage']:.4f}** |",
         f"| selective accuracy | **{o['selective_accuracy']:.4f}** |",
-        f"| worst subject | {o['worst_subject']:.4f} |",
+        f"| worst subject | {o['worst_subject']:.4f}"
+        + (f" (`{o['worst_subject_rev']}`)" if o.get("worst_subject_rev") else "") + " |",
         f"| committed rows | {o['committed']:,} |",
         f"| errors kept | {o['errors_kept']:,} |",
         "",
@@ -273,12 +278,13 @@ def transitive_baseline(trials, train_df, feats, base_meta, revs, threshold) -> 
 def main() -> None:
     use_replacement_encoding()   # the lockbox notice prints a section sign
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="runs/s2_ml")
+    ap.add_argument("--out", default=str(REGEN / "s2_ml"))
     add_report_flag(ap)
-    ap.add_argument("--threshold", type=float, default=PRESETS["balanced"])
-    ap.add_argument("--no-baseline", action="store_true",
-                    help="skip the matched-subject roweval comparison")
     args = ap.parse_args()
+
+    # the declared operating point, not a flag: this is the raw route's half of the accuracy claim,
+    # and it is only readable next to `roweval`, which is cut at the same place
+    threshold = PRESETS["balanced"]
 
     out_dir = (REPO_ROOT / args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -309,26 +315,29 @@ def main() -> None:
             print(f"[rawe] held-out {rev}: labelling {len(mine)} raw file(s)")
             for ann_path, raw_path, _df, vid in mine:
                 parts.append(score_pair(ann_path, Path(raw_path), d, vid,
-                                        args.threshold, spec.fs_hz))
+                                        threshold, spec.fs_hz))
         df = pd.concat(parts, ignore_index=True)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
     res = summarize(df)
-    transitive = (None if args.no_baseline else
-                  transitive_baseline(trials, train_df, feats, base_meta,
-                                      paired_revs, args.threshold))
+    # unconditional: the raw number means nothing alone. The claim is "the raw route matches the
+    # lpf_view route on the same subjects", so a run that skipped the comparison would write an
+    # artifact stating one side of a comparison and calling it a result.
+    transitive = transitive_baseline(trials, train_df, feats, base_meta,
+                                     paired_revs, threshold)
 
     o = res["overall"]
-    print(f"\n[rawe] RAW DEVICE PATH, thr {args.threshold:.2f}: "
+    print(f"\n[rawe] RAW DEVICE PATH, thr {threshold:.2f}: "
           f"coverage {o['coverage']:.4f}  selective_acc {o['selective_accuracy']:.4f}  "
-          f"worst_subject {o['worst_subject']:.4f}  errors {o['errors_kept']:,}")
+          f"worst_subject {o['worst_subject']:.4f} ({o.get('worst_subject_rev') or '?'})  "
+          f"errors {o['errors_kept']:,}")
     if transitive:
         print(f"[rawe] lpf_view route, same subjects: "
               f"coverage {transitive['coverage']:.4f}  "
               f"selective_acc {transitive['selective_accuracy']:.4f}")
 
-    payload = {"threshold": args.threshold, "n_pairs": len(pairs),
+    payload = {"threshold": threshold, "n_pairs": len(pairs),
                "revs": paired_revs, "n_features": len(feats),
                "lockbox_refused": list(DEFAULT_LOCKBOX_REVS),
                "pairs": [{"annotated": Path(a).name, "raw": Path(r).name, "variant": v}
@@ -337,7 +346,7 @@ def main() -> None:
     (out_dir / "raweval.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     if args.report:
         (out_dir / "raweval.md").write_text(
-            render(res, args.threshold, pairs, transitive), encoding="utf-8")
+            render(res, threshold, pairs, transitive), encoding="utf-8")
 
     # Per-rev models are fitted into a temp dir and thrown away, so the spec is the only
     # upstream that can move under this report -- and it is what decides every fit above.

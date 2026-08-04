@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 
 from freshness import stamp_inputs
+from runslayout import LABELED_RAW
+from stages.console import use_replacement_encoding
 from stages.s1_clean.manifest import session_of
 from stages.report import add_report_flag
 from stages.s3_physics.plausibility import summarize as summarize_plausibility
@@ -31,7 +33,7 @@ PRESET_SWEEP_FILENAME = "preset_sweep.json"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = REPO_ROOT / "data" / "raw"
-DEFAULT_OUT_DIR = REPO_ROOT / "labeled_raw"
+DEFAULT_OUT_DIR = LABELED_RAW
 
 
 # A path as this repo names it: relative and forward-slashed, absolute if outside
@@ -182,6 +184,10 @@ def render_report(rows: list[dict], threshold: float, model_dir: Path,
 
 
 def main() -> None:
+    # the sweep line prints an em-dash, and the stamp is written after it: on a cp949 console
+    # that crash left labeled_raw/ summarised but never stamped, which reads as never checked
+    use_replacement_encoding()
+
     ap = argparse.ArgumentParser(
         description="Label every raw device log under data/raw with stand/walk + confidence.")
     ap.add_argument("--raw", default="data/raw")

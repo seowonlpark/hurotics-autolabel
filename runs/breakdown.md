@@ -1,7 +1,7 @@
 # Pipeline breakdown
 
-- generated: **2026-08-04T08:13:46.420550+00:00**
-- commit: `8b548a2`
+- generated: **2026-08-04T09:12:09.573639+00:00**
+- commit: `7d0176c`
 - flags raised: **5** (concentration, gap, risk, unchecked)
 - artifacts missing: **0**
 
@@ -15,7 +15,7 @@ Mechanical rules only: a threshold crossed, a document that does not quote the c
 
 ### `unchecked` — some stage output cannot be checked for staleness
 
-No `_inputs.json` in `runs/s1_census`, `runs/s1_clean`, `runs/s2_ml_abl_bottom8`, `runs/s2_ml_abl_moments`, `runs/s2_ml_abl_zeroing`, `runs/s2_ml_rf42`, `runs/s3_physics`. These predate input stamping, so there is no record of which champion spec or model produced them and no way to tell whether they still describe it. Re-running the stage stamps it; until then, read those numbers as undated.
+No `_inputs.json` in `runs/keep/s2_ml`. These predate input stamping, so there is no record of which champion spec or model produced them and no way to tell whether they still describe it. Re-running the stage stamps it; until then, read those numbers as undated.
 
 ### `risk` — the 95% target is missed on the lockbox
 
@@ -73,7 +73,7 @@ An unmapped variant needs **one paired raw+annotated recording** to fix. Signal-
 
 ## §1 — S1 clean
 
-*Source: `runs/s1_clean/`*
+*Source: `runs/regen/s1_clean/`*
 
 ### Partition gate
 
@@ -146,7 +146,7 @@ Drift-contaminated `Deg` channels are flagged, not dropped — the raw superset 
 
 ## §2 — S2 ml
 
-*Source: `runs/s2_ml/`, `stages/s2_ml/champion_spec.json`*
+*Source: `runs/regen/s2_ml/`, `runs/keep/s2_ml/`, `stages/s2_ml/champion_spec.json`*
 
 ### The champion
 
@@ -163,18 +163,19 @@ Drift-contaminated `Deg` channels are flagged, not dropped — the raw superset 
 
 ### Why this champion, and what was rejected
 
-ExtraTrees over 38 features, non-overlapping 2 s windows at the canonical 100 Hz. Chosen against RandomForest on identical features, folds and params over 5 seeds: equal precision at threshold 0.85 while committing to 87.6% of windows against 81.9% (see the train.py docstring). The four dropped angular-velocity higher moments are removed for parsimony, NOT for a gain: measured at 42 vs 38 features, LORO macro-F1 0.9193 -> 0.9196 and coverage at 0.85 0.8780 -> 0.8800, both inside the +/-0.0003 five-seed noise band. Kurtosis and peak-ratio are noise-sensitive by construction and sat at the bottom of the importance table (0.0047-0.0055, ranks 39-42 of 42); four features that buy nothing measurable are four fewer things to explain and to keep trustworthy across a new subject.
+ExtraTrees over 38 features, non-overlapping 2 s windows at the canonical 100 Hz. Chosen against RandomForest on identical features, folds and params over 5 seeds: equal precision at threshold 0.85 while committing to 87.6% of windows against 81.9% (see the train.py docstring). The four dropped angular-velocity higher moments are removed for parsimony, NOT for a gain: re-measured 2026-08-04 as the MEAN over 5 seeds within each feature set, 42 vs 38 features is LORO macro-F1 0.9194 -> 0.9186 and coverage at 0.85 0.8760 -> 0.8791, against a within-set spread of 0.0019 and 0.0017 respectively. Kurtosis and peak-ratio are noise-sensitive by construction and sat at the bottom of the importance table (0.0047-0.0055, ranks 39-42 of 42); four features that buy nothing measurable are four fewer things to explain and to keep trustworthy across a new subject. NOTE on reading any number here: single-seed macro-F1 differences below ~0.004 are NOT interpretable at this corpus size. An earlier version of this file compared seed-0 runs against a +/-0.0003 band, which is the standard error of a 5-seed mean, not the spread of one draw; that error is what the 2026-08-04 sweep corrected. Compare means over seeds, and quote the within-set spread beside them.
 
 **Rejected, with the measurement:**
 
-- drop the zeroing family (L/R_angvel_LPF_mean, L/R_ang_med_rest): macro-F1 0.9193 -> 0.9168, coverage 0.8780 -> 0.8758. The per-subject cuff-zeroing argument that justified the sibling repo's static-offset drop does NOT transfer to this basis; these carry real signal. Low importance is not droppability.
-- drop the bottom 8 by importance: macro-F1 0.9193 -> 0.9176. The regression is the zeroing half above, not the moments.
+- drop the zeroing family (L/R_angvel_LPF_mean, L/R_ang_med_rest): NOT rejected on the evidence, and retained only because nothing yet argues for removing them. The original entry cited macro-F1 0.9193 -> 0.9168 and concluded these carry real signal. Re-measured over 5 seeds per feature set: 0.9186 vs 0.9185, a difference of 0.0001, against within-set spreads of 0.0017 and 0.0042. The 0.9168 was seed 0, the near-bottom of that set's own 0.9166-0.9208 range; seed 2 puts the same drop ABOVE the champion. The per-subject cuff-zeroing argument from the sibling repo is therefore neither confirmed nor refuted here - this corpus cannot resolve a difference that small.
+- drop the bottom 8 by importance: macro-F1 0.9193 -> 0.9176, single seed, never swept. Below the ~0.004 resolution above, so read it as 'no measured difference', not as a regression. The earlier gloss ('the regression is the zeroing half, not the moments') attributed a delta this corpus cannot separate.
+- cut to 27 features by importance density, dropping the moments, the zeroing family, L/R_angvel_skew, L/R_angvel_dom_hz, L/R_cycle_s and angvel_LR_lag_s: macro-F1 0.9186 -> 0.9171 over 5 seeds (spread 0.0017 vs 0.0034), coverage 0.8791 -> 0.8811. The closest thing to a real cost measured so far, and still marginal. 11 fewer features is a live option, not a rejected one; it is not taken because nothing needs it.
 
 Dropped for parsimony: `L_angvel_kurt`, `R_angvel_kurt`, `L_angvel_peakratio`, `R_angvel_peakratio`.
 
 ### The champion/challenger ledger
 
-*Source: `runs/s2_ml/experiments.jsonl`, `proposals.jsonl` — written by the `s2_experiment` step. An agent proposes and a second criticises; neither can promote. `experiment.decide()` gates on measured macro-F1 and logs the reason either way.*
+*Source: `runs/keep/s2_ml/experiments.jsonl`, `proposals.jsonl` — written by the `s2_experiment` step. An agent proposes and a second criticises; neither can promote. `experiment.decide()` gates on measured macro-F1 and logs the reason either way.*
 
 Incumbent: **`extratrees400_drop_moments38`** at macro-F1 0.9196, recorded 2026-08-04T03:16:59Z (`b00fba0`).
 
@@ -225,16 +226,31 @@ Proposals that never cost a fit — the critic reviews before training, which is
 
 The deciding line is coverage at equal precision: same quality of answer, more answers.
 
-#### Feature ablations
+#### Feature-set resolution — 5 seeds *within* each feature set
 
-| variant | features | macro-F1 | accuracy | verdict |
-|---|---|---|---|---|
-| **shipped** | 38 | 0.9196 | 0.9624 | — |
-| `bottom8` | — | 0.9176 | 0.9616 | **rejected** |
-| `moments` | — | 0.9196 | 0.9624 | tie |
-| `zeroing` | — | 0.9168 | 0.9612 | **rejected** |
+| feature set | features | seeds | mean macro-F1 | min | max | spread | mean coverage @0.85 |
+|---|---|---|---|---|---|---|---|
+| `all42` | 42 | 5 | 0.9194 | 0.9183 | 0.9202 | 0.0019 | 0.8760 |
+| `moments38` | 38 | 5 | 0.9186 | 0.9178 | 0.9196 | 0.0017 | 0.8791 |
+| `zeroing38` | 38 | 5 | 0.9185 | 0.9166 | 0.9208 | 0.0042 | 0.8784 |
+| `top27` | 27 | 5 | 0.9171 | 0.9154 | 0.9188 | 0.0034 | 0.8811 |
 
-Low importance is not droppability — the rejected rows are the useful part of this table.
+**Single-seed macro-F1 differences below ~0.0042 are not interpretable at this corpus size.** The spread is not constant across feature sets, so there is no one noise band to quote; compare means over seeds and carry the within-set spread alongside.
+
+#### Feature ablations — single seed each
+
+| variant | features | macro-F1 | vs shipped |
+|---|---|---|---|
+| **shipped** | 38 | 0.9196 | — |
+| `bottom8` | 34 | 0.9176 | **below resolution** |
+| `moments` | 38 | 0.9196 | **below resolution** |
+| `top10` | 10 | 0.9094 | **worse** |
+| `top14` | 14 | 0.9140 | **worse** |
+| `top19` | 19 | 0.9140 | **worse** |
+| `top27` | 27 | 0.9180 | **below resolution** |
+| `zeroing` | 38 | 0.9168 | **below resolution** |
+
+Every row is one seed, so the verdict column is read against the spread above, not against zero. Low importance is not droppability *and* low importance is not evidence of droppability — at this resolution most of these rows say nothing either way, which is the honest reading.
 
 ### Leave-one-rev-out — the headline
 
@@ -276,15 +292,15 @@ Coverage and accuracy are quoted together everywhere. Either alone is meaningles
 
 | threshold | coverage | selective acc | worst subject | wrong windows kept |
 |---|---|---|---|---|
-| 0.50 | 100.00% | 0.9624 | 0.9241 | 225 |
-| 0.60 | 97.96% | 0.9708 | 0.9371 | 171 |
-| 0.70 | 94.90% | 0.9789 | 0.9433 | 120 |
-| 0.75 | 92.83% | 0.9825 | 0.9568 | 97 |
-| 0.80 | 90.84% | 0.9864 | 0.9635 | 74 |
-| 0.85 ← shipped | 88.00% | 0.9884 | 0.9699 | 61 |
-| 0.90 | 83.07% | 0.9907 | 0.9695 | 46 |
-| 0.95 | 72.94% | 0.9938 | 0.9813 | 27 |
-| 0.98 | 59.74% | 0.9980 | 0.9890 | 7 |
+| 0.50 | 100.00% | 0.9624 | 0.9241 (`rev5`) | 225 |
+| 0.60 | 97.96% | 0.9708 | 0.9371 (`rev5`) | 171 |
+| 0.70 | 94.90% | 0.9789 | 0.9433 (`rev5`) | 120 |
+| 0.75 | 92.83% | 0.9825 | 0.9568 (`rev5`) | 97 |
+| 0.80 | 90.84% | 0.9864 | 0.9635 (`rev5`) | 74 |
+| 0.85 ← shipped | 88.00% | 0.9884 | 0.9699 (`rev5`) | 61 |
+| 0.90 | 83.07% | 0.9907 | 0.9695 (`rev5`) | 46 |
+| 0.95 | 72.94% | 0.9938 | 0.9813 (`rev5`) | 27 |
+| 0.98 | 59.74% | 0.9980 | 0.9890 (`rev5`) | 7 |
 
 #### Row level (`roweval_loro.json`) — the deliverable's own unit
 
@@ -292,17 +308,33 @@ Over 1,244,292 scored rows. Coverage runs lower than the window table because in
 
 | threshold | coverage | selective acc | worst subject | wrong rows kept |
 |---|---|---|---|---|
-| 0.50 | 100.00% | 0.9555 | 0.8799 | 55,357 |
-| 0.60 | 96.62% | 0.9682 | 0.8933 | 38,215 |
-| 0.70 | 92.75% | 0.9784 | 0.9099 | 24,916 |
-| 0.75 | 90.57% | 0.9824 | 0.9231 | 19,865 |
-| 0.80 | 87.94% | 0.9866 | 0.9383 | 14,676 |
-| 0.85 ← shipped | 84.66% | 0.9901 | 0.9525 | 10,391 |
-| 0.90 | 79.53% | 0.9942 | 0.9663 | 5,727 |
-| 0.95 | 67.83% | 0.9980 | 0.9884 | 1,650 |
-| 0.98 | 54.85% | 0.9994 | 0.9937 | 390 |
+| 0.50 | 100.00% | 0.9555 | 0.8799 (`rev5`) | 55,357 |
+| 0.60 | 96.62% | 0.9682 | 0.8933 (`rev5`) | 38,215 |
+| 0.70 | 92.75% | 0.9784 | 0.9099 (`rev5`) | 24,916 |
+| 0.75 | 90.57% | 0.9824 | 0.9231 (`rev5`) | 19,865 |
+| 0.80 | 87.94% | 0.9866 | 0.9383 (`rev5`) | 14,676 |
+| 0.85 ← shipped | 84.66% | 0.9901 | 0.9525 (`rev5`) | 10,391 |
+| 0.90 | 79.53% | 0.9942 | 0.9663 (`rev5`) | 5,727 |
+| 0.95 | 67.83% | 0.9980 | 0.9884 (`rev5`) | 1,650 |
+| 0.98 | 54.85% | 0.9994 | 0.9937 (`rev5`) | 390 |
 
 **Why 0.85:** pooled accuracy clears the 95% target from 0.50 onward, so pooling is the wrong number to set a threshold by. 0.85 is the lowest threshold at which every held-out development subject independently clears it.
+
+**That column is the worst *development* subject.** `rev8` — sealed, single-use, and never seen by feature, model or threshold selection — is not in it and is worse. It is kept out on purpose: one cell holding both populations is exactly the conflation §0 warns about, and re-running it to keep the column tidy is the trade §7 forbids. Read the two side by side; the right-hand column is the floor a genuinely new subject is drawn from.
+
+| threshold | worst development subject | `rev8` (lockbox, spent) | lockbox coverage | which is lower |
+|---|---|---|---|---|
+| 0.50 | 0.8799 (`rev5`) | **0.8680** | 100.0% | **lockbox is worse** |
+| 0.60 | 0.8933 (`rev5`) | **0.8819** | 95.5% | **lockbox is worse** |
+| 0.70 | 0.9099 (`rev5`) | **0.8997** | 90.4% | **lockbox is worse** |
+| 0.75 | 0.9231 (`rev5`) | **0.9063** | 86.8% | **lockbox is worse** |
+| 0.80 | 0.9383 (`rev5`) | **0.9175** | 82.5% | **lockbox is worse** |
+| 0.85 ← shipped | 0.9525 (`rev5`) | **0.9308** | 76.4% | **lockbox is worse** |
+| 0.90 | 0.9663 (`rev5`) | **0.9314** | 56.0% | **lockbox is worse** |
+| 0.95 | 0.9884 (`rev5`) | **0.9184** | 23.6% | **lockbox is worse** |
+| 0.98 | 0.9937 (`rev5`) | **0.9594** | 6.6% | **lockbox is worse** |
+
+The lockbox column is **not** monotonic — see the note under the lockbox table below — so it is a floor that a higher threshold does not raise.
 
 #### Ambiguity reasons — each validated by what it suppressed
 
@@ -326,7 +358,7 @@ Everything above scores the annotated `lpf_view` export. A caller supplies a raw
 
 | population | rows | coverage | accuracy on committed | worst subject |
 |---|---|---|---|---|
-| raw device — rev13, rev4, rev7 | 474,773 | **90.91%** | **0.9914** | 0.9821 |
+| raw device — rev13, rev4, rev7 | 474,773 | **90.91%** | **0.9914** | 0.9821 (`rev7`) |
 | `lpf_view` route, same subjects | 475,260 | 90.88% | 0.9914 | — |
 
 **Two subjects fewer than the table above, and no lockbox.** `rev8` is paired but refused in code (§7), and only 3 development subjects have a raw file preserved alongside their annotation, so this is a narrower population than the row-level curve — not a second opinion on it.
@@ -390,7 +422,7 @@ The `ileg_*` block carries **19.1%** of total importance. That is the same inter
 
 ## §3 — S3 physics
 
-*Source: `runs/s3_physics/`*
+*Source: `runs/regen/s3_physics/`*
 
 ### What a *window* is — the unit every count below uses
 
@@ -545,19 +577,19 @@ Session is independent of rev and is the one axis nothing else in this repo cuts
 
 ### Operating points — what each costs here, what each buys there
 
-*Coverage from `labeled_raw/preset_sweep.json` (this corpus, no ground truth); accuracy from `runs/s2_ml/roweval_loro.json` (annotated corpus, held out per subject). Two populations — read across the row, never down one column.*
+*Coverage from `labeled_raw/preset_sweep.json` (this corpus, no ground truth); accuracy from `runs/regen/s2_ml/roweval_loro.json` (annotated corpus, held out per subject). Two populations — read across the row, never down one column.*
 
 | threshold | coverage HERE | rows committed | files < 50% | accuracy THERE | worst subject THERE |
 |---|---|---|---|---|---|
-| 0.50 | 99.9% | 2,593,283 | 0 | 0.9555 | 0.8799 |
-| 0.60 | 96.0% | 2,491,850 | 0 | 0.9682 | 0.8933 |
-| 0.70 `high_coverage` | 92.0% | 2,386,292 | 4 | 0.9784 | 0.9099 |
-| 0.75 | 90.0% | 2,336,070 | 8 | 0.9824 | 0.9231 |
-| 0.80 | 87.6% | 2,273,793 | 9 | 0.9866 | 0.9383 |
-| **0.85** `balanced` ← shipped | 85.2% | 2,210,144 | 12 | 0.9901 | 0.9525 |
-| 0.90 | 82.6% | 2,142,872 | 14 | 0.9942 | 0.9663 |
-| 0.95 `high_precision` | 77.0% | 1,999,043 | 19 | 0.9980 | 0.9884 |
-| 0.98 | 69.6% | 1,807,018 | 29 | 0.9994 | 0.9937 |
+| 0.50 | 99.9% | 2,593,283 | 0 | 0.9555 | 0.8799 (`rev5`) |
+| 0.60 | 96.0% | 2,491,850 | 0 | 0.9682 | 0.8933 (`rev5`) |
+| 0.70 `high_coverage` | 92.0% | 2,386,292 | 4 | 0.9784 | 0.9099 (`rev5`) |
+| 0.75 | 90.0% | 2,336,070 | 8 | 0.9824 | 0.9231 (`rev5`) |
+| 0.80 | 87.6% | 2,273,793 | 9 | 0.9866 | 0.9383 (`rev5`) |
+| **0.85** `balanced` ← shipped | 85.2% | 2,210,144 | 12 | 0.9901 | 0.9525 (`rev5`) |
+| 0.90 | 82.6% | 2,142,872 | 14 | 0.9942 | 0.9663 (`rev5`) |
+| 0.95 `high_precision` | 77.0% | 1,999,043 | 19 | 0.9980 | 0.9884 (`rev5`) |
+| 0.98 | 69.6% | 1,807,018 | 29 | 0.9994 | 0.9937 (`rev5`) |
 
 Swept over 78 labelled files (2,594,823 rows) in the single scoring pass `label_all` already makes — a row's confidence does not depend on the threshold, so every point above costs nothing beyond the labelling itself. `label_all` verifies that identity against the frame's own `ambiguous` column at the shipped threshold and refuses to write this artifact if they disagree.
 

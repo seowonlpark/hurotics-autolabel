@@ -11,14 +11,15 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-# runs/ is regenerated in place, so a file sitting there need not match any commit; each run
+# runs/regen is regenerated in place, so a file sitting there need not match any commit; each run
 # stamps the sha that produced it. One shared definition, with the S2 experiment ledger
 from runmeta import git_sha as _git_sha
+# the runs/ tree, defined once: REGEN rebuilds from this command, KEEP never does
+from runslayout import AGENT_RUNS, BREAKDOWN_MD, KEEP_S2, LABELED_RAW, REGEN
 from stages.console import use_replacement_encoding
 
 REPO_ROOT = Path(__file__).resolve().parent
 RAW_DIR = REPO_ROOT / "data" / "raw"
-RUNS = REPO_ROOT / "runs"
 PY = sys.executable  # the venv's python, so subprocesses use the same interpreter
 
 
@@ -48,13 +49,14 @@ class Step:
     runtime: str = ""              # one of RUNTIMES; relative scale, not a measurement
 
 
-# runs/YYYY-MM-DD_runN; never overwrite a previous run
+# runs/keep/agent_runs/YYYY-MM-DD_runN; never overwrite a previous run. Under keep/ because the
+# reviews inside are paid and non-deterministic: re-running the agent does not reproduce them.
 def _new_run_dir() -> Path:
     today = date.today().isoformat()
     n = 1
-    while (RUNS / f"{today}_run{n}").exists():
+    while (AGENT_RUNS / f"{today}_run{n}").exists():
         n += 1
-    run_dir = RUNS / f"{today}_run{n}"
+    run_dir = AGENT_RUNS / f"{today}_run{n}"
     run_dir.mkdir(parents=True)
     (run_dir / "run_meta.json").write_text(
         json.dumps({"started": datetime.now(timezone.utc).isoformat(),
@@ -80,7 +82,7 @@ async def _s1_exception(run_dir: Path) -> None:
         S1_EXCEPTION_AGENT, build_prompt, build_queue, parse_review, write_review,
     )
 
-    clean_dir = RUNS / "s1_clean"
+    clean_dir = REGEN / "s1_clean"
     if not clean_dir.exists():
         raise FileNotFoundError(
             f"No clean run at {clean_dir}. Run `python -m stages.s1_clean.clean` first."
@@ -109,7 +111,7 @@ async def _s3_label_review(run_dir: Path) -> None:
         S3_LABEL_REVIEW_AGENT, build_prompt, build_queue, parse_review, write_review,
     )
 
-    audit_dir = RUNS / "s3_physics"
+    audit_dir = REGEN / "s3_physics"
     if not (audit_dir / "label_audit.json").exists():
         raise FileNotFoundError(
             f"No label audit at {audit_dir}. Run "
@@ -150,12 +152,14 @@ async def _s2_cycle(run_dir: Path) -> None:
     from agents.base import run_agent
     from stages.s2_ml.dataset import load_dataset
     from stages.s2_ml.experiment import (
-        ExperimentSpec, champion_config, decide, ledger_by_basis, load_champion,
-        load_champion_spec, proposals, record, record_proposal, run_experiment, seed,
+        ExperimentSpec, champion_config, comparable, corpus_fingerprint, decide,
+        ledger_by_basis, load_champion, load_champion_spec, proposals, record,
+        record_proposal, run_experiment, seed,
     )
     from stages.s2_ml.features import build_windows, feature_columns
+    from stages.s2_ml.train import trainable
 
-    s2_dir = RUNS / "s2_ml"
+    s2_dir = REGEN / "s2_ml"
     report = s2_dir / "locoeval.json"
     if not report.exists():
         raise FileNotFoundError(
@@ -164,8 +168,24 @@ async def _s2_cycle(run_dir: Path) -> None:
 
     trials = load_dataset()
 
-    # an ABSENT champion is seeded; one measured over different ground is left for decide() to refuse
+    # built once and read twice: the feature names the experimenter is shown, and the fingerprint
+    # of the ground they are measured over
+    windows = build_windows(trials, champion_config(load_champion_spec())[0])
+    feats = feature_columns(windows)
+    here = corpus_fingerprint(trainable(windows, "train"))
+
+    # An ABSENT champion is seeded, and so is one measured over ground this corpus no longer is:
+    # `decide()` would refuse to compare against it and every cycle from here would cost a fit and
+    # settle nothing. Re-measuring the TRACKED spec is the re-baseline that refusal asks for, and
+    # it is not a judgement call -- the fingerprints either match or they do not -- so it happens
+    # here rather than through a flag someone has to know to pass.
     champion = load_champion(s2_dir)
+    if champion is not None:
+        same_ground, why = comparable(here, champion.get("corpus"))
+        if not same_ground:
+            print(f"[s2] incumbent was measured over other ground ({why}); "
+                  f"re-seeding from champion_spec.json before challenging it")
+            champion = None
     if champion is None:
         seed(s2_dir, trials)
         champion = load_champion(s2_dir)
@@ -174,7 +194,6 @@ async def _s2_cycle(run_dir: Path) -> None:
     # inherited rows go in a labelled block: already-tried ideas, but not findings about these features
     rows, prior_basis = ledger_by_basis(s2_dir, champion)
     prior = proposals(s2_dir)
-    feats = feature_columns(build_windows(trials, champion_config(load_champion_spec())[0]))
 
     base_prompt = s2_experimenter.build_prompt(report_md, rows, champion, feats)
     if prior_basis:
@@ -294,12 +313,12 @@ def build_steps() -> list[Step]:
              desc="the staleness checker still fires (self-test)", runtime="short"),
         Step("s1_census",
              [PY, "-m", "stages.s1_clean.run"],
-             gate=RUNS / "s1_census" / "manifest.jsonl",
+             gate=REGEN / "s1_census" / "manifest.jsonl",
              desc="inventory data/raw: files, sessions, channels", runtime="medium"),
         Step("s1_clean",
              [PY, "-m", "stages.s1_clean.clean"],
-             gate=RUNS / "s1_clean" / "segments.jsonl",
-             desc="raw -> data/clean parquet + per-file channel trust", runtime="long"),
+             gate=REGEN / "s1_clean" / "segments.jsonl",
+             desc="raw -> per-file channel trust; the cleaned frame is dropped", runtime="long"),
         Step("s1_exception",
              fn=_agent_step(_s1_exception), agent=True,
              desc="triage the clean stage's exception queue", runtime="medium"),
@@ -309,12 +328,12 @@ def build_steps() -> list[Step]:
              desc="lpf_view columns rebuilt from raw vs the vendor export", runtime="long"),
         Step("s2_train",
              [PY, "-m", "stages.s2_ml.train"],
-             gate=RUNS / "s2_ml" / "locoeval.json",
+             gate=REGEN / "s2_ml" / "locoeval.json",
              desc="fit the champion and LOCO-evaluate it", runtime="long"),
         # the champion/challenger cycle; the artifact is the ledger entry, not a promotion
         Step("s2_experiment",
              fn=_agent_step(_s2_cycle), agent=True,
-             gate=RUNS / "s2_ml" / "experiments.jsonl",
+             gate=KEEP_S2 / "experiments.jsonl",
              desc="champion/challenger cycle; code decides promotion", runtime="super long"),
         # what a caller actually GETS; differential like the check above, so no golden number can stale
         Step("verify_serve",
@@ -323,18 +342,18 @@ def build_steps() -> list[Step]:
         # the accuracy claim: the real `label.py` per held-out rev, and the curve OPERATING_POINTS quotes
         Step("s2_roweval",
              [PY, "-m", "stages.s2_ml.roweval"],
-             gate=RUNS / "s2_ml" / "roweval_loro.json",
+             gate=REGEN / "s2_ml" / "roweval_loro.json",
              desc="THE accuracy claim: real label.py per held-out rev",
              runtime="super long"),
         # the same claim for the raw route, measured rather than inferred; refuses the lockbox in code
         Step("s2_raweval",
              [PY, "-m", "stages.s2_ml.raweval"],
-             gate=RUNS / "s2_ml" / "raweval.json",
+             gate=REGEN / "s2_ml" / "raweval.json",
              desc="the same claim on the raw device route", runtime="super long"),
         # S3 pointed at the ANNOTATIONS, and it names the windows a human should adjudicate
         Step("s3_label_audit",
              [PY, "-m", "stages.s3_physics.label_audit"],
-             gate=RUNS / "s3_physics" / "label_audit.json",
+             gate=REGEN / "s3_physics" / "label_audit.json",
              desc="physics vs annotations: which trials contradict themselves",
              runtime="medium"),
         # ...and the consumer for those nominations: a cause per flagged trial, and no number at all
@@ -344,18 +363,30 @@ def build_steps() -> list[Step]:
         # is an anchor describing the body or the sampling grid? `gyro_energy` is expected to FAIL
         Step("s3_rate_audit",
              [PY, "-m", "stages.s3_physics.rate_audit"],
-             gate=RUNS / "s3_physics" / "rate_audit.json",
+             gate=REGEN / "s3_physics" / "rate_audit.json",
              desc="is an anchor describing the body or the sampling grid?", runtime="medium"),
         # the serve path's file-level bounds against their own controls; an unfired bound is no evidence
         Step("s3_plausibility",
-             [PY, "-m", "stages.s3_physics.plausibility", "--calibrate", "--control"],
-             gate=RUNS / "s3_physics" / "plausibility.json",
+             [PY, "-m", "stages.s3_physics.plausibility"],
+             gate=REGEN / "s3_physics" / "plausibility.json",
              desc="file-level sanity bounds, checked against injected faults",
              runtime="medium"),
+        # the serve path over the WHOLE corpus, not the annotated slice: coverage, refusals and
+        # the preset sweep, with no ground truth anywhere in it. It reads the champion, so it has
+        # to follow s2_experiment's refit -- run before that promotion and every file in
+        # labeled_raw/ describes a model the rest of the run has already replaced. The gate is a
+        # `.csv` rather than the usual `.json` because `label_summary.csv` IS the machine-read
+        # artifact here; `preset_sweep.json` is the wrong choice, since the sweep is legitimately
+        # skipped whenever an abstention gate is on and a missing file would then read as failure.
+        Step("s2_label_all",
+             [PY, "-m", "stages.s2_ml.label_all"],
+             gate=LABELED_RAW / "label_summary.csv",
+             desc="label every raw file: corpus coverage, refusals, preset sweep",
+             runtime="super long"),
         # last, reading every stage above; deterministic, so an unpaid run still gets its one page
         Step("breakdown",
              [PY, "-m", "stages.breakdown"],
-             gate=RUNS / "breakdown.md",
+             gate=BREAKDOWN_MD,
              desc="one page over every stage above", runtime="short"),
     ]
 
@@ -524,11 +555,12 @@ def main() -> None:
     print(f"\n[run] done: {len(selected)} steps in {time.time() - started:.1f}s")
 
     # the staleness check lives in `breakdown` now: a hardcoded second copy could only cover less
-    report = RUNS / "breakdown.md"
+    report = BREAKDOWN_MD
     if report.exists():
         print(f"[run] report -> {report.relative_to(REPO_ROOT)}")
     if n_agents:
-        print("[run] agent costs are in each run's runs/<date>_runN/costs.json")
+        print("[run] agent costs are in each run's "
+              "runs/keep/agent_runs/<date>_runN/costs.json")
 
 
 if __name__ == "__main__":
