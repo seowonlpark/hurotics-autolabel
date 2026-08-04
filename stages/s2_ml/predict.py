@@ -1,6 +1,4 @@
-# dense-stride inference: a windowed classifier -> per-row predictions
-# resolution is the stride, not the window; centre, not leading edge, so transitions
-# stay unbiased; inference-side only
+# dense-stride inference -> per-row predictions; resolution is the stride, centred not leading-edge
 
 from __future__ import annotations
 
@@ -10,23 +8,15 @@ import pandas as pd
 from stages.s2_ml.dataset import FEATURES, LABEL_COL, TIME_COL, TRAIN_CLASSES
 from stages.s2_ml.features import WindowSpec, feature_names, rest_reference, segment_features
 
-# 100 ms: finer than FLICKER_MAX_MS (200 ms) so flicker is expressible, coarse enough
-# that dense inference over the corpus stays minutes not hours
-#
-# NOT the same number as `train.DEFAULT_INFERENCE_STRIDE_S` (0.25 s), and deliberately so:
-# that one is the SERVE path's stride, chosen for cost on a customer's whole recording, and
-# at 250 ms a 200 ms flicker cannot be represented at all; this stride exists to measure the
-# error taxonomy, where the shape of a mistake is the whole point
+# 100 ms: finer than FLICKER_MAX_MS so flicker is expressible; NOT train.DEFAULT_INFERENCE_STRIDE_S
 DEFAULT_INFERENCE_STRIDE_S = 0.1
 
 
-# per-row predictions for one gap-free segment; edge rows inherit the nearest window's
-# prediction- they're genuinely unobservable at this window length
+# per-row predictions for one segment; edge rows inherit the nearest window- genuinely unobservable
 def dense_predict_segment(model, seg: pd.DataFrame, feats: list[str], spec: WindowSpec,
                           stride_s: float = DEFAULT_INFERENCE_STRIDE_S,
                           ref: tuple[dict[str, float], float] | None = None) -> np.ndarray:
-    # rest posture is a property of the RECORDING, so the caller measures it once and
-    # passes it down; the segment-local fallback is for scoring one segment alone
+    # rest posture is a property of the RECORDING: the caller measures it once and passes it down
     if ref is None:
         z, ileg, _trusted = rest_reference(seg, spec.fs_hz)
         ref = (z, ileg)
@@ -38,12 +28,7 @@ def dense_predict_segment(model, seg: pd.DataFrame, feats: list[str], spec: Wind
     if n_rows < n_win:
         return np.full(n_rows, -1, dtype=int) # too short to score; caller drops these
 
-    # Every window at once, through the SAME `segment_features` that built the training rows,
-    # at a WindowSpec whose stride is the inference stride; the sibling repo called a
-    # per-window `window_features` in a Python loop here; this repo replaced that scalar path
-    # with the vectorized one (`verify_features.py` holds the two to exact agreement), so
-    # looping would now mean maintaining a second implementation of the features the model
-    # was trained on- train/serve skew in the one place it is least visible
+    # every window at once, through the SAME `segment_features` that built the training rows
     wspec = WindowSpec(window_s=spec.window_s, stride_s=stride_s, fs_hz=spec.fs_hz)
     chan = {c: seg[c].to_numpy(float) for c in FEATURES}
     X, starts = segment_features(chan, wspec, zeros, ileg_zero)
@@ -64,8 +49,7 @@ def dense_predict_segment(model, seg: pd.DataFrame, feats: list[str], spec: Wind
     return out
 
 
-# split into contiguous runs where ground truth is a trainable class; -1 (human-unknown)
-# is excluded from scoring; splitting preserves contiguity so -1 reads as a boundary
+# contiguous runs where truth is trainable; -1 is excluded from scoring and reads as a boundary
 def labeled_runs(gt: np.ndarray, pred: np.ndarray, t: np.ndarray):
     ok = np.isin(gt, TRAIN_CLASSES)
     if not ok.any():
@@ -81,8 +65,7 @@ def labeled_runs(gt: np.ndarray, pred: np.ndarray, t: np.ndarray):
 # yield (gt, pred, time_ms) runs for one trial, segment by segment
 def dense_predict_trial(model, frame: pd.DataFrame, feats: list[str], spec: WindowSpec,
                         stride_s: float = DEFAULT_INFERENCE_STRIDE_S):
-    # over the WHOLE recording, as windows_of_trial does at training time: rest usually
-    # sits in one segment, so a per-segment zero would skew every other segment
+    # over the WHOLE recording, as at training time: a per-segment zero would skew every other one
     zeros, ileg_zero, _trusted = rest_reference(frame, spec.fs_hz)
     for _seg_id, seg in frame.groupby("segment", sort=True):
         seg = seg.reset_index(drop=True)

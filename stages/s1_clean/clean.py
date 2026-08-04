@@ -1,8 +1,4 @@
-# S1 clean: resample every raw file onto the canonical grid
-#   python -m stages.s1_clean.clean
-# only channel_trust.json persists- the grid frame is built, measured and dropped
-# nothing read the parquet back and serve derives features from RAW anyway
-# run artifacts: segments / observations / quarantine .jsonl + clean_report.md
+# S1 clean (python -m stages.s1_clean.clean): resample to the canonical grid; only trust persists
 
 from __future__ import annotations
 
@@ -15,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from freshness import stamp_inputs
 from stages.s1_clean.census import read_header, resolve
 from stages.s1_clean.channel_trust import detect_and_normalize
 from stages.s1_clean.config import (
@@ -26,6 +23,7 @@ from stages.s1_clean.config import (
 )
 from stages.s1_clean.manifest import session_of
 from stages.s1_clean.resample import resample_file
+from stages.report import add_report_flag
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLEAN_DIR = REPO_ROOT / "data" / "clean"
@@ -108,8 +106,7 @@ def clean_one(path: Path
     if "Time" not in res.index_by_name:
         return None, [], "no Time column", None, {}
 
-    # index_col=False is load-bearing: a trailing comma otherwise shifts every column left by
-    # one with the count intact, so the rename below lands names on the wrong channels
+    # index_col=False is load-bearing: a trailing comma otherwise shifts every column left by one
     df = pd.read_csv(path, encoding="utf-8-sig", index_col=False)
     df = df.loc[:, [c for c in df.columns if not c.startswith("Unnamed")]]
     # assert the positions line up rather than let the rename raise a bare length error
@@ -127,10 +124,7 @@ def clean_one(path: Path
         return None, [], f"missing measured channels: {missing}", None, {}
     df = df[kept]
 
-    # Time base must define a forward cadence; a batch of 2026-05 files logs
-    # duplicated and backward-running timestamps (median dt <= 0)- non-monotonic
-    # time that np.interp would silently corrupt; reject the whole file rather than
-    # resample a broken clock; it lands in the quarantine ledger for a human
+    # reject a non-monotonic clock (median dt <= 0) rather than let np.interp silently corrupt it
     t = df["Time"].to_numpy(float)
     if t.size < 2 or float(np.median(np.diff(t))) <= 0.0:
         return (None, [],
@@ -142,14 +136,10 @@ def clean_one(path: Path
     if out.empty:
         return None, rows, "no usable segments", None, {}
 
-    # Gyro is now on the canonical grid (uniform dt, gap-free segments): resolve its
-    # unit + sagittal axis from the data and normalize every gyro channel to deg/s
+    # now on the canonical grid: resolve gyro unit + sagittal axis from the data, normalize to deg/s
     out, trust = detect_and_normalize(out)
 
-    # The trust record is the whole persisted product: `transform.load_trust` reads it back
-    # by this exact path, and treats its absence as "never cleaned" rather than as a default
-    # Built as one name, not via with_suffix: `transform.trust_path` spells it exactly this
-    # way, and a stem containing a dot must not resolve to two different files
+    # the whole persisted product; built as one name so a dotted stem cannot become two files
     dest = (CLEAN_DIR / session_of(path)["session_dir"] /
             f"{path.stem}.channel_trust.json")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -164,6 +154,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--raw", default="data/raw")
     ap.add_argument("--out", type=Path, default=S1_CLEAN_OUT_DIR)
+    add_report_flag(ap)
     args = ap.parse_args()
 
     raw_dir = (REPO_ROOT / args.raw).resolve()
@@ -280,7 +271,13 @@ def main() -> None:
     lines += [f"- `{r['path']}` seg {r['index']}: {r['reason']}" for r in dropped] or ["none"]
     lines += ["", "## Quarantined files (whole-file rejects -> quarantine.jsonl ledger)", ""]
     lines += [ln for q in quarantined for ln in quarantine_lines(q)] or ["none"]
-    (out_dir / "clean_report.md").write_text("\n".join(lines), encoding="utf-8")
+    if args.report:
+        (out_dir / "clean_report.md").write_text("\n".join(lines), encoding="utf-8")
+
+    # Empty by declaration, not by omission: the only upstream is the `data/raw` tree, which
+    # is thousands of files rather than an artifact to hash. Stamping says this was checked
+    # and has nothing to declare, which is what keeps it out of breakdown's unchecked list.
+    stamp_inputs(out_dir, {}, stage="s1_clean")
 
     print(f"[s1] {written} clean, {len(quarantined)} quarantined, "
           f"{len(usable)} usable segments, {len(dropped)} dropped -> {out_dir}")

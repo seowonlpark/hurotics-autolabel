@@ -1,5 +1,4 @@
-# the swap rule on the SERVE grid: a physics verdict for a file with no labels
-# same rule as label_audit points at the annotations, pointed at a raw recording
+# the swap rule on the SERVE grid: label_audit's rule, pointed at a raw recording with no labels
 
 from __future__ import annotations
 
@@ -9,9 +8,7 @@ from stages.s2_ml.dataset import FEATURES
 from stages.s2_ml.features import WindowSpec
 from stages.s3_physics.anchors import AMBIGUOUS, STANDING, WALKING, adaptive_verdict
 
-# row-level bands, applied to the swap count AVERAGED over the windows covering a row
-# the same arithmetic label.py already applies, so the serve path has one notion of
-# "the interleg signal crossed about once here", not two that round differently
+# row-level bands on the swap count AVERAGED over covering windows, the arithmetic label.py uses
 ROW_STANDING_MAX = 0.5
 ROW_WALKING_MIN = 1.5
 

@@ -250,7 +250,10 @@ it back into the rewrite. Dates are as they appeared in the originals.
 - Data layout: `data/raw/<YYYYMMDD[_n]>/*.csv` unlabeled device logs, **session date comes
   from the FOLDER**; `data/labeled/` golden data, never mixed into raw; `data/clean/<session>/*.parquet`
   S1 output, canonical 100 Hz, 30 measured columns + `segment`, gyro normalized to deg/s.
-- `data/`, `runs/` and `.env` are gitignored. **Nothing from HUROTICS leaves the machine via git.**
+- `data/` in its entirety, `.env` and `tracker/` are gitignored. `runs/` and `labeled_raw/`
+  are **split rather than ignored wholesale**: the regenerable artifacts stay out, the
+  measurements are versioned alongside the claims they support. **Nothing from HUROTICS
+  leaves the machine via git.**
 - **A `Label` column appearing under `data/raw/` is a contamination event, not a schema variant.**
 
 ### §5.2 — "What S1 actually does, and why" — the four decisions, verbatim
@@ -475,8 +478,9 @@ Current status is §5.9, not this table.)*
 > `needs_human`, grounded in `DOMAIN_NOTES` — and the deterministic wrapper writes
 > `exceptions_review.jsonl`. It is read-only: the agent judges, code does the work.
 >
-> Every run gets `runs/YYYY-MM-DD_runN/` containing `run_meta.json` (commit SHA — `runs/` is
-> gitignored, so each run records the commit that produced it), `costs.json` (per-agent spend
+> Every run gets `runs/YYYY-MM-DD_runN/` containing `run_meta.json` (commit SHA — much of
+> `runs/` is regenerated in place or unversioned, so an artifact that cannot name the commit
+> that produced it is unattributable), `costs.json` (per-agent spend
 > from the SDK's ResultMessage) and `system_prompt.txt` (exactly what the agent was told). A
 > `run_log.jsonl` appears alongside them via a PostToolUse hook — one line per tool call, so a
 > run whose agent used no tools writes none.

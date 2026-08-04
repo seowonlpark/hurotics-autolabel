@@ -1,6 +1,4 @@
-# file-level sanity bounds: is this file's OUTPUT defensible as a whole?
-#   python -m stages.s3_physics.plausibility [--calibrate|--control]
-# label_all refuses a file for INPUT reasons; this judges the output after the fact
+# file-level sanity bounds on the OUTPUT; python -m stages.s3_physics.plausibility
 
 from __future__ import annotations
 
@@ -11,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from freshness import stamp_inputs
 from stages.console import use_replacement_encoding
 from stages.s2_ml.dataset import FEATURES, LABEL_COL, STAND, WALK, load_dataset
 from stages.s2_ml.features import WindowSpec, rest_reference
@@ -18,33 +17,21 @@ from stages.s3_physics.serve import STANDING, WALKING, row_verdict, segment_verd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# ---------------------------------------------------------------------------
-# the bounds; each is a JUDGEMENT sited outside a measured range, not a tuned threshold
-# there is nothing to tune against: the faults caught are absent from the corpus
-# ---------------------------------------------------------------------------
+# ---- the bounds; each a JUDGEMENT sited outside a measured range, not a tuned threshold ----
 
-# The model commits to less than this share of the file; corpus minimum is 0.1487 over 78
-# real raw files; both synthetic destructive faults land at ~0.0065; this is the bound with
-# actual demonstrated catching power
+# the model commits to less than this share; corpus min 0.1487, synthetic faults land at ~0.0065
 COMMITMENT_MIN = 0.02
 
-# Physics finds leg alternation in at most this share of the file; every corpus trial
-# containing annotated walking sits at or above 0.4174, so this is ~20x clear of the
-# observed floor; set it higher and it starts firing on genuinely sedentary recordings,
-# which are normal data and not a fault
+# physics finds alternation in at most this share; every trial with annotated walking is >= 0.4174
 PHYSICS_SILENT_MAX = 0.02
 
-# ...while the model commits at least this much of the file to walking; both halves are
-# required: physics finding no alternation is unremarkable on its own (someone stood still),
-# and only the contradiction with a committed model is diagnostic
+# ...while the model commits at least this much to walking; only the contradiction is diagnostic
 MODEL_WALK_MIN = 0.20
 
-# The mirror; "Over half the file alternates"- the only non-arbitrary line available on a
-# fraction; the dead-sensor control lands at 0.9894
+# the mirror; "over half the file alternates" is the only non-arbitrary line on a fraction
 PHYSICS_LOUD_MIN = 0.50
 
-# ...while the model commits almost none of it to walking; not zero: a model calling 4% of
-# a walking recording `walk` is as broken as one calling none of it
+# ...while the model commits almost none to walking; not zero- 4% of a walking file is as broken
 MODEL_WALK_MAX = 0.05
 
 # Below this many covered rows the fractions above are too noisy to act on; 30 s at 100 Hz
@@ -94,10 +81,7 @@ def file_stats(scored: pd.DataFrame) -> dict:
         "coverage": round(n / len(scored), 4),
         "n_committed": int(committed.sum()),
         "committed_frac": round(float(committed.mean()), 4),
-        # Over COMMITTED rows: the question is what the model actually asserts about this
-        # file, and an abstention asserts nothing; scoring abstentions as "not walk" would
-        # make a high-threshold run look like a model contradicting the physics when it has
-        # merely declined to answer
+        # over COMMITTED rows: an abstention asserts nothing, and scoring it as "not walk" misleads
         "model_walk_frac": round(float((state[committed] == "walk").mean()), 4)
         if committed.any() else float("nan"),
         "physics_walk_frac": round(float((phys == WALKING).mean()), 4),
@@ -111,11 +95,7 @@ def check(scored: pd.DataFrame) -> list[dict]:
     s = file_stats(scored)
     out = []
 
-    # `rest_untrusted` is evaluated for every file, INCLUDING one too short for the
-    # fraction bounds; it is not a statistic and has no sample size to be too small: the
-    # recording either contained a rest span or it did not; suppressing it with the
-    # fraction bounds would lose the fact on exactly the short files where a fallback zero
-    # does the most damage- 300 rows carry no second chance to find rest
+    # evaluated for every file, even one too short for the fraction bounds: it has no sample size
     if not s.get("rest_trusted", True):
         out.append(_finding("rest_untrusted", "soft", s,
                             "interleg zero is a whole-recording median"))
@@ -170,15 +150,12 @@ def summarize(findings_by_file: dict[str, list[dict]], n_files: int = 0) -> list
                   ""]
     else:
         lines += [f"**{len({f for f, _ in hard})} file(s) tripped a hard bound.**", ""]
-        # The measured numbers differ per file, so they ride on each file's line; the bound
-        # and its remedy do not, so they are stated once above and below the list
+        # the measured numbers ride on each file's line; the bound and its remedy are stated once
         for code, group in _by_code(hard).items():
             lines += [f"### {code} — {len(group)} file(s)", "", BOUNDS[code][0], ""]
             lines += [f"- `{f}` — {x['detail']}" for f, x in group]
             lines += ["", f"**Remedy:** {BOUNDS[code][1]}", ""]
-    # named, not merely counted: a soft bound is one an operator can still act on
-    # grouped by code so a second soft bound cannot be swallowed by a sentence naming the first
-    # counted over DISTINCT files, since one file can trip several codes
+    # named not counted, grouped by code; over DISTINCT files, since one file can trip several
     for code, group in _by_code(soft).items():
         files = list(dict.fromkeys(f for f, _ in group))
         lines += [f"### {code} — {len(files)} file(s)", "", BOUNDS[code][0], ""]
@@ -195,9 +172,7 @@ def _by_code(flagged: list[tuple[str, dict]]) -> dict[str, list[tuple[str, dict]
     return out
 
 
-# ---------------------------------------------------------------------------
-# Calibration and controls: the numbers in this module's docstring, regenerated on demand
-# ---------------------------------------------------------------------------
+# ---- calibration and controls: the numbers in this module's header, regenerated on demand ----
 
 # per-trial physics walk fraction against the ANNOTATED walk fraction
 def corpus_calibration(spec: WindowSpec | None = None) -> pd.DataFrame:
@@ -241,10 +216,7 @@ def corpus_calibration(spec: WindowSpec | None = None) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("annotated_walk_frac").reset_index(drop=True)
 
 
-# The synthetic faults; injected rather than found, because a corpus of recordings that
-# were annotated by hand contains no miswired files by construction- someone would have
-# noticed before annotating; `None` is the unmodified control: if it ever trips a bound,
-# the bound is wrong, not the file
+# synthetic faults, injected because a hand-annotated corpus has none; `None` is the control
 CONTROLS = {
     "unmodified": None,
     "duplicated_leg": lambda f, L, R: f.__setitem__(R, f[L].to_numpy()),
@@ -341,6 +313,19 @@ def main() -> None:
 
     (out_dir / "plausibility.json").write_text(
         json.dumps(payload, indent=2, default=float), encoding="utf-8")
+
+    # The bounds themselves are model-free, so an empty stamp is the honest declaration -- but
+    # `--control` scores the fault injections through the FITTED champion, and a refit moves the
+    # "caught_by" column under this file. Stamp what was actually read, not what could have been.
+    # Imported here, not at module scope: label.py imports this module, so a top-level import
+    # would close the cycle.
+    from stages.s2_ml.label import DEFAULT_MODEL_DIR
+    # `stage=`, because runs/s3_physics holds rate_audit's and label_audit's outputs too -- an
+    # unnamed stamp there goes stale without saying which of the three stopped matching.
+    stamp_inputs(out_dir, {"champion": DEFAULT_MODEL_DIR / "champion.joblib",
+                           "model_meta": DEFAULT_MODEL_DIR / "model_meta.json"}
+                 if args.control else {}, stage="plausibility")
+
     print(f"[plaus] -> {out_dir / 'plausibility.json'}")
 
 

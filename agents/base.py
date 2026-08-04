@@ -1,5 +1,4 @@
-# shared agent machinery: prompt assembly, audit logging, cost tracking
-# all agent calls go through here; NOTHING ELSE talks to sdk directly
+# shared agent machinery (prompts, audit log, cost); all sdk calls go through here, nothing else
 
 from __future__ import annotations
 

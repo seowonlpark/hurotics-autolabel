@@ -56,8 +56,7 @@ RAD2DEG = 57.29577951308232
 CANONICAL_GYRO_UNIT = "deg/s"  # angles are degrees, so slope~1
 UNIT_TO_DEGPS_SCALE = {"deg/s": 1.0, "rad/s": RAD2DEG}
 
-# fixed device permutation, Y<->Z; NOT sagittality- that's per hardware rev
-# and lives in transform.SAGITTAL_DEG_AXIS_BY_VARIANT; keep the two apart
+# fixed device permutation, Y<->Z; NOT sagittality- that is transform.SAGITTAL_DEG_AXIS_BY_VARIANT
 DOCUMENTED_GYRO_PERMUTATION = {"X": "X", "Y": "Z", "Z": "Y"}
 
 # below this the axis is too static to fit; applied per deg axis, not per side

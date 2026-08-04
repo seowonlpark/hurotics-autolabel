@@ -1,6 +1,4 @@
-# label a CSV: per-row state, confidence, and where it is low, WHY
-# THE deliverable; takes either family, refuses rather than guesses
-# rows in, rows out; Label is the committed call, guess is the opinion behind it
+# label a CSV: per-row state, confidence, and WHY it is low; Label commits, guess is the opinion
 
 from __future__ import annotations
 
@@ -18,6 +16,7 @@ from stages.s1_clean.config import CANONICAL_HZ, FAMILY_MARKERS, LABEL_UNKNOWN_M
 from stages.s1_clean.resample import resample_file
 from stages.s1_clean.validate import health
 from stages.s2_ml.dataset import (
+    CLASS_NAME,
     FEATURES,
     HUMAN_UNKNOWN,
     LABEL_COL,
@@ -26,10 +25,7 @@ from stages.s2_ml.dataset import (
     WALK,
 )
 from stages.s2_ml.features import WindowSpec, feature_names, rest_reference, segment_features
-# S3 imports S2, never the reverse- except here, and it is a leaf import of the swap rule
-# only (`s3_physics.serve` -> `anchors` -> `s2_ml.{dataset,features,rest}`), so it closes no
-# cycle; the alternative was a second copy of the rule on the serve side, which is the
-# skew this repo refuses everywhere else
+# S3 imports S2, never the reverse- except this leaf import of the swap rule, which closes no cycle
 from stages.s3_physics.plausibility import check as plausibility_check
 from stages.s3_physics.serve import STANDING, WALKING, row_verdict, segment_verdicts
 from stages.s2_ml.transform import (
@@ -46,35 +42,21 @@ DEFAULT_MODEL_DIR = REPO_ROOT / "runs" / "s2_ml"
 
 RAW_DEVICE, LPF_VIEW = "raw_device", "lpf_view"
 
-# Every way the raw path can decline a file; caught as a group at the CLI boundary so a
-# refusal prints its reason instead of a traceback- an operator holding an unservable
-# recording needs to read WHY, and each of these messages says so and names the remedy
+# every way the raw path declines a file; caught as a group so a refusal prints WHY, not a traceback
 SERVE_REFUSALS = (UnknownVariantError, AxisConflictError, GyroUnitError,
                   DegenerateClockError, NotRawDeviceError, FileNotFoundError)
 
-CLASS_NAME = {STAND: "stand", WALK: "walk"}
-
-# ---------------------------------------------------------------------------
-# physics floor and ceiling, both DEFAULT OFF
-# not independent of S2: same 1 Hz interleg angle, so they are wrong together
-# every number in OPERATING_POINTS assumes these are False
+# ---- physics floor and ceiling, both DEFAULT OFF; every OPERATING_POINTS number assumes that ----
 PHYSICS_CEILING = False
 PHYSICS_FLOOR = False
 
-# The reduced bar a row must clear when the swap rule independently agrees with the model
-# Only read when `PHYSICS_FLOOR` is True; not tuned- it is the `balanced` preset's own
-# threshold, so the floor's claim is precisely "an agreeing physics verdict is worth the
-# difference between the strict operating point and the balanced one", which is a statement
-# a reader can evaluate rather than a number pulled from a sweep
+# the reduced bar when the swap rule agrees; not tuned- it is the `balanced` preset's own threshold
 PHYSICS_FLOOR_THRESHOLD = 0.70
 
-# abstain on the whole annotation-ambiguity band, whatever the model says
-# OFF: measured, and dominated by simply raising the threshold (OPERATING_POINTS)
-# kept switchable because the case against it is a measurement, not a proof
+# abstain on the whole ambiguity band; OFF, since raising the threshold dominates it (measured)
 BAND_ABSTAINS = False
 
-# Reasons a row is ambiguous, most specific first; ordered, so a row near a boundary is
-# reported as a boundary rather than as whatever else also happens to be true there
+# reasons a row is ambiguous, most specific first, so a boundary is reported as a boundary
 REASONS = {
     "uncovered": (
         "no full window covers this row (segment shorter than the window, or a gap)",
@@ -109,9 +91,7 @@ REASONS = {
 }
 
 
-# (model, meta); both required- meta carries the window spec it was fitted at and the
-# reference stats the reasons are stated against, so loading one alone starts train/serve
-# skew; cached because a corpus sweep unpickling 400 trees per file dominates its runtime
+# (model, meta); both required- meta carries the window spec and reference stats, so one alone skews
 @lru_cache(maxsize=4)
 def load_champion(model_dir: Path):
     import joblib
@@ -123,9 +103,7 @@ def load_champion(model_dir: Path):
 
 # read an lpf_view CSV, resolving the required columns BY NAME, never by position
 def read_input(path: Path) -> pd.DataFrame:
-    # index_col=False: resolving BY NAME does not protect against a trailing comma; pandas
-    # promotes column 0 to the index and the names stay put, so `Time` would hold the next
-    # column's data under the right label
+    # index_col=False: resolving BY NAME does not protect against a trailing comma shifting the data
     df = pd.read_csv(path, encoding="utf-8-sig", index_col=False)
     df.columns = [c.strip() for c in df.columns]
     missing = [c for c in (TIME_COL, *FEATURES) if c not in df.columns]
@@ -137,10 +115,7 @@ def read_input(path: Path) -> pd.DataFrame:
     return df
 
 
-# (the caller's own rows, the lpf_view frame to score, provenance)
-# dispatch is on FAMILY through the same census S1 uses, never on "does this file happen to
-# have the columns I want"- duck-typing would misroute a half-written file instead of
-# rejecting it; a raw log goes through the bridge, where every provenance guard fires
+# (caller's rows, the frame to score, provenance); dispatch is on FAMILY, never on duck-typed columns
 def read_source(path: Path) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     family = family_of([strip_prefix(c) for c in read_header(path)])
 
@@ -164,8 +139,7 @@ def read_source(path: Path) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     )
 
 
-# (sum, count) per row over every window covering it, by difference array; o(windows+rows)
-# not O(windows*length), which is what makes a 0.25 s stride over million-row files afford
+# (sum, count) per row over every covering window, by difference array: O(windows+rows), not product
 def _accumulate(values: np.ndarray, starts: np.ndarray, n: int, n_rows: int
                 ) -> tuple[np.ndarray, np.ndarray]:
     acc = np.zeros(n_rows + 1)
@@ -177,9 +151,7 @@ def _accumulate(values: np.ndarray, starts: np.ndarray, n: int, n_rows: int
     return np.cumsum(acc)[:n_rows], np.cumsum(cnt)[:n_rows]
 
 
-# per-row P(walk) on the canonical grid; a row's probability is the MEAN over every window
-# containing it, which is what makes a boundary abstain on its own- straddling windows pull
-# apart and the mean lands mid-scale; no boundary rule, no smoothing constant to tune
+# per-row P(walk) as the MEAN over covering windows, which makes a boundary abstain on its own
 def score_frame(model, meta: dict, frame: pd.DataFrame) -> pd.DataFrame:
     spec = WindowSpec(window_s=meta["window_s"],
                       stride_s=meta.get("inference_stride_s", 0.25),
@@ -215,10 +187,7 @@ def score_frame(model, meta: dict, frame: pd.DataFrame) -> pd.DataFrame:
                 post = np.minimum(X[:, names.index("L_ang_med_rest")],
                                   X[:, names.index("R_ang_med_rest")])
 
-                # S3's verdict on the same windows; computed ALWAYS, not only when a gate
-                # consumes it- plausibility has to be able to say the physics saw nothing
-                # `starts` is asserted equal, not assumed: if the two grids fell out of
-                # step every physics number would land on the wrong rows, undetectably
+                # S3's verdict on the same windows, ALWAYS; `starts` is asserted equal, not assumed
                 sw_ad, span_ad, starts_p = segment_verdicts(chan, spec, ileg_zero)
                 if not np.array_equal(starts_p, starts):
                     raise AssertionError(
@@ -241,8 +210,7 @@ def score_frame(model, meta: dict, frame: pd.DataFrame) -> pd.DataFrame:
 
     scored = pd.concat(out, ignore_index=True)
     scored["rest_trusted"] = rest_trusted
-    # The categorical form, derived once here so every consumer reads the same bands off
-    # the same averaged count (`s3_physics.serve.row_verdict`)
+    # the categorical form, derived once so every consumer reads the same bands off the same count
     scored["physics"] = row_verdict(scored["physics_swaps"].to_numpy(float))
     return scored
 
@@ -258,12 +226,7 @@ def explain(scored: pd.DataFrame, meta: dict, threshold: float,
     guess[~covered] = np.nan
     conf = np.where(covered, np.maximum(p, 1.0 - p), np.nan)
 
-    # The physics floor and ceiling, expressed as a per-row EFFECTIVE THRESHOLD rather
-    # than as two separate overrides; one vector, so a row can never be gated twice in
-    # opposite directions and the whole policy reads as one sentence: how much confidence
-    # this row is required to clear, given what the swap rule says about it
-    #
-    # Both default OFF; see the constants for the measurement that keeps them off
+    # floor and ceiling as one per-row EFFECTIVE THRESHOLD, so a row can never be gated both ways
     phys = scored["physics"].to_numpy(object)
     phys_class = np.where(phys == WALKING, float(WALK),
                           np.where(phys == STANDING, float(STAND), np.nan))
@@ -277,15 +240,10 @@ def explain(scored: pd.DataFrame, meta: dict, threshold: float,
     if PHYSICS_CEILING:
         eff[contradicts] = np.inf  # nothing clears it: a contradiction abstains outright
     ambiguous = ~covered | (conf < eff)
-    # Carried as its own column for the same reason `in_band` is: the ceiling abstains at
-    # EVERY threshold, so anything sweeping the threshold (`roweval.curve`) has to account
-    # for it explicitly or publish a coverage this module does not deliver
+    # its own column, like `in_band`: the ceiling abstains at EVERY threshold, so a sweep subtracts it
     gated = PHYSICS_CEILING & contradicts
 
-    # the annotation-ambiguity band; ileg_minhalf is the mean over the covering windows,
-    # the same averaging the probability gets, so the test sees the row's own evidence
-    # the probability is deliberately NOT consulted: an unusable row does not become
-    # usable because the model feels strongly, and ExtraTrees returns exactly 1.0 often
+    # the ambiguity band, averaged as the probability is; the probability itself is NOT consulted
     band = (float(ref["band_lo"]), float(ref["band_hi"])) if "band_lo" in ref else None
     in_band = np.zeros(len(scored), dtype=bool)
     if band is not None and BAND_ABSTAINS:
@@ -294,9 +252,7 @@ def explain(scored: pd.DataFrame, meta: dict, threshold: float,
             in_band = covered & (mh_all >= band[0]) & (mh_all <= band[1])
         ambiguous = ambiguous | in_band
 
-    # a predicted state change within one window of this row
-    # a class difference ACROSS a segment boundary counts, deliberately: neither side has
-    # a full window of measured context, so softening both is the conservative call
+    # a predicted state change within one window; ACROSS a segment boundary counts, deliberately
     g = pd.Series(guess).ffill().bfill().to_numpy()
     change = np.zeros(len(g), dtype=bool)
     if len(g) > 1:
@@ -322,19 +278,11 @@ def explain(scored: pd.DataFrame, meta: dict, threshold: float,
     mark(posture > ref["posture_shift_p99"], "posture_shift")
     mark(np.nan_to_num(oob, nan=0.0) >= 3, "out_of_distribution")
     mark(change, "near_transition")
-    # After `near_transition` on purpose: at a state change the two opinions disagree by
-    # construction- the model's probability is mid-scale because its windows straddle the
-    # boundary, and the swap rule is reading a span that contains both states; attributing
-    # that to a physics contradiction would name the boundary as a conflict of evidence
-    # Before `weight_shift_or_step`, which is the swap rule's own ABSTENTION; this is its
-    # decisive-and-opposed verdict, and the stronger claim goes first
+    # after `near_transition`, where the two disagree by construction; before the swap rule's abstention
     mark(gated, "physics_contradicts")
     mark((swaps >= 0.5) & (swaps < 1.5), "weight_shift_or_step")
     mark((guess == WALK) & (mh < ref["walk_minhalf_p05"]), "low_excursion_gait")
-    # After the diagnostic reasons, before the catch-all; `low_excursion_gait` overlaps the
-    # bottom of the band heavily (`walk_minhalf_p05` sits just above `band_lo`), and it is
-    # the more specific claim- it names what the row probably is; the band names why the
-    # question has no answer, so it takes the rows nothing sharper explained
+    # after the diagnostic reasons: the band takes the rows nothing sharper explained
     mark(in_band, "amplitude_ambiguous")
     mark(np.ones(len(scored), dtype=bool), "model_split")
 
@@ -344,17 +292,13 @@ def explain(scored: pd.DataFrame, meta: dict, threshold: float,
     scored["label"] = np.where(covered, guess, np.nan)
     scored["confidence"] = np.round(conf, 4)
     scored["ambiguous"] = ambiguous
-    # Carried as its own column, not left implicit in `reason`: the band abstains at EVERY
-    # threshold, so anything sweeping the threshold (`roweval.curve`) has to subtract it
-    # explicitly or it will publish a coverage this module does not deliver; `reason` cannot
-    # serve that purpose- a row can be in the band and be attributed to a sharper reason
+    # its own column, not implicit in `reason`: a banded row can still be attributed to a sharper one
     scored["in_band"] = in_band
     scored["physics_gated"] = gated
     scored["reason"] = reason
     scored["reason_detail"] = [REASONS[r][0] if r else "" for r in reason]
     scored["alternative"] = [REASONS[r][1] if r else "" for r in reason]
-    # A recording that never rests has a fallback interleg zero, so every interleg feature
-    # on it is weaker evidence; said once, on every row, rather than silently
+    # a recording that never rests has a fallback zero, so every interleg feature is weaker evidence
     if not bool(scored["rest_trusted"].iloc[0]):
         scored["reason_detail"] = scored["reason_detail"].astype(str) + (
             " | recording never rests: interleg zero is a fallback median, not a measured "
@@ -362,8 +306,7 @@ def explain(scored: pd.DataFrame, meta: dict, threshold: float,
     return scored
 
 
-# (INPUT rows + label columns, provenance); provenance travels with the frame rather than
-# being printed and forgotten- that hole is what let the wrong sagittal axis ship
+# (INPUT rows + label columns, provenance); provenance travels with the frame, never just printed
 def label_csv(path: Path, model_dir: Path, threshold: float) -> tuple[pd.DataFrame, dict]:
     model, meta = load_champion(model_dir)
     spec = WindowSpec(window_s=meta["window_s"],
@@ -371,15 +314,12 @@ def label_csv(path: Path, model_dir: Path, threshold: float) -> tuple[pd.DataFra
                       fs_hz=meta.get("fs_hz", CANONICAL_HZ))
     raw, view, provenance = read_source(path)
 
-    # Same normalization the model was trained under: segment at gaps, then the canonical
-    # grid; anything else is train/serve skew
+    # the same normalization the model was trained under; anything else is train/serve skew
     frame, _segments = resample_file(view, TIME_COL)
     if frame.empty:
         raise SystemExit(f"{path.name}: no usable segment survived resampling")
 
-    # S1's label-free gate, in front of the model rather than beside it; a dead channel or
-    # a file with nothing scorable would otherwise produce confident numbers built on
-    # nothing, which is worse than refusing
+    # S1's label-free gate, in FRONT of the model: a dead channel would otherwise score confidently
     h = health(frame, window_s=spec.window_s, fs_hz=spec.fs_hz)
     for w in h.warnings:
         print(f"[label] warning: {w}")
@@ -389,12 +329,7 @@ def label_csv(path: Path, model_dir: Path, threshold: float) -> tuple[pd.DataFra
 
     scored = explain(score_frame(model, meta, frame), meta, threshold, spec)
 
-    # File-level sanity bounds, recorded in the provenance for the same reason the axis
-    # resolution is: a doubt that is printed and forgotten is a doubt nobody can act on
-    # later; computed on `scored`- the canonical grid- rather than on the returned frame,
-    # because the fractions have to be taken over the rows that were actually scored, not
-    # over the caller's rows after the nearest-time mapping has duplicated some and dropped
-    # others; it REPORTS: no file is refused for tripping a bound
+    # file-level bounds over `scored`, the rows actually scored; it REPORTS, refusing nothing
     provenance["plausibility"] = plausibility_check(scored)
 
     # Map the grid back onto the caller's own rows by nearest time
@@ -416,18 +351,12 @@ def label_csv(path: Path, model_dir: Path, threshold: float) -> tuple[pd.DataFra
     picked.loc[gap, "reason_detail"] = REASONS["uncovered"][0]
     picked.loc[gap, "alternative"] = REASONS["uncovered"][1]
 
-    # The integer-coded guess, so the full frame carries it under the same name and the
-    # same vocabulary the emitted shapes use; derived here rather than in `verdict_frame`
-    # alone, so there is one definition of "what did the model think" and every output
-    # option inherits it instead of recomputing it
+    # the integer-coded guess, derived here so every output shape inherits one definition of it
     picked.insert(picked.columns.get_loc("label") + 1, GUESS_COL,
                   np.where(pd.to_numeric(picked["label"], errors="coerce").isna(),
                            LABEL_UNKNOWN_MACHINE, picked["label"]).astype(int))
 
-    # On the raw path the four derived channels are the model's actual input and appear
-    # nowhere in the caller's file, so they ride along; without them the output states a
-    # verdict over columns nobody can see, and the sagittal-axis bug would have been
-    # invisible in the deliverable as well as in the code
+    # on the raw path the derived channels ride along, or the verdict is over columns nobody can see
     parts = [raw.reset_index(drop=True)]
     if provenance["derived"]:
         parts.append(view[list(FEATURES)].reset_index(drop=True))
@@ -435,31 +364,21 @@ def label_csv(path: Path, model_dir: Path, threshold: float) -> tuple[pd.DataFra
     return pd.concat(parts, axis=1), provenance
 
 
-# the golden corpus's own shape: every annotated csv is exactly these six, in this order
-# so a file this pipeline labels reads by anything that already reads an annotated one
-# the shape is shared by all eight revisions, so it is not named after any one of them
+# the golden corpus's shape- these six, in order, so a labelled file reads like an annotated one
 GOLDEN_COLUMNS = (TIME_COL, *FEATURES, LABEL_COL)
 
-# the model's call on every row it scored, committed or not; Label overwrites the
-# ambiguous ones with -1, which answers a different question
+# the model's call on every scored row; Label overwrites the ambiguous ones with -1
 GUESS_COL = "guess"
 
-# Appended after those by default; `Label` alone can say a row was not called; only these
-# say how sure the call was and what the doubt was about, and an abstention whose reason
-# is unreadable is most of the deliverable thrown away; they go AFTER
-# the six so the golden prefix is positionally intact for a reader that expects it
+# appended AFTER the six, so the golden prefix stays positionally intact for a reader expecting it
 VERDICT_COLUMNS = ("confidence", "ambiguous", "reason")
 
 
-# the annotated corpus's six columns, then the verdict; strict=True drops the verdict
-# -1 means scored but under threshold, 255 means nothing covered the row- different facts
-# Label is built from OUR label column, never from an input Label that rode along
+# the six, then the verdict; -1 is scored-but-unsure, 255 is uncovered- different facts
 def verdict_frame(out: pd.DataFrame, *, strict: bool = False) -> pd.DataFrame:
     lab = pd.to_numeric(out["label"], errors="coerce").to_numpy(float)
     amb = out["ambiguous"].fillna(True).astype(bool).to_numpy()
-    # `lab` is already the guess wherever the row was scored- `explain` nulls it only
-    # where nothing covered the row, never for being unsure- so `Label` is `guess` with
-    # one extra step, and taking that step is the whole difference between them
+    # `lab` is already the guess wherever the row was scored; `Label` is that plus the one extra step
     code = np.where(np.isnan(lab), LABEL_UNKNOWN_MACHINE, np.where(amb, HUMAN_UNKNOWN, lab))
     frame = pd.DataFrame({
         TIME_COL: out[TIME_COL].to_numpy(float),
@@ -471,7 +390,6 @@ def verdict_frame(out: pd.DataFrame, *, strict: bool = False) -> pd.DataFrame:
         frame["confidence"] = pd.to_numeric(out["confidence"], errors="coerce").to_numpy(float)
         frame["ambiguous"] = amb
         # "" on a confident row, so the column reads as "the doubt, where there was any"
-        # rather than carrying a filler token every reader has to learn to ignore
         frame["reason"] = out["reason"].fillna("").astype(str).to_numpy()
     return frame
 
@@ -543,9 +461,7 @@ def main() -> None:
     try:
         out, provenance = label_csv(args.csv, args.model_dir, threshold)
     except SERVE_REFUSALS as exc:
-        # An abstention, not a crash; the file is unservable for a stated reason and the
-        # right outcome is no output at all- a labelled file the pipeline cannot defend
-        # is worse than none, because a controller would act on it
+        # an abstention, not a crash: a labelled file the pipeline cannot defend is worse than none
         raise SystemExit(f"{args.csv.name}: ABSTAINED — {type(exc).__name__}\n  {exc}")
 
     print(describe_source(provenance))

@@ -1,7 +1,4 @@
-# end-to-end guard: does a device log label like its lpf_view export?
-#   python -m stages.s2_ml.verify_serve
-# verify_transform checks the MATH; this checks the thing a caller actually runs
-# drops Label before comparing, so it proves equivalence and never correctness
+# does a device log label like its lpf_view export? python -m stages.s2_ml.verify_serve
 
 from __future__ import annotations
 
@@ -20,15 +17,10 @@ from stages.s2_ml.verify_transform import find_pairs, index_raw_files
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = REPO_ROOT / "data" / "raw"
 
-# The columns that ARE the deliverable; `confidence` is compared numerically, the rest
-# exactly- a reason that changes is a different explanation for the same row, which is a
-# regression even when the state survives
+# the columns that ARE the deliverable; a changed reason is a regression even if the state survives
 VERDICT_COLS = ("state", "ambiguous", "reason", "alternative", "n_windows")
 
-# The two routes differ only by float roundoff in the fourth feature column, so the
-# ensemble should land on identical probabilities; a tree split sitting exactly between two
-# values that differ at 1e-13 could in principle flip one window; this bound says such a
-# flip is not what we are seeing, rather than tolerating it in advance
+# the routes differ only by float roundoff, so identical probabilities are expected, not tolerated
 CONFIDENCE_TOLERANCE = 1e-9
 
 
@@ -77,7 +69,9 @@ def compare_pair(ann_path: Path, raw_path: Path, model_dir: Path,
 
 
 # attempt the bridge on every raw file; records the outcome, never raises
-def sweep(raw_dir: Path, model_dir: Path) -> list[dict]:
+# no model here on purpose: this measures whether the BRIDGE can read a file, which is a
+# question about the file's own axis/clock/unit records and never about what scores it
+def sweep(raw_dir: Path) -> list[dict]:
     rows = []
     for p in sorted(raw_dir.rglob("*.csv")):
         rel = str(p.relative_to(REPO_ROOT))
@@ -170,7 +164,7 @@ def main() -> None:
 
     if not args.skip_sweep:
         print()
-        print(render_sweep(sweep(RAW_DIR, args.model_dir)))
+        print(render_sweep(sweep(RAW_DIR)))
 
     sys.exit(1 if failed else 0)
 

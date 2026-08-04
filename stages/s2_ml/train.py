@@ -1,8 +1,4 @@
-# S2 train: fit the champion, score it honestly, write the artifacts
-#   python -m stages.s2_ml.train
-# the lockbox is never touched, and training ASSERTS it
-# validation is leave-one-rev-out; random k-fold would split a subject across folds
-# ExtraTrees over RandomForest: same accuracy at 0.85 over far more coverage
+# S2 train: fit the champion, score it leave-one-rev-out, write the artifacts; lockbox untouched
 
 from __future__ import annotations
 
@@ -24,15 +20,11 @@ from stages.s2_ml.features import (
     feature_columns,
 )
 from stages.s2_ml.locoeval import evaluate, render, save, selective_curve
+from stages.report import add_report_flag
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# The champion, DECLARED; `runs/` is gitignored, so before this file existed the only
-# statement of what the champion is was whatever this module happened to fit- readable by
-# running it, not by reading anything; a stale `runs/s2_ml/champion.json` inherited from the
-# sibling repo described an 18-feature RandomForest that this code has never built, and
-# nothing could contradict it; the spec is git-tracked so the claim travels with the code,
-# and `assert_matches_spec` makes the two disagree loudly instead of silently
+# the champion, DECLARED and git-tracked, so the claim travels with the code instead of with runs/
 CHAMPION_SPEC_PATH = Path(__file__).resolve().parent / "champion_spec.json"
 
 
@@ -40,31 +32,23 @@ def load_spec(path: Path = CHAMPION_SPEC_PATH) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-# READ from the spec, not restated here: a promoted challenger rewrites the spec, so a
-# second copy in code would trip assert_matches_spec on every promotion
-# the estimator class, window grid and feature count are still built here and still checked
+# READ from the spec, not restated: a promotion rewrites it, and a second copy would trip the assert
 MODEL_PARAMS = load_spec()["params"]
 
-# Inference slides the same window at a fraction of its length, so a row's probability is
-# an average over several overlapping views; training stays non-overlapping
+# inference slides the window, so a row averages several overlapping views; training does not
 DEFAULT_INFERENCE_STRIDE_S = 0.25
 
-# Named operating points; OPERATING_POINTS.md carries the measured tradeoff behind each
-# `balanced` is the default because it is the lowest threshold at which every held-out
-# subject independently clears 95% accuracy on the rows it commits to
+# named operating points; `balanced` is the lowest threshold where every held-out subject clears 95%
 PRESETS = {"high_coverage": 0.70, "balanced": 0.85, "high_precision": 0.95}
 DEFAULT_PRESET = "balanced"
 
 
-# the champion estimator, or a challenger's variant; the CLASS is not a parameter- a
-# proposal may retune the champion, not replace it with a different model
+# the champion estimator; the CLASS is not a parameter- a proposal may retune, not replace
 def build_model(params: dict | None = None) -> ExtraTreesClassifier:
     return ExtraTreesClassifier(**(params or MODEL_PARAMS))
 
 
-# the feature set minus `drop`, refusing to drop a name that is not there; an unknown name
-# is a hard error, because a typo would leave the full set trained and recorded as the
-# ablation it is not, and that ablation would look like it changed nothing
+# the feature set minus `drop`; an unknown name is fatal- a typo would record a no-op as an ablation
 def select_features(all_feats: list[str], drop: list[str]) -> list[str]:
     if (unknown := [f for f in drop if f not in all_feats]):
         raise SystemExit(
@@ -74,9 +58,7 @@ def select_features(all_feats: list[str], drop: list[str]) -> list[str]:
     return [f for f in all_feats if f not in drop]
 
 
-# refuse to fit a champion the spec does not describe; a DECLARATION check, not a quality
-# gate- a drifted champion cannot be produced quietly and quoted from a normal-looking report
-# the feature COUNT is checked, not the names: names derive from the corpus
+# refuse to fit a champion the spec does not describe; a DECLARATION check, not a quality gate
 def assert_matches_spec(spec: dict, model, window: WindowSpec, feats: list[str],
                         dropped: list[str]) -> None:
     got = {
@@ -92,10 +74,7 @@ def assert_matches_spec(spec: dict, model, window: WindowSpec, feats: list[str],
         bad.append(f"  drop_features: spec drops {sorted(spec['drop_features'])}, "
                    f"this run dropped {sorted(dropped)}")
     if bad:
-        # ASCII only: this message goes to a cp949 console as an uncaught SystemExit, and an
-        # em-dash there raises UnicodeEncodeError- replacing a clear refusal with a
-        # traceback about encoding; same reason the .md files keep their typography and the
-        # console does not
+        # ASCII only: an em-dash on a cp949 console turns a clear refusal into a UnicodeEncodeError
         raise SystemExit(
             f"[s2] champion drift - {CHAMPION_SPEC_PATH.name} does not describe this code:\n"
             + "\n".join(bad)
@@ -104,18 +83,13 @@ def assert_matches_spec(spec: dict, model, window: WindowSpec, feats: list[str],
         )
 
 
-# label-pure windows of one split, selected POSITIVELY on the trained classes; excluding
-# TRANSITION and None by name instead lets a third label state through silently, which is
-# how 84 all-unknown windows reached to_numpy(int) and crashed it- a loud failure that
-# would have been quiet contamination had the codes been numeric
+# label-pure windows of one split, selected POSITIVELY: excluding by name lets a third state through
 def trainable(df: pd.DataFrame, split: str = "train") -> pd.DataFrame:
     return df[(df["split"] == split)
               & df["label"].isin(TRAIN_CLASSES)].reset_index(drop=True)
 
 
-# leave-one-rev-out OOF P(walk); every window scored by a model blind to its rev
-# experiment.py scores challengers through THIS function, not a copy- the promotion gate
-# only means anything if both sides came from the same folds, threshold and code
+# leave-one-rev-out OOF P(walk); challengers score through THIS function so the gate compares like
 def cross_validate(df: pd.DataFrame, feats: list[str],
                    params: dict | None = None) -> np.ndarray:
     X = df[feats].to_numpy(float)
@@ -128,27 +102,18 @@ def cross_validate(df: pd.DataFrame, feats: list[str],
     return oof
 
 
-# the constants the ambiguity reasons are stated against, measured on training windows only
-# label.py reads these instead of hard-coding thresholds, so explanations move with the data
+# the constants the ambiguity reasons are stated against; label.py reads them instead of hard-coding
 def reference_stats(df: pd.DataFrame, feats: list[str]) -> dict:
     walk = df[df["label"] == WALK]
     stand = df[df["label"] == STAND]
-    # How far BOTH thighs sit above this recording's own standing posture; upright standing
-    # and level walking both keep it near zero; the standing class carries a long tail that
-    # walking does not, and those windows concentrate in the trials whose `stand` runs cover
-    # sitting and transfers; it is therefore a posture signature for a state outside this
-    # two-class taxonomy, not a stand-vs-walk discriminator
+    # how far BOTH thighs sit above this recording's own standing posture- a signature for sitting
     posture = np.minimum(df["L_ang_med_rest"], df["R_ang_med_rest"])
     band_lo, band_hi = amplitude_band(df["ileg_minhalf"], df["label"])
     return {
-        # A window predicted walk whose interleg excursion sits below where real walking
-        # lives is either very slow gait or standing sway; either way, worth flagging
+        # a walk prediction below where real walking lives is slow gait or sway; either is worth a flag
         "walk_minhalf_p05": float(np.percentile(walk["ileg_minhalf"], 5)),
         "posture_shift_p99": float(np.percentile(posture, 99)),
-        # The ambiguity band, recorded here so `label.py` reads it off the champion rather
-        # than recomputing it at serve time; ONE definition, in `features.amplitude_band`
-        #- a second copy would drift, and a band the serve path derived for itself is
-        # train/serve skew in the one place the model is allowed to refuse an answer
+        # the ambiguity band, so `label.py` reads it off the champion rather than recomputing at serve
         "band_lo": band_lo,
         "band_hi": band_hi,
         # Per-feature training range, for the out-of-distribution check
@@ -160,6 +125,7 @@ def reference_stats(df: pd.DataFrame, feats: list[str]) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="runs/s2_ml")
+    add_report_flag(ap)
     ap.add_argument("--window-s", type=float, default=None)
     ap.add_argument("--drop", nargs="+", metavar="FEATURE", default=None,
                     help="ablation: train without these features instead of the spec's "
@@ -185,11 +151,9 @@ def main() -> None:
     print(f"[s2] window={spec.window_s}s  train windows={len(train_df):,}  "
           f"features={len(feats)}  revs={len(revs)} {revs}")
 
-    # `--window-s` and `--drop` are experiments, not champion refits, so the declaration
-    # cannot hold- say so rather than either failing a legitimate sweep or letting it pass
-    # unremarked; the artifacts still land, which is the point: an ablation is only worth
-    # anything if its locoeval can be read next to the champion's
-    if args.window_s or args.drop is not None:
+    # `--window-s` and `--drop` are experiments, not refits, so say the declaration cannot hold
+    is_experiment = bool(args.window_s or args.drop is not None)
+    if is_experiment:
         why = []
         if args.window_s:
             why.append(f"--window-s {args.window_s} over spec {champion['window_s']}")
@@ -225,12 +189,13 @@ def main() -> None:
     importances = sorted(zip(feats, model.feature_importances_), key=lambda x: -x[1])
 
     save(result, out_dir / "locoeval.json", curve=curve)
-    (out_dir / "locoeval.md").write_text(
-        render(result, curve, title="S2 champion - leave-one-rev-out CV")
-        + "\n\n## Feature importance (top 12)\n\n"
-        + "\n".join(f"- `{n}`: {v:.4f}" for n, v in importances[:12]) + "\n",
-        encoding="utf-8",
-    )
+    if args.report:
+        (out_dir / "locoeval.md").write_text(
+            render(result, curve, title="S2 champion - leave-one-rev-out CV")
+            + "\n\n## Feature importance (top 12)\n\n"
+            + "\n".join(f"- `{n}`: {v:.4f}" for n, v in importances[:12]) + "\n",
+            encoding="utf-8",
+        )
     (out_dir / "model_meta.json").write_text(json.dumps({
         "champion_spec": champion["name"],
         "dropped_features": sorted(dropped),
@@ -239,10 +204,7 @@ def main() -> None:
         "window_s": spec.window_s, "stride_s": spec.stride_s, "fs_hz": spec.fs_hz,
         "inference_stride_s": DEFAULT_INFERENCE_STRIDE_S,
         "features": feats,
-        # Also here, not only in locoeval.md's top-12 list: the ablation rationale in
-        # `champion_spec.json` argues from importance RANKS, and a reader who wants to
-        # re-check that argument had to re-fit the model to see rank 39; every feature,
-        # machine-readable, next to the feature list it orders
+        # every feature, not locoeval.md's top 12: the spec's ablation argues from ranks that deep
         "feature_importance": [[n, float(v)] for n, v in importances],
         "train_revs": revs,
         "n_train_windows": int(len(train_df)),
@@ -253,18 +215,24 @@ def main() -> None:
         "reference_stats": reference_stats(train_df, feats),
     }, indent=2), encoding="utf-8")
 
-    try:
-        import joblib
-        joblib.dump(model, out_dir / "champion.joblib")
-    except Exception as exc:  # metrics are the deliverable; the artifact is convenience
-        print(f"[s2] WARNING: could not persist model ({exc})")
+    # only a refit persists the estimator, because only a refit has a reader; rerun to get one back
+    if is_experiment:
+        print("[s2] experiment: writing metrics only, no champion.joblib (nothing loads it)")
+    else:
+        try:
+            import joblib
+            joblib.dump(model, out_dir / "champion.joblib")
+        except Exception as exc:  # metrics are the deliverable; the artifact is convenience
+            print(f"[s2] WARNING: could not persist model ({exc})")
 
-    # What everything in this directory describes; the corpus is this stage's other input, but
-    # `champion_spec.json` is the one that can change WITHOUT anyone touching data- a promotion
-    # rewrites it, and until this refits, `locoeval`, `model_meta` and `champion.joblib` all
-    # describe the model that just lost; the window between those two events is exactly the
-    # silence `freshness.py` exists for, so it is stamped rather than assumed to be brief
-    stamp_inputs(out_dir, {"champion_spec": CHAMPION_SPEC_PATH})
+    # the spec can change without anyone touching data, so between a promotion and a refit all this lies
+    stamp_inputs(out_dir, {"champion_spec": CHAMPION_SPEC_PATH}, stage="train")
+
+    # This stage used to write the bare `_inputs.json` here, before stamps were split per stage.
+    # Left behind it becomes a stamp with no writer: nothing refreshes it, so the next spec change
+    # makes it complain about a report that was in fact rebuilt. Superseded, so removed by the
+    # stage that owned it -- the same reasoning that deleted `s3_physics/physics.md` (RUNBOOK §7).
+    (out_dir / "_inputs.json").unlink(missing_ok=True)
 
     print(f"[s2] artifacts -> {out_dir}")
 

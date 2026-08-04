@@ -1,6 +1,4 @@
-# the whole pipeline on one page, regenerated every run
-#   python -m stages.breakdown  ->  runs/breakdown.md
-# reads only what the stages already wrote; computes no metric of its own
+# the whole pipeline on one page (python -m stages.breakdown); it reads, it computes no metric
 
 from __future__ import annotations
 
@@ -13,14 +11,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from freshness import check_all
-# one definition of run provenance, shared with the runner and the S2 ledger; this module kept a
-# private copy until 2026-08-04, which is two answers to "which commit produced this page"
+from freshness import check_all, stamp_paths
+# one definition of run provenance; a private copy is two answers to "which commit made this page"
 from runmeta import git_sha as _git_sha
 from stages.console import use_replacement_encoding
-# The hand-edited exclusion list, imported rather than restated: this page reports whether a
-# reviewed mislabel candidate was ever acted on, and a second copy of the list would answer that
-# wrongly the moment someone edits the real one
+# the hand-edited exclusion list, imported not restated: a copy answers "acted on?" wrongly
 from stages.s2_ml.dataset import EXCLUDED_TRIALS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -28,32 +23,22 @@ RUNS = REPO_ROOT / "runs"
 LABELED_RAW = REPO_ROOT / "labeled_raw"
 
 BREAKDOWN_MD = "breakdown.md"
-BREAKDOWN_JSON = "breakdown.json"
 
 ACCURACY_TARGET = 0.95
 
-# which measured headline each checked-in document quotes, explicit per artifact
-# "the file mentions coverage" is far too loose a trigger, and a check that cries wolf
-# is a check somebody switches off
-# hand-maintained, and it has to be: a doc that starts quoting a headline belongs here
-# it is not only .md files- the property that matters is "quotes the headline"
+# which headline each checked-in document quotes, explicit per artifact and hand-maintained
 PROSE_CLAIMS = {
     "S2 row-level": ["README.md", "caveats.md", "OPERATING_POINTS.md", "needtowrite.md"],
 }
 
-# Below this a corpus file is committing to less than half its rows: not a hard recording,
-# something structural; the value is a reporting line, not a policy- nothing acts on it
+# below this a file commits to less than half its rows- structural; a reporting line, not a policy
 LOW_COVERAGE_LINE = 0.50
 
-# A dropped segment this short at index 0 is the export preamble, not a data problem
-# Grouping them is what stops 39 instances of one artifact reading as 39 findings
+# a drop this short at index 0 is the export preamble; grouping stops 39 of them reading as 39 findings
 PREAMBLE_MAX_ROWS = 12
 
 
-# ----------------------------------------------------------------------------------------
-# Loading; every artifact is optional, and an absent one is a REPORTED gap rather than a
-# skipped section- a stage that did not run must not read as a stage with nothing to say
-# ----------------------------------------------------------------------------------------
+# ---- Loading; every artifact is optional, and an absent one is a REPORTED gap, not a skip ----
 
 # everything read this run, and everything that was not there
 @dataclass
@@ -84,8 +69,7 @@ class Source:
         if not path.is_file():
             self.gaps.append((self._rel(path), produced_by))
             return None
-        # utf-8 explicitly: the default here is cp949 and the summary carries file paths
-        # with non-ASCII session names, which fail to decode rather than to parse
+        # utf-8 explicitly: the default is cp949 and the paths carry non-ASCII session names
         with path.open(encoding="utf-8", newline="") as fh:
             return list(csv.DictReader(fh))
 
@@ -135,10 +119,7 @@ def _missing(what: str, produced_by: str) -> list[str]:
     return [f"> **Not present.** `{what}` was not found. Produce it with `{produced_by}`.", ""]
 
 
-# ----------------------------------------------------------------------------------------
-# Sections; each returns markdown lines and reads only what it needs, so one absent stage
-# blanks one section instead of failing the report
-# ----------------------------------------------------------------------------------------
+# ---- Sections; each reads only what it needs, so one absent stage blanks one section ----
 
 # what the corpus is; the three populations that get conflated constantly
 def section_corpus(src: Source) -> list[str]:
@@ -177,16 +158,45 @@ def section_corpus(src: Source) -> list[str]:
             out += [f"Sealed lockbox subject: **{', '.join(lb['revs'])}** — single use. "
                     f"See §2 for what it scored and `caveats.md` §3.2 before quoting it.", ""]
 
-    # Variant coverage: which hardware the serve path can and cannot read; the abstentions
-    # ledger is the authority- an unmapped variant is a refusal, not a low score
+    # Stated POSITIVELY, because the count above is already net of it: a reader who counts
+    # trials on disk and gets a different number has to be able to find out why here. §A checks
+    # only the other direction -- judged bad and still IN -- so without this the removals are
+    # the one edit to the corpus that nothing reports.
+    if EXCLUDED_TRIALS:
+        audit = src.json(RUNS / "s3_physics" / "label_audit.json",
+                         "python -m stages.s3_physics.label_audit")
+        seen = {(t["rev"], int(t["trial"])): t for t in (audit or {}).get("trials", [])}
+        rows = []
+        for rev, trial in sorted(EXCLUDED_TRIALS):
+            t = seen.get((rev, trial))
+            rows.append([
+                f"`{rev}`", f"{trial}",
+                f"{int(t['windows']):,}" if t else "—",
+                f"**{t['disagree_frac']:.4f}**" if t else "—",
+                f"over the `disagree > {audit['max_disagree']}` line (§3)"
+                if t and t["disagree_frac"] > audit["max_disagree"]
+                else "**not `label_audit`'s call** — excluded on other evidence, go read it",
+            ])
+        out += [
+            "### Excluded before any of the above", "",
+            f"**{len(EXCLUDED_TRIALS)} trial(s)** are dropped as the corpus is loaded "
+            f"(`dataset.EXCLUDED_TRIALS`), so every count on this page is already net of them "
+            f"and no stage below can put them back. The list is edited **by hand**; the "
+            f"`disagree` column is `label_audit`'s, which reads the RAW corpus and so still "
+            f"sees these trials. That is what makes the exclusion checkable instead of "
+            f"self-confirming — a row whose evidence has gone thin still shows its number here.",
+            "",
+        ]
+        out += _table(["rev", "trial", "windows", "disagree", "why it went"], rows)
+
+    # which hardware the serve path can read; an unmapped variant is a refusal, not a low score
     if summary:
         served = Counter(r["variant"] for r in summary if r["labelled"] == "True")
         abst = src.jsonl(LABELED_RAW / "abstentions.jsonl", "python -m stages.s2_ml.label_all") or []
         unmapped = Counter()
         for a in abst:
             if a.get("refusal") == "UnknownVariantError":
-                # the variant is named in the reason, not in a field, because the file was
-                # never resolved far enough to have one
+                # named in the reason, not a field: the file never resolved far enough to have one
                 for tok in str(a.get("reason", "")).split("'"):
                     if len(tok) == 8 and all(c in "0123456789abcdef" for c in tok):
                         unmapped[tok] += 1
@@ -237,9 +247,7 @@ def section_s1(src: Source) -> list[str]:
                   [[f"`{q['file']}`", f"`{q.get('category', '')}`", q.get("reason", ""),
                     "**yes**" if q.get("needs_human") else "no"] for q in (quar or [])])
 
-    # dropped segments grouped by cause, not listed; the full list is in segments.jsonl
-    # bucket on the stage's own reason string FIRST, then subdivide: splitting on row
-    # count first hid a real hardware finding inside a known export artefact
+    # grouped by the stage's own reason FIRST: splitting on row count hid a hardware finding
     rate_markers = ("matches no known acquisition rate", "fits no known family")
     rate_rejects = [s for s in dropped
                     if any(m in str(s.get("reason", "")) for m in rate_markers)]
@@ -323,9 +331,7 @@ def _section_s2_ledger(src: Source) -> list[str]:
 
     champ = src.json(RUNS / "s2_ml" / "champion.json",
                      "python -m stages.s2_ml.experiment --seed")
-    # Grouping only, and NOT the gate; `experiment.comparable` is the authority on whether two
-    # macro-F1s may be subtracted; this splits the table on the same fingerprint so a row
-    # measured on a superseded basis is never printed in a column next to one that is not
+    # grouping only, NOT the gate: it keeps a superseded basis out of the column beside a current one
     ref = (champ or {}).get("corpus")
     current = [e for e in ledger if e.get("corpus") and e["corpus"] == ref]
     prior = [e for e in ledger if e not in current]
@@ -396,8 +402,7 @@ def section_s2(src: Source) -> list[str]:
          f"{meta['presets'][meta['default_preset']]}"],
     ])
 
-    # Why this one, in the champion's own words; kept as the spec's text rather than
-    # paraphrased: the rationale is the artifact, and a paraphrase would drift from it
+    # why this one, in the spec's own text: the rationale is the artifact, a paraphrase drifts
     if spec:
         out += ["### Why this champion, and what was rejected", "",
                 spec.get("rationale", "").strip(), ""]
@@ -482,8 +487,7 @@ def section_s2(src: Source) -> list[str]:
         out += _table(["feature", "importance", "rank"],
                       [[f"`{f}`", _f(v), f"{i + 1} of {len(imp)}"]
                        for i, (f, v) in enumerate(list(imp)[:12])])
-        # The interleg block is what makes S3 a dependent second opinion, so its weight in
-        # this table is the thing to read, not the ordering
+        # the interleg block is what makes S3 dependent, so read its weight, not the ordering
         ileg = sum(v for f, v in imp if f.startswith("ileg_"))
         if ileg:
             out += [f"The `ileg_*` block carries **{ileg:.1%}** of total importance. That is "
@@ -548,10 +552,7 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
                     f"{hu['abstain_rate_elsewhere']:.1%} elsewhere. `-1` never enters "
                     f"training, so the agreement is not circular.", ""]
 
-    # The route, not the population; everything above scores the annotated `lpf_view`
-    # export; a caller feeds a raw device log; that gap was closed by argument
-    # `verify_serve` shows the two routes agree, so the lpf_view accuracy was inherited
-    # and this section closes it by measurement instead
+    # the route, not the population: everything above scores lpf_view, a caller feeds a raw log
     raw = src.json(RUNS / "s2_ml" / "raweval.json", "python -m stages.s2_ml.raweval")
     if raw:
         o, tr = raw["overall"], raw.get("transitive_lpf_view")
@@ -599,10 +600,7 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
                     if abs(r["threshold"] - shipped) < 1e-9), None)
         lb = next((r for r in lock["curve"] if abs(r["threshold"] - shipped) < 1e-9), None)
         out += [f"#### Lockbox — {', '.join(lock['revs'])}, held out of everything", ""]
-        # The one number in this repo that cannot be refreshed to match a code change
-        # Everything else on this page is regenerated per run; if the feature set moves,
-        # the lockbox row silently keeps describing the model that ran before it; stated
-        # rather than corrected- correcting it means re-reading a spent lockbox
+        # the one number that cannot be refreshed: correcting it means re-reading a spent lockbox
         n_now = len(meta.get("features") or [])
         n_then = lock.get("n_features")
         if n_now and n_then != n_now:
@@ -627,8 +625,7 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
                     f"missed on the lockbox.** Treat every development number above as an "
                     f"upper bound, not an estimate. The lockbox is single-use — check "
                     f"`caveats.md` §3.2 before re-reading it.", ""]
-        # Non-monotonicity is the finding that does not fit in a single row: abstention is
-        # supposed to buy accuracy, and on a genuinely new subject here it does not
+        # abstention is supposed to buy accuracy, and on a genuinely new subject here it does not
         accs = [r["selective_accuracy"] for r in lock["curve"]]
         if any(b < a for a, b in zip(accs, accs[1:])):
             worst = max((a - b, i) for i, (a, b) in enumerate(zip(accs, accs[1:])))
@@ -683,8 +680,7 @@ def section_s3(src: Source) -> list[str]:
     out = ["## §3 — S3 physics", "", "*Source: `runs/s3_physics/`*", ""]
     meta = src.json(RUNS / "s2_ml" / "model_meta.json", "python -m stages.s2_ml.train")
 
-    # The unit everything downstream is counted in; Read from the champion's card rather
-    # than restated, so a retrain at a different window size cannot leave this paragraph lying
+    # the unit everything downstream is counted in, read from the card so a retrain cannot lie here
     if meta:
         out += ["### What a *window* is — the unit every count below uses", ""]
         out += _table(["property", "value", "why"], [
@@ -702,10 +698,7 @@ def section_s3(src: Source) -> list[str]:
              "*label-pure* = the surviving vote is unanimous"],
         ])
 
-    # The per-window swap tally that used to be rendered here came from `anchors.csv`, a
-    # 1.4 MB table that existed only to feed S4's join and went when S4 did (2026-08-04)
-    # The rate audit did not go with it- `rate_audit.py`'s docstring holds that argument,
-    # and is the only place it is written down
+    # the per-window swap tally went with S4 and `anchors.csv`; the rate audit did not
     out += ["### Where the swap rule is used, and how much it is worth in each place", "",
             "The rule has zero fitted parameters and never sees a label. Both are real; "
             "what they buy depends on what it is pointed at.", ""]
@@ -828,8 +821,7 @@ def section_sweep(src: Source) -> list[str]:
                                               if a.get("refusal") == k), ""))]
                        for k, v in by_kind.most_common()])
 
-    # Coverage is bimodal on this corpus and the mean hides it entirely, so the shape is
-    # reported as percentiles and the tail is listed by name
+    # coverage is bimodal here and the mean hides it: percentiles, and the tail listed by name
     fracs = sorted(v for v in (_num(r["confident_frac"]) for r in lab) if v is not None)
     if fracs:
         def pct_at(q: float) -> float:
@@ -864,8 +856,7 @@ def _section_by_session(lab: list[dict]) -> list[str]:
     by_var: dict[str, list[dict]] = {}
     for r in lab:
         by_var.setdefault(r["variant"], []).append(r)
-    # Only variants where something is actually wrong; a per-session table for a clean
-    # variant is twelve rows of 0.99 and buries the one that is not
+    # only variants where something is wrong; a clean one is twelve rows of 0.99 burying the one
     interesting = {v: rs for v, rs in by_var.items()
                    if any((_num(r["confident_frac"]) or 1) < LOW_COVERAGE_LINE for r in rs)}
     if not interesting:
@@ -917,8 +908,7 @@ def _section_operating_points(src: Source) -> list[str]:
            "accuracy from `runs/s2_ml/roweval_loro.json` (annotated corpus, held out per "
            "subject). Two populations — read across the row, never down one column.*", ""]
 
-    # The accuracy half; absent is fine and is stated: the coverage half still answers what
-    # each point costs, which is the question this corpus can speak to
+    # the accuracy half; absent is fine and stated- the coverage half still says what a point costs
     row = src.json(RUNS / "s2_ml" / "roweval_loro.json", "python -m stages.s2_ml.roweval")
     acc_by_thr = {round(c["threshold"], 4): c for c in row["curve"]} if row else {}
 
@@ -954,9 +944,7 @@ def _section_operating_points(src: Source) -> list[str]:
             f"at the shipped threshold and refuses to write this artifact if they "
             f"disagree.", ""]
 
-    # The two coverages are over different denominators, and the 0.50 row measures the
-    # difference rather than asserting it; stated because a reader who knows the
-    # development figure will compare it to this one and the gap is not all population
+    # different denominators: the 0.50 row measures the gap rather than asserting it is population
     zero_row = min(sweep["corpus"], key=lambda c: c["threshold"])
     uncovered = 1.0 - (_num(zero_row["coverage"]) or 0.0)
     out += [f"**The two halves count different denominators.** `coverage HERE` is over "
@@ -988,9 +976,7 @@ def _section_operating_points(src: Source) -> list[str]:
                 f"these set, abstention is not a function of confidence alone and the swept "
                 f"columns would overstate coverage; `label_all` does not write them.", ""]
 
-    # The cliff; a corpus mean moves smoothly across the presets and hides that individual
-    # recordings do not- a file at 55% coverage is usable and the same file at 45% is a
-    # review queue, and which files those are is the part an operator can act on
+    # the cliff: the corpus mean moves smoothly across the presets, individual recordings do not
     zero = [c for c in sweep["corpus"] if c.get("files_zero")]
     if zero:
         worst = max(zero, key=lambda c: c["files_zero"])
@@ -1002,11 +988,7 @@ def _section_operating_points(src: Source) -> list[str]:
     return out
 
 
-# ----------------------------------------------------------------------------------------
-# Flags; mechanical rules only- a threshold crossed, a doc that does not quote the current
-# pair; each names what to look at and none of them conclude anything; a generated file that
-# reached conclusions would be the fifth stage nobody documented
-# ----------------------------------------------------------------------------------------
+# ---- Flags; mechanical rules only- each names what to look at, none of them conclude anything ----
 
 @dataclass
 class Flag:
@@ -1037,9 +1019,7 @@ def _flag_stale_prose(src: Source, meta: dict | None) -> list[Flag]:
         for name in PROSE_CLAIMS.get(claim, []):
             p = REPO_ROOT / name
             if not p.is_file():
-                # Listed as quoting a headline and not on disk; skipping silently would let
-                # a deleted document stay deleted without anything ever saying so- the same
-                # failure this module refuses for artifacts, one layer up
+                # listed as quoting a headline and not on disk; skipping would let a deletion stay silent
                 out.append(Flag(
                     "gap", f"`{name}` is listed as quoting the {claim} headline but is missing",
                     f"nothing checks the {claim} pair against prose until it is rewritten. "
@@ -1123,9 +1103,7 @@ def _flag_unserved(abst: list[dict] | None) -> list[Flag]:
     return []
 
 
-# the S3 label review's verdicts, keyed (rev, trial), from the most recent run
-# the counter is compared as an INTEGER: run10 sorts before run2 by name, and the failure
-# is silent- it would read an older run and report a trial as unread
+# the label review's verdicts from the most recent run; the counter compares as an INTEGER, not a name
 def _latest_reviews() -> tuple[Path | None, dict[tuple[str, int], dict]]:
     def order(p: Path) -> tuple[str, int]:
         date, _, run = p.name.partition("_run")
@@ -1179,10 +1157,7 @@ def _flag_unadjudicated(audit: dict | None,
                         + (f"; the newest ledger{where} covers the others." if judged
                            else " — run `run_pipeline.py --with-agents --from s3_label_review`.")))
 
-    # Read, judged bad data, and still in the corpus; `EXCLUDED_TRIALS` is edited BY HAND with
-    # the evidence beside it (an agent may nominate a label change, never make one), so this is
-    # the state where the loop is genuinely open- as against `annotation_policy`, where not
-    # excluding is the answer
+    # judged bad and still in the corpus: `EXCLUDED_TRIALS` is edited BY HAND, so the loop is open
     stuck = [(t, r) for t, r in judged
              if r.get("disposition") == "mislabel_candidate"
              and (t["rev"], int(t["trial"])) not in EXCLUDED_TRIALS]
@@ -1200,14 +1175,29 @@ def collect_flags(src: Source, loco: dict | None, meta: dict | None,
                   summary: list[dict] | None, abst: list[dict] | None,
                   audit: dict | None) -> list[Flag]:
     flags: list[Flag] = []
-    # freshness first: it invalidates every other number rather than sitting beside them
-    # labeled_raw/ is checked UNCONDITIONALLY, runs/* only when stamped; label_all is the
-    # one step that consumes another stage's artifact and writes its own
-    stamped = [d for d in RUNS.glob("*") if (d / "_inputs.json").is_file()]
+    # freshness first: it invalidates every other number rather than sitting beside them.
+    # Every stage directory is considered, not only the ones already carrying a stamp -- filtering
+    # on `_inputs.json` was checking exactly the dirs that could pass and skipping the ones that
+    # could not, so a stage that never declared its inputs read as clean. Agent run dirs are
+    # excluded on purpose: they are never overwritten (§4), so nothing can go stale under them.
+    dirs = [d for d in RUNS.glob("*") if d.is_dir() and "_run" not in d.name]
     if LABELED_RAW.is_dir():
-        stamped.append(LABELED_RAW)
+        dirs.append(LABELED_RAW)
+    stamped, blind = [], []
+    for d in dirs:
+        (stamped if stamp_paths(d) else blind).append(d)
     for c in check_all(stamped):
         flags.append(Flag("stale", "a downstream artifact no longer matches its inputs", c))
+
+    # One flag, not one per directory: "cannot be checked" is a single condition with a single
+    # fix, and N copies of it would crowd out the stale flags above, which are the urgent ones.
+    if blind:
+        flags.append(Flag(
+            "unchecked", "some stage output cannot be checked for staleness",
+            "No `_inputs.json` in " + ", ".join(f"`runs/{d.name}`" for d in blind)
+            + ". These predate input stamping, so there is no record of which champion spec "
+              "or model produced them and no way to tell whether they still describe it. "
+              "Re-running the stage stamps it; until then, read those numbers as undated."))
     flags += _flag_stale_prose(src, meta)
     flags += _flag_lockbox(src, meta)
     flags += _flag_subject_spread(loco)
@@ -1289,7 +1279,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description="Assemble every stage's artifacts into one page.")
     ap.add_argument("--out", type=Path, default=RUNS,
-                    help="directory for breakdown.md and breakdown.json (default: runs/)")
+                    help="directory for breakdown.md (default: runs/)")
     args = ap.parse_args()
     use_replacement_encoding()
 
@@ -1299,7 +1289,11 @@ def main() -> None:
     out_dir = args.out if args.out.is_absolute() else REPO_ROOT / args.out
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / BREAKDOWN_MD).write_text(md, encoding="utf-8")
-    (out_dir / BREAKDOWN_JSON).write_text(json.dumps(machine, indent=2), encoding="utf-8")
+
+    # `breakdown.json` is no longer written. It was the machine-readable twin of the page above,
+    # and nothing in the repo ever read it -- an artifact produced for a consumer that does not
+    # exist. `build()` still returns `machine`, which the console summary below prints, so
+    # restoring the file is one line if a reader ever turns up.
 
     # ASCII on the console: it is cp949 here; the .md keeps its typography
     print(f"[breakdown] {len(md.splitlines()):,} lines -> {out_dir / BREAKDOWN_MD}")

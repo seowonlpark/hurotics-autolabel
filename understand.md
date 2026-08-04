@@ -126,8 +126,8 @@ which is exactly what made it survive.
 | choice | why |
 |---|---|
 | three stages, S1→S3, one directory each | each stage is runnable alone and its artifacts are readable without the next stage. It was four until 2026-08-04; S4 is deleted (see the banner) |
-| `data/`, `runs/`, `.env` gitignored | nothing from HUROTICS leaves the machine via git |
-| `runs/YYYY-MM-DD_runN/` never overwritten, each with `run_meta.json` carrying the git SHA | `runs/` is gitignored, so the run must record the commit that produced it or the artifact is unattributable |
+| `data/` entirely, `.env` and `tracker/` gitignored; `runs/` and `labeled_raw/` **split** | nothing from HUROTICS leaves the machine via git. `runs/` is not ignored wholesale: the regenerable artifacts (`*.joblib`, `*.pkl`, `*.csv`, `*.npy`, `*.parquet`) stay out, while the measurements are versioned alongside the claims they support — see `.gitignore`, which explains itself |
+| `runs/YYYY-MM-DD_runN/` never overwritten, each with `run_meta.json` carrying the git SHA | every other `runs/<stage>/` is regenerated in place, so a file sitting there need not correspond to any commit. The SHA is what makes an artifact attributable to the code that wrote it |
 | clean output is **parquet** | storage cost is a file-format problem, not a column-count problem — ~5–10× smaller, dtypes preserved. This is what lets the canonical file keep the honest superset instead of pruning to save space |
 | `DOMAIN_NOTES.md` injected into every agent prompt **as a file**, not argv | it crossed the ~32 KB Windows `CreateProcess` limit and every agent died with a *misleading* `CLINotFoundError` naming a healthy binary (§8). A path is O(1) on the command line, so institutional memory can grow without a ceiling |
 | `stages/console.py` called first in every `main()`, UTF-8 in written `.md` | the console is cp949 here, so any prose character raises `UnicodeEncodeError` on the write. Policing every string down to ASCII is not enforceable and would degrade the reports, which are read as Markdown where the typography is correct and wanted — so the *encoder* is relaxed instead, once, in one place. Garbled output beats a lost run, and beats a command that cannot print its own `--help` (§12) |
@@ -155,7 +155,7 @@ report last week's numbers.
 
 ### 3.1 `freshness.py` — does this output still describe its inputs?
 
-The failure it exists for is silent. `runs/` is gitignored and every stage overwrites
+The failure it exists for is silent. Every stage overwrites
 `runs/<stage>/` in place, so **re-running one stage alone — the normal way to iterate —
 leaves every downstream artifact describing a model that no longer exists.** `breakdown.md`
 can quote a headline accuracy for a champion that has already been replaced, and nothing
@@ -181,8 +181,8 @@ demanding a stamp from each would be noise.
 
 ### 3.1b `runmeta.py` — one definition of "which commit produced this"
 
-`runs/` is gitignored, so an artifact that cannot name its commit cannot be traced to the
-code that wrote it. `git_sha()` is that name, and it lives in exactly one module because
+`runs/` is regenerated in place — and its heavy artifacts are not versioned at all — so an
+artifact that cannot name its commit cannot be traced to the code that wrote it. `git_sha()` is that name, and it lives in exactly one module because
 the alternative is observable: `run_pipeline.py` (`run_meta.json`), `experiment.py` (the
 ledger and `champion.json`) and `breakdown.py` (the report footer) all stamp it, and until
 2026-08-04 `breakdown.py` carried a private copy — **two answers to one question**, which is
@@ -205,7 +205,7 @@ process boundary; an agent call is a network wait, and isolating it bought nothi
 | function | why it exists / why this form |
 |---|---|
 | `Step.fn` alongside `Step.cmd` | exactly one of the two. `run_step` catches an exception from `fn` the way it checks a non-zero exit code from `cmd`, so an in-process failure still stops the run with a resume hint instead of unwinding through the runner and losing which step it was |
-| `_git_sha()` | `runs/` is gitignored, so a run that does not record its commit cannot be reproduced. Swallows exceptions and returns `"unknown"` — a missing SHA must not kill a run that is otherwise fine |
+| `_git_sha()` | `runs/` is overwritten in place and its heavy artifacts are not versioned, so a run that does not record its commit cannot be reproduced. Swallows exceptions and returns `"unknown"` — a missing SHA must not kill a run that is otherwise fine |
 | `_new_run_dir()` | monotonic `runN` suffix, never overwrites. A pipeline whose reruns clobber the previous evidence cannot support a claim like "this changed nothing", which `caveats.md` §5.1 makes |
 | `_s1_exception()` | builds the S1 exception queue deterministically, runs the agent, writes the review. Raises a *directed* error naming the command to run if there is no clean run — the failure belongs to the producer, not the consumer |
 | `_agent_step()` | wraps one review as a `Step.fn`: `load_dotenv`, fresh run dir, then `asyncio.run`. Sets `__qualname__` from the coroutine so `--dry-run` names the review rather than a closure |
@@ -693,7 +693,7 @@ is never an agent's call.
 | `comparable()` **refuses** to subtract across corpora | a macro-F1 delta is meaningless across a changed class set, corpus or window count. Fail-passive: an unverifiable comparison keeps the incumbent rather than promoting on it. The comment names the real incident — a two-class incumbent scoring six-class challengers for a whole import |
 | `STEADY_CONFUSION_MARGIN = 0.02`, the tiebreaker | on a macro-F1 tie, prefer lower `steady_confusion`: *a sustained wrong call becomes a sustained wrong ACTION on a powered device, whereas omissions fail passive.* This is the one place the error taxonomy is load-bearing rather than descriptive |
 | one LORO pass fits both windows and rows | the fold holding a rev out is the same model that scores that rev's OOF windows and its dense rows, so it is fit once for both. `oof` is filled by mask, so fold order cannot matter |
-| `champion_spec.json` tracked in git, `champion.json` not | `runs/` is gitignored; the spec is the champion's identity as *data*, committed alongside the claims it supports. `train.py` stamps it via `freshness.stamp_inputs`, because a promotion rewrites it and until a refit follows, everything in `runs/s2_ml/` describes the model that just lost |
+| `champion_spec.json` tracked in git, `champion.json` not | `champion.json` lives under `runs/`, which is rewritten by every cycle; the spec is the champion's identity as *data*, committed alongside the claims it supports. `train.py` stamps it via `freshness.stamp_inputs`, because a promotion rewrites it and until a refit follows, everything in `runs/s2_ml/` describes the model that just lost |
 | estimator and `trainable` imported from `train.py` | this file arrived from a sibling repo whose champion was a RandomForest over a `label != TRANSITION` filter. Both are wrong here, **and both are the kind of wrong that still produces a number** |
 
 ### 6.14 `raweval.py` — the accuracy of the route a caller actually uses

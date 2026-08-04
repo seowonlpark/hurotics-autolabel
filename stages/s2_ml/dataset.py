@@ -1,6 +1,4 @@
-# S2 dataset: load the labeled rev* trials onto the canonical grid, split by rev
-# same resampler as S1, and group == rev (one subject, one day) so nothing leaks
-# does NOT window or train- just normalized, grouped, split frames
+# S2 dataset: labeled trials on the canonical grid, split by rev (group == rev, so nothing leaks)
 
 from __future__ import annotations
 
@@ -24,17 +22,14 @@ TIME_COL = "Time"
 STAND, WALK, HUMAN_UNKNOWN = 0, 10, -1
 TRAIN_CLASSES = (STAND, WALK)
 
-# whole revs sealed until the work is frozen; rev8 has been read exactly ONCE --
-# re-reading it to check whether a change helped makes it a second validation set
-# rev13 was sealed too and opened deliberately: it failed and a failure you cannot
-# look at cannot be fixed; it is a development subject now
+# the trained classes' names, defined once beside the codes; every stage that prints a class
+# reads this, so a code and its name can never drift apart in one file and not another
+CLASS_NAME = {STAND: "stand", WALK: "walk"}
+
+# sealed until the work is frozen; rev8 read exactly ONCE, rev13 opened deliberately and is dev now
 DEFAULT_LOCKBOX_REVS = ("rev8",)
 
-# quarantined for a demonstrated label error; leaving one in is not the conservative
-# choice- it teaches the wrong thing AND depresses every metric scored against it
-# rev13/4: all 12,691 rows annotated stand, but it holds two runs- 7.0 s at 2.1 deg/s
-# then 119.9 s at 45.3, and this subject's own labelled walking is 35-50; evidence is
-# INTERNAL to the file, not "the classifier disagreed"
+# quarantined for a demonstrated label error, evidence INTERNAL to the file: rev13/4 holds two runs
 EXCLUDED_TRIALS = {("rev13", 4)}
 
 _REV = re.compile(r"(rev\d+)")
@@ -51,8 +46,7 @@ def trial_of(path: Path) -> int:
     return int(m.group(1)) if m else 0
 
 
-# every labeled trial minus the quarantined; excluded=set() loads the raw corpus,
-# which is what label_audit does so it can still see what it flagged
+# every labeled trial minus the quarantined; excluded=set() loads the raw corpus, as label_audit does
 def find_trials(labeled_dir: Path = LABELED_DIR,
                 excluded: set[tuple[str, int]] | None = None) -> list[Path]:
     excluded = EXCLUDED_TRIALS if excluded is None else excluded
@@ -60,21 +54,8 @@ def find_trials(labeled_dir: Path = LABELED_DIR,
                   if (rev_of(p), trial_of(p)) not in excluded)
 
 
-# == FEATURES today, since every trial carries the same four; kept as its own name so
-# validate_spec still has something to check when a richer corpus arrives
+# == FEATURES today; its own name so validate_spec still checks when a richer corpus arrives
 SELECTABLE_FEATURES = FEATURES
-
-
-# header-only, so it's free; a challenger measured on a quietly smaller corpus is not
-# comparable to a champion measured on the whole one- report it, don't crash mid-fit
-def partition_trials(features: tuple[str, ...] = FEATURES,
-                     labeled_dir: Path = LABELED_DIR) -> tuple[list[Path], list[Path]]:
-    want = {TIME_COL, *features, LABEL_COL}
-    have, lack = [], []
-    for p in find_trials(labeled_dir):
-        cols = {c.strip() for c in pd.read_csv(p, nrows=0).columns}
-        (have if want <= cols else lack).append(p)
-    return have, lack
 
 
 # one labeled trial, normalized onto the canonical grid
@@ -83,7 +64,7 @@ class Trial:
     path: str
     rev: str
     trial: int
-    split: str          # "train" | "val" | "lockbox"
+    split: str          # "train" | "lockbox"
     frame: pd.DataFrame  # Time, segment, FEATURES..., Label- usable segments only
     n_source_rows: int  # rows in the raw trial, before normalization
     dropped_rows: int   # raw rows in segments too short / off-grid to keep
@@ -113,41 +94,18 @@ def load_trial(path: Path, split: str) -> Trial:
                  frame, len(df), dropped)
 
 
-def assign_split(rev: str, lockbox_revs: tuple[str, ...], val_revs: tuple[str, ...]) -> str:
-    if rev in lockbox_revs:
-        return "lockbox"
-    if rev in val_revs:
-        return "val"
-    return "train"
+# two splits, not three: held-out evaluation is grouped CV over the training revs (locoeval),
+# so there is no standing validation set to carve out- the lockbox is the only thing withheld
+def assign_split(rev: str, lockbox_revs: tuple[str, ...]) -> str:
+    return "lockbox" if rev in lockbox_revs else "train"
 
 
 def load_dataset(
     labeled_dir: Path = LABELED_DIR,
     lockbox_revs: tuple[str, ...] = DEFAULT_LOCKBOX_REVS,
-    val_revs: tuple[str, ...] = (),
     excluded: set[tuple[str, int]] | None = None,
 ) -> list[Trial]:
-    # val_revs may be empty (grouped CV instead); the lockbox is always held out
     trials = []
     for p in find_trials(labeled_dir, excluded):
-        split = assign_split(rev_of(p), lockbox_revs, val_revs)
-        trials.append(load_trial(p, split))
+        trials.append(load_trial(p, assign_split(rev_of(p), lockbox_revs)))
     return trials
-
-
-# per-rev row counts by split and class- the sanity check before any modelling
-def census(trials: list[Trial]) -> pd.DataFrame:
-    rows = []
-    for t in trials:
-        lab = t.frame[LABEL_COL]
-        rows.append({
-            "rev": t.rev, "trial": t.trial, "split": t.split,
-            "rows": len(t.frame),
-            "stand": int((lab == STAND).sum()),
-            "walk": int((lab == WALK).sum()),
-            "unknown": int((lab == HUMAN_UNKNOWN).sum()),
-        })
-    df = pd.DataFrame(rows)
-    return (df.groupby(["split", "rev"], as_index=False)
-              [["rows", "stand", "walk", "unknown"]].sum()
-              .sort_values(["split", "rev"]))

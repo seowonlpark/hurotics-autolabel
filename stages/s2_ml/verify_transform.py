@@ -1,9 +1,4 @@
-# regression guard for the raw -> lpf_view bridge
-#   python -m stages.s2_ml.verify_transform
-# pairs annotated trials with their raw source and asserts the reproduction still lands
-# at float roundoff; run it after touching anything in transform.py
-# without it, drift is train/serve skew nothing downstream catches, because both sides
-# still "look like" angles
+# regression guard for the raw -> lpf_view bridge; python -m stages.s2_ml.verify_transform
 
 from __future__ import annotations
 
@@ -26,13 +21,11 @@ from stages.s2_ml.transform import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Float roundoff on ~1e5-sample IIR recursions; anything materially larger means the
-# transform drifted from the MATLAB it is supposed to mirror
+# float roundoff on ~1e5-sample IIR recursions; materially larger means drift from the MATLAB
 TOLERANCE = 1e-9
 
 
-# every readable raw file, keyed by path; reads through load_raw_frame, the same reader
-# serve uses- a private one here would bless a read production never performs
+# every readable raw file, keyed by path; through load_raw_frame, the same reader serve uses
 def index_raw_files(raw_glob: str = "data/raw/**/*.csv") -> dict[str, tuple]:
     index = {}
     for f in sorted(glob.glob(str(REPO_ROOT / raw_glob), recursive=True)):
@@ -45,10 +38,7 @@ def index_raw_files(raw_glob: str = "data/raw/**/*.csv") -> dict[str, tuple]:
     return index
 
 
-# annotated trials whose raw source is present, matched on the time vector
-# excluded=set() on purpose: the quarantine is about LABELS and this never reads one, it
-# asks whether four columns rebuild from raw; honouring it would drop rev13/4, one of only
-# seven pairs behind the majority variant, for an unrelated reason
+# annotated trials with a raw source present; excluded=set() on purpose- no label is read here
 def find_pairs(index: dict[str, tuple]) -> list[tuple[Path, str, pd.DataFrame, str]]:
     pairs = []
     for p in find_trials(excluded=set()):
@@ -70,10 +60,7 @@ def main() -> None:
         ann = pd.read_csv(ann_path)
         ann.columns = [c.strip() for c in ann.columns]
         try:
-            # TRUST_UNCHECKED deliberately: this verifies the transform MATH against
-            # ground truth, on files whose features the MATLAB already produced; the
-            # per-file axis check is a provenance guard for inference on new raw files;
-            # applying it here would make a regression test refuse its own fixtures
+            # TRUST_UNCHECKED deliberately: this verifies the MATH, and the axis check refuses fixtures
             feat = raw_to_features(raw, vid, trust=TRUST_UNCHECKED,
                                    dt_s=matlab_dt(raw["Time"].to_numpy(float)))
         except UnknownVariantError:

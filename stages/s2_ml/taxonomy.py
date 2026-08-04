@@ -1,6 +1,4 @@
-# error taxonomy: a faithful port of the incumbent's bucketing (thresholds/precedence copied
-# so our classifier is scored by the SAME yardstick as the incumbent
-# > flicker > late > early > steady_confusion; feed it dense per-row predictions, not window labels
+# error taxonomy, ported from the incumbent: flicker > late > early > steady_confusion, dense rows
 
 from __future__ import annotations
 
@@ -57,8 +55,7 @@ def _flanks(arr: np.ndarray, s: int, e: int, n: int):
     return (arr[s - 1] if s > 0 else None), (arr[e] if e < n else None)
 
 
-# claim helper: assign label to still-unclassified rows in [s, e); this is the precedence
-# mechanism- earlier buckets claim first, so nothing is ever overwritten
+# assign label to still-unclassified rows in [s, e): earlier buckets claim first, never overwritten
 def _claim(bucket: np.ndarray, s: int, e: int, label: str) -> None:
     region = bucket[s:e]
     region[region == UNCLASSIFIED] = label

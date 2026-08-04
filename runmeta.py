@@ -1,5 +1,4 @@
-# run provenance shared across the pipeline: the single definition of git_sha(), stamped by the
-# orchestrator and the s2 ledger/champion records so every recorded artifact carries its commit
+# run provenance: the single definition of git_sha(), stamped into every recorded artifact
 
 from __future__ import annotations
 

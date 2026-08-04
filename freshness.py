@@ -1,7 +1,4 @@
-# artifact freshness: a stage records WHICH VERSION of each upstream artifact it consumed
-# runs/ is gitignored and stages overwrite in place, so re-running one alone leaves every
-# downstream artifact describing a model that no longer exists, all present and all wrong
-# content hash, not mtime: a checkout or a touch moves mtime without changing what was read
+# artifact freshness: stages stamp a content hash (not mtime) of every upstream artifact read
 
 from __future__ import annotations
 
@@ -11,13 +8,29 @@ from pathlib import Path
 
 INPUTS_FILENAME = "_inputs.json"
 _CHUNK = 1 << 20
-
 REPO_ROOT = Path(__file__).resolve().parent
 
 
-# repo-relative with forward slashes inside the repo, absolute outside
-# absolute everywhere made the stamp machine-specific: moving the repo turned every
-# input into "has since been deleted", a false stale flag on an unchanged corpus
+# One stamp per STAGE, not per directory. `runs/s2_ml` holds three reports with three separate
+# lifetimes -- train's locoeval, roweval's curve, raweval's raw-path read -- and a single shared
+# stamp would let whichever stage ran last refresh the record for all of them. That is worse than
+# no check: a promotion between `train` and `roweval` would leave locoeval.md stale and the stamp
+# saying clean. `stage=None` keeps the bare `_inputs.json` so older stamps still read.
+def stamp_name(stage: str | None) -> str:
+    return INPUTS_FILENAME if stage is None else f"_inputs.{stage}.json"
+
+
+def stamp_paths(out_dir: Path) -> list[Path]:
+    return sorted(Path(out_dir).glob("_inputs*.json"))
+
+
+# the inverse of stamp_name: which stage wrote this stamp, or None for a bare pre-stage one
+def stage_of(stamp: Path) -> str | None:
+    _, _, stage = stamp.stem.partition(".")
+    return stage or None
+
+
+# repo-relative inside the repo, absolute outside: absolute everywhere made stamps machine-specific
 def _store(path: Path) -> str:
     path = Path(path)
     try:
@@ -26,16 +39,13 @@ def _store(path: Path) -> str:
         return str(path)
 
 
-# the reverse: a stored name back to a path on this machine; an absolute value is honoured as
-# written, which is what keeps stamps made before this change readable rather than making the
-# fix itself the thing that invalidates them
+# stored name back to a path; an absolute value is honoured as written, so older stamps still read
 def _locate(stored: str) -> Path:
     p = Path(stored)
     return p if p.is_absolute() else REPO_ROOT / p
 
 
-# sha256 + size of one file, or None when it does not exist; None is a legitimate answer, not an
-# error: a stage may legitimately run before an optional upstream artifact is ever produced
+# sha256 + size, or None when absent- None is legitimate: an optional upstream may not exist yet
 def artifact_id(path: Path) -> dict | None:
     path = Path(path)
     if not path.is_file():
@@ -47,41 +57,51 @@ def artifact_id(path: Path) -> dict | None:
     return {"sha256": h.hexdigest(), "bytes": path.stat().st_size}
 
 
-# record what this stage consumed, next to what it produced; `inputs` maps a human label to a path
-def stamp_inputs(out_dir: Path, inputs: dict[str, Path]) -> dict:
+# record what this stage consumed; an EMPTY `inputs` DECLARES no stale-able upstream, unlike no stamp
+def stamp_inputs(out_dir: Path, inputs: dict[str, Path], stage: str | None = None) -> dict:
     record = {label: {"path": _store(p), **(artifact_id(p) or {"missing": True})}
               for label, p in inputs.items()}
     Path(out_dir).mkdir(parents=True, exist_ok=True)
-    (Path(out_dir) / INPUTS_FILENAME).write_text(
+    (Path(out_dir) / stamp_name(stage)).write_text(
         json.dumps(record, indent=2), encoding="utf-8")
     return record
 
 
-# complaints about `out_dir`, empty when it is current; an ABSENT stamp is reported, not passed:
-# an unstamped directory is exactly the state that hides this bug, so "cannot tell" and "stale"
-# are reported the same way- the caller decides how loudly to fail
-def check_inputs(out_dir: Path) -> list[str]:
-    out_dir = Path(out_dir)
-    stamp = out_dir / INPUTS_FILENAME
-    if not stamp.is_file():
-        return [f"{out_dir.name}: no {INPUTS_FILENAME}; cannot tell which inputs produced it"]
+# complaints about one stamp file; `where` names it the way a reader would look it up
+def _check_stamp(stamp: Path, where: str) -> list[str]:
     try:
         record = json.loads(stamp.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        return [f"{out_dir.name}: unreadable {INPUTS_FILENAME} ({exc})"]
+        return [f"{where}: unreadable {stamp.name} ({exc})"]
 
     out = []
     for label, want in record.items():
         now = artifact_id(_locate(want["path"]))
         if want.get("missing"):
             if now is not None:
-                out.append(f"{out_dir.name}: {label} did not exist when this ran, but does now")
+                out.append(f"{where}: {label} did not exist when this ran, but does now")
             continue
         if now is None:
-            out.append(f"{out_dir.name}: {label} has since been deleted ({want['path']})")
+            out.append(f"{where}: {label} has since been deleted ({want['path']})")
         elif now["sha256"] != want["sha256"]:
-            out.append(f"{out_dir.name}: {label} changed since this ran -- "
-                       f"{out_dir.name} describes an older {Path(want['path']).name}")
+            out.append(f"{where}: {label} changed since this ran -- "
+                       f"{where} describes an older {Path(want['path']).name}")
+    return out
+
+
+# complaints about `out_dir`; an ABSENT stamp reports the same as stale- the caller decides
+def check_inputs(out_dir: Path) -> list[str]:
+    out_dir = Path(out_dir)
+    stamps = stamp_paths(out_dir)
+    if not stamps:
+        return [f"{out_dir.name}: no {INPUTS_FILENAME}; cannot tell which inputs produced it"]
+    # Every stage that writes here is checked on its own record, so one stage's fresh run
+    # cannot vouch for another's report sitting in the same directory.
+    out = []
+    for s in stamps:
+        stage = stage_of(s)
+        out += _check_stamp(s, out_dir.name if stage is None
+                            else f"{out_dir.name} [{stage}]")
     return out
 
 
@@ -90,10 +110,7 @@ def check_all(out_dirs: list[Path]) -> list[str]:
     return [c for d in out_dirs for c in check_inputs(Path(d))]
 
 
-# ------------------------------------------------------------------------------------------
-# self-test: a check that silently stopped firing looks exactly like a clean pipeline
-# the stale case is the one that matters; absent or unreadable announces itself
-# ------------------------------------------------------------------------------------------
+# ---- self-test: a check that silently stopped firing looks exactly like a clean pipeline ----
 
 def _self_test() -> list[str]:
     import tempfile
@@ -123,20 +140,35 @@ def _self_test() -> list[str]:
 
     expect("a directory with no stamp at all", check_inputs(tmp / "never-stamped"), True)
 
+    # an empty stamp reads CLEAN while no stamp complains: declaring nothing is not never declaring
+    empty = tmp / "declares-nothing"
+    stamp_inputs(empty, {})
+    expect("a stage that declared no upstream", check_inputs(empty), False)
+
+    # Two stages sharing ONE directory, as train/roweval/raweval share runs/s2_ml. The stale one
+    # must still be caught after the fresh one runs; a per-directory stamp would have let the
+    # second run vouch for the first's report, which is the failure this split exists to stop.
+    shared, dep = tmp / "two-stages", tmp / "spec2.json"
+    dep.write_text('{"v": 1}', encoding="utf-8")
+    stamp_inputs(shared, {"spec": dep}, stage="early")
+    dep.write_text('{"v": 2}', encoding="utf-8")
+    stamp_inputs(shared, {"spec": dep}, stage="late")
+    got = check_inputs(shared)
+    expect("a shared directory with one stage stale", got, True)
+    if len(got) != 1 or "[early]" not in got[0]:
+        failures.append(f"the stale stage must be named, and only it; got {got}")
+
     (out / INPUTS_FILENAME).write_text("{not json", encoding="utf-8")
     expect("an unreadable stamp", check_inputs(out), True)
 
-    # An input that did not exist is recorded as such, and its later APPEARANCE is a change
-    # too: a stage that ran without an optional upstream is not the same stage as one that
-    # ran with it, and reporting only the reverse direction would miss half of that
+    # An input that did not exist is recorded as such, and its later APPEARANCE is a change too
     absent = tmp / "not-yet.json"
     stamp_inputs(out, {"optional": absent})
     expect("an input absent both times", check_inputs(out), False)
     absent.write_text("{}", encoding="utf-8")
     expect("an input that has since APPEARED", check_inputs(out), True)
 
-    # Paths: repo-relative in the stamp, so it survives a move; absolute only when the input
-    # lives outside the repo, where nothing else could identify it
+    # Repo-relative in the stamp so a move survives; absolute only for inputs outside the repo
     inside = REPO_ROOT / "freshness.py"
     if _store(inside) != "freshness.py":
         failures.append(f"a repo file should be stored relative, got {_store(inside)!r}")
@@ -147,8 +179,7 @@ def _self_test() -> list[str]:
     if _locate(str(tmp)) != tmp:
         failures.append("an absolute stored path must be honoured as written")
 
-    # A stamp written before paths were made relative still has to read, or this fix would
-    # itself be the thing that invalidated every artifact it was meant to protect
+    # A stamp written before paths were made relative still has to read, or the fix invalidates all
     legacy = tmp / "legacy"
     legacy.mkdir()
     (legacy / INPUTS_FILENAME).write_text(json.dumps(
@@ -180,9 +211,12 @@ def main() -> None:
         print("[freshness] self-test OK: every complaint fires on its own case")
         return
 
+    # Every stage directory, not only the stamped ones. Selecting on "has a stamp" meant checking
+    # exactly the dirs that could pass, so a stage that never declared its inputs read as clean and
+    # the run reported 0 complaints. Agent run dirs are skipped: never overwritten, so never stale.
     dirs = [Path(d) for d in args.check] if args.check else [
-        *(d for d in (REPO_ROOT / "runs").glob("*") if (d / INPUTS_FILENAME).is_file()),
-        *( [REPO_ROOT / "labeled_raw"] if (REPO_ROOT / "labeled_raw").is_dir() else []),
+        *(d for d in (REPO_ROOT / "runs").glob("*") if d.is_dir() and "_run" not in d.name),
+        *([REPO_ROOT / "labeled_raw"] if (REPO_ROOT / "labeled_raw").is_dir() else []),
     ]
     complaints = check_all(dirs)
     for c in complaints:

@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-# runs/ is gitignored, so each run records the commit that produced it; one definition,
-# shared with the S2 experiment ledger, which makes the same provenance claim
+# runs/ is regenerated in place, so a file sitting there need not match any commit; each run
+# stamps the sha that produced it. One shared definition, with the S2 experiment ledger
 from runmeta import git_sha as _git_sha
 from stages.console import use_replacement_encoding
 
@@ -22,14 +22,30 @@ RUNS = REPO_ROOT / "runs"
 PY = sys.executable  # the venv's python, so subprocesses use the same interpreter
 
 
+# a relative scale, since runtime is a fact about the corpus: the ORDER is the claim, not the clock
+RUNTIMES = {
+    "short":      "seconds- reads little or no data",
+    "medium":     "up to a minute or so- one pass over the corpus, or one agent turn",
+    "long":       "several minutes- fits a model, or rebuilds features corpus-wide",
+    "super long": "tens of minutes- refits per held-out rev, or a full fit inside a cycle",
+}
+
+
 # one pipeline step
 @dataclass(frozen=True)
 class Step:
     key: str                       # short id, the --from handle and the progress label
     cmd: list[str] | None = None   # subprocess argv
     fn: Callable[[], None] | None = None   # OR run in-process; exactly one of the two
-    gate: Path | None = None       # artifact that must exist after; None => trust the exit code
+    # Artifact that must exist after; None => trust the exit code. Always the machine-read `.json`
+    # twin, never the `.md`: the JSON is what the next stage and `breakdown` actually parse, so it
+    # is the artifact whose absence really breaks the run. Gating on the rendered report made the
+    # human-facing copy load-bearing, which is backwards -- a report exists to be read, not to be
+    # depended on, and it should stay deletable without the pipeline concluding the stage never ran.
+    gate: Path | None = None
     agent: bool = False            # paid agent step (needs the API key)
+    desc: str = ""                 # one line, for --keys; what this step answers, not how
+    runtime: str = ""              # one of RUNTIMES; relative scale, not a measurement
 
 
 # runs/YYYY-MM-DD_runN; never overwrite a previous run
@@ -116,9 +132,7 @@ async def _s3_label_review(run_dir: Path) -> None:
         print("[s3-rev] WARNING: agent output did not parse — all items marked needs_human")
 
 
-# One bounded retry when the critic asks for a revision; two is the whole budget: a critic
-# that still is not satisfied after one rewrite is disagreeing about the idea, not the spec,
-# and another round buys a third phrasing of the same argument
+# one bounded retry: a critic unsatisfied after a rewrite disagrees about the idea, not the spec
 MAX_PROPOSE_ATTEMPTS = 2
 
 
@@ -142,7 +156,7 @@ async def _s2_cycle(run_dir: Path) -> None:
     from stages.s2_ml.features import build_windows, feature_columns
 
     s2_dir = RUNS / "s2_ml"
-    report = s2_dir / "locoeval.md"
+    report = s2_dir / "locoeval.json"
     if not report.exists():
         raise FileNotFoundError(
             f"No champion report at {report}. Run `python -m stages.s2_ml.train` first."
@@ -150,22 +164,14 @@ async def _s2_cycle(run_dir: Path) -> None:
 
     trials = load_dataset()
 
-    # An absent champion.json is seeded rather than fatal: the incumbent's number must have
-    # been produced by this gate's own code on this corpus, or the first challenger is
-    # correctly refused as incomparable and the cycle can never start; a champion that IS
-    # present but was measured over different ground is a different case and is left alone
-    # `decide()` refuses it loudly and says how to re-baseline, and silently re-seeding there
-    # would erase exactly the signal that the corpus moved under the metric
+    # an ABSENT champion is seeded; one measured over different ground is left for decide() to refuse
     champion = load_champion(s2_dir)
     if champion is None:
         seed(s2_dir, trials)
         champion = load_champion(s2_dir)
 
     report_md = report.read_text(encoding="utf-8")
-    # Only rows measured on THIS basis are the ledger the agents reason from; the sixteen
-    # inherited from the sibling repo go in as a separate, labelled block: their ideas still
-    # count as already-tried, but their outcomes are not findings about the current features
-    # the zeroing-family drop they record as a promotion is a regression here
+    # inherited rows go in a labelled block: already-tried ideas, but not findings about these features
     rows, prior_basis = ledger_by_basis(s2_dir, champion)
     prior = proposals(s2_dir)
     feats = feature_columns(build_windows(trials, champion_config(load_champion_spec())[0]))
@@ -237,9 +243,7 @@ async def _s2_cycle(run_dir: Path) -> None:
     try:
         spec = ExperimentSpec(
             name=proposal["name"], rationale=proposal["rationale"],
-            # NOT `or []`: that would collapse a null- "keep the champion's drops"- into an
-            # empty list, which means drop nothing; the two are different proposals and the
-            # difference is invisible in the ledger once made
+            # NOT `or []`: null means "keep the champion's drops", [] means drop nothing
             drop_features=proposal.get("drop_features"),
             window_s=proposal.get("window_s"), stride_s=proposal.get("stride_s"),
             model_params=proposal.get("model_params") or {},
@@ -258,12 +262,7 @@ async def _s2_cycle(run_dir: Path) -> None:
     print(f"[s2] {'PROMOTED' if promote else 'rejected'}: {why}")
     print(f"[s2] cost: experimenter ${ex_cost:.4f} + critic ${cr_cost:.4f}")
 
-    # A promotion rewrites `champion_spec.json`, and every artifact downstream of here
-    # `champion.joblib`, the reference stats `label.py` serves from, roweval's accuracy claim
-    #- still describes the model that just lost; refitting immediately is what keeps the
-    # rest of this run about one champion instead of two; it is also the loudest possible
-    # place for a promoted spec that `train.py` refuses to build: the declaration check runs
-    # here, seconds after the promotion, not on someone's next pull
+    # refit immediately, or the rest of the run describes the champion that just lost
     if promote:
         print("[s2] promoted - refitting the champion so downstream artifacts match it")
         subprocess.run([PY, "-m", "stages.s2_ml.train"], cwd=REPO_ROOT, check=True)
@@ -282,121 +281,82 @@ def _agent_step(coro) -> Callable[[], None]:
     return run
 
 
-# the ordered pipeline; order is load-bearing in one place: s2_roweval re-fits per held-out
-# rev and runs the real label.py, so it must follow s2_train, and it is the accuracy claim
-# S4 fusion was deleted 2026-08-04: it published a pair no customer CSV ever went through
-# S3 now does three things at three strengths: audits the ANNOTATIONS (strong), bounds a
-# FILE against the model (moderate), gates WINDOWS against it (weak, ships OFF)
-# the agents judge a deterministic stage's queue; none of them ever sees a number
+# the ordered pipeline; order is load-bearing once: s2_roweval refits per rev, so it follows s2_train
 def build_steps() -> list[Step]:
     return [
-        # First, and unconditional; it reads no data at all- it holds `features.swap_counts`
-        # (vectorized, all windows at once) to `rest.swap_count` (scalar, one window) on random
-        # signals, so it is the one check that costs ~2 s and cannot be invalidated by a change
-        # of corpus; running it before S1 means a broken vectorization stops the run in seconds
-        # rather than after the minutes it takes to clean
+        # first and unconditional: it reads no data, so a broken vectorization stops the run in seconds
         Step("verify_features",
-             [PY, "-m", "stages.s2_ml.verify_features"]),
-        # Same class as the check above and the same reason for sitting here: it reads no
-        # data, costs milliseconds, and holds a mechanism to its own reference rather than to
-        # a corpus; what it protects is `breakdown`'s staleness flag, whose failure mode is
-        # silence- a check that has quietly stopped firing looks exactly like a pipeline with
-        # nothing wrong, and every complaint it can make is exercised against a case built to
-        # trip it (`freshness.py`, negative control at the bottom of the file)
+             [PY, "-m", "stages.s2_ml.verify_features"],
+             desc="vectorized feature path vs its scalar reference", runtime="short"),
+        # same class, same reason: it guards `breakdown`'s staleness flag, whose failure mode is silence
         Step("verify_freshness",
-             [PY, "-m", "freshness", "--self-test"]),
+             [PY, "-m", "freshness", "--self-test"],
+             desc="the staleness checker still fires (self-test)", runtime="short"),
         Step("s1_census",
              [PY, "-m", "stages.s1_clean.run"],
-             gate=RUNS / "s1_census" / "census.md"),
+             gate=RUNS / "s1_census" / "manifest.jsonl",
+             desc="inventory data/raw: files, sessions, channels", runtime="medium"),
         Step("s1_clean",
              [PY, "-m", "stages.s1_clean.clean"],
-             gate=RUNS / "s1_clean" / "clean_report.md"),
+             gate=RUNS / "s1_clean" / "segments.jsonl",
+             desc="raw -> data/clean parquet + per-file channel trust", runtime="long"),
         Step("s1_exception",
-             fn=_agent_step(_s1_exception), agent=True),
-        # The bridge's MATH, before anything trains on it: the four `lpf_view` columns rebuilt
-        # from raw and compared to HUROTICS' own export on every paired recording; needs no
-        # model, so it runs here rather than after `s2_train`- a broken bridge should stop the
-        # run before it spends minutes fitting 400 trees on features it cannot reproduce
-        # On the spine since 2026-08-04, no longer a `--verify` opt-in: it is differential,
-        # not a stored number- each trial carries its own MATLAB reference, so a change of
-        # corpus changes its coverage and never its claim, and it fails loudly rather than
-        # vacuously when no pairs are left. It cost minutes and got skipped; that is the
-        # whole failure mode this repo has already lived through once
+             fn=_agent_step(_s1_exception), agent=True,
+             desc="triage the clean stage's exception queue", runtime="medium"),
+        # the bridge's MATH before anything trains on it; differential, so no corpus change stales it
         Step("verify_transform",
-             [PY, "-m", "stages.s2_ml.verify_transform"]),
+             [PY, "-m", "stages.s2_ml.verify_transform"],
+             desc="lpf_view columns rebuilt from raw vs the vendor export", runtime="long"),
         Step("s2_train",
              [PY, "-m", "stages.s2_ml.train"],
-             gate=RUNS / "s2_ml" / "locoeval.md"),
-        # The champion/challenger cycle, restored 2026-08-04; it needs a champion report to
-        # reason from and a refit to follow a promotion, so it sits directly after `s2_train`
-        # and before everything that consumes the champion; the gate is `experiments.jsonl`
-        # rather than a promotion: a cycle whose challenger lost did its job, and the ledger
-        # entry recording WHY is the artifact- it is what stops the next cycle spending
-        # another fit on the same idea
+             gate=RUNS / "s2_ml" / "locoeval.json",
+             desc="fit the champion and LOCO-evaluate it", runtime="long"),
+        # the champion/challenger cycle; the artifact is the ledger entry, not a promotion
         Step("s2_experiment",
              fn=_agent_step(_s2_cycle), agent=True,
-             gate=RUNS / "s2_ml" / "experiments.jsonl"),
-        # what a caller actually GETS, a different claim from the one above: gap
-        # segmentation, decimation, the rest reference and the ensemble all sit between
-        # "the serve path works" and "works on 86% of the corpus" are different claims
-        # Also on the spine since 2026-08-04: it compares two code paths against each other
-        # over whatever data is present, so there is no golden number in it to go stale
+             gate=RUNS / "s2_ml" / "experiments.jsonl",
+             desc="champion/challenger cycle; code decides promotion", runtime="super long"),
+        # what a caller actually GETS; differential like the check above, so no golden number can stale
         Step("verify_serve",
-             [PY, "-m", "stages.s2_ml.verify_serve"]),
-        # The accuracy claim; runs the real `label.py` per held-out rev over ~1.27M rows and
-        # writes the curve, the per-subject table and the reason validation that
-        # `OPERATING_POINTS.md` quotes; it was never a pipeline step before 2026-08-04, which
-        # meant a full run produced a fusion report nobody shipped and never regenerated the
-        # numbers the deliverable is actually sold on
+             [PY, "-m", "stages.s2_ml.verify_serve"],
+             desc="one recording labelled both ways, row for row", runtime="super long"),
+        # the accuracy claim: the real `label.py` per held-out rev, and the curve OPERATING_POINTS quotes
         Step("s2_roweval",
              [PY, "-m", "stages.s2_ml.roweval"],
-             gate=RUNS / "s2_ml" / "roweval_loro.md"),
-        # The same claim for the route a caller actually uses; `s2_roweval` scores the
-        # annotated `lpf_view` export and `verify_serve` shows the raw route matches it, so
-        # the raw path's accuracy was an inference off two artifacts rather than a
-        # measurement; this labels the raw device CSVs that have a human annotation and
-        # scores them against it; refuses the lockbox in code, so it is repeatable
-        # unlike `roweval --lockbox`, it may run on every pipeline pass
+             gate=RUNS / "s2_ml" / "roweval_loro.json",
+             desc="THE accuracy claim: real label.py per held-out rev",
+             runtime="super long"),
+        # the same claim for the raw route, measured rather than inferred; refuses the lockbox in code
         Step("s2_raweval",
              [PY, "-m", "stages.s2_ml.raweval"],
-             gate=RUNS / "s2_ml" / "raweval.md"),
-        # S3's own opinion, pointed at the ANNOTATIONS rather than at the classifier; it calls
-        # `anchors.trial_anchors` in process, so it needs no anchors artifact; it also emits
-        # `label_audit_windows.jsonl`- the specific windows a human should adjudicate with
-        # `inspect_window`, which is what makes a trial-level flag actionable instead of
-        # leaving a reader to binary-search 60 windows by hand
+             gate=RUNS / "s2_ml" / "raweval.json",
+             desc="the same claim on the raw device route", runtime="super long"),
+        # S3 pointed at the ANNOTATIONS, and it names the windows a human should adjudicate
         Step("s3_label_audit",
              [PY, "-m", "stages.s3_physics.label_audit"],
-             gate=RUNS / "s3_physics" / "label_audit.md"),
-        # ...and the consumer for those nominations; the audit deliberately stops at "go
-        # look"- the swap rule can be wrong about a window, so it hands over the raw trace
-        # instead of a decision- which left its flags sitting unadjudicated; this assigns
-        # each flagged trial a cause and says whether a person is needed; it reads
-        # `label_audit.json`, so it follows the audit; it publishes no number, so it can
-        # never become a second proof competing with `s2_roweval`
+             gate=RUNS / "s3_physics" / "label_audit.json",
+             desc="physics vs annotations: which trials contradict themselves",
+             runtime="medium"),
+        # ...and the consumer for those nominations: a cause per flagged trial, and no number at all
         Step("s3_label_review",
-             fn=_agent_step(_s3_label_review), agent=True),
-        # Is an anchor describing the body, or the sampling grid? Restored 2026-08-04 with
-        # its own CLI: it was deleted with S4 because its DRIVER (`s3_physics/run.py`) also
-        # built the fusion join's anchor table, but the audit itself answers a question that
-        # has nothing to do with fusion; is the cost of not asking it- an experiment
-        # once read clustering that partitioned by acquisition rate and was measuring the
-        # clock; `gyro_energy` is the negative control and is expected to FAIL
+             fn=_agent_step(_s3_label_review), agent=True,
+             desc="assign a cause to what the audit flagged", runtime="medium"),
+        # is an anchor describing the body or the sampling grid? `gyro_energy` is expected to FAIL
         Step("s3_rate_audit",
              [PY, "-m", "stages.s3_physics.rate_audit"],
-             gate=RUNS / "s3_physics" / "rate_audit.md"),
-        # the serve path's file-level sanity bounds, run against their own controls
-        # --control injects synthetic channel faults and reports which bounds catch them
-        # a bound that has never fired is not evidence the data is clean
+             gate=RUNS / "s3_physics" / "rate_audit.json",
+             desc="is an anchor describing the body or the sampling grid?", runtime="medium"),
+        # the serve path's file-level bounds against their own controls; an unfired bound is no evidence
         Step("s3_plausibility",
              [PY, "-m", "stages.s3_physics.plausibility", "--calibrate", "--control"],
-             gate=RUNS / "s3_physics" / "plausibility.json"),
-        # Last, and it reads every stage above rather than producing anything of its own
-        # Deterministic, so it runs on a free spine too: the run that most needs one page
-        # saying what happened is the one nobody paid for an agent to review
+             gate=RUNS / "s3_physics" / "plausibility.json",
+             desc="file-level sanity bounds, checked against injected faults",
+             runtime="medium"),
+        # last, reading every stage above; deterministic, so an unpaid run still gets its one page
         Step("breakdown",
              [PY, "-m", "stages.breakdown"],
-             gate=RUNS / "breakdown.md"),
+             gate=RUNS / "breakdown.md",
+             desc="one page over every stage above", runtime="short"),
     ]
 
 
@@ -405,8 +365,7 @@ def select(steps: list[Step], with_agents: bool, start_at: str | None) -> list[S
     if start_at is not None:
         keys = [s.key for s in out]
         if start_at not in keys:
-            # Naming an opt-in step without its flag is the common mistake, and it is not a
-            # typo- say which flag brings it back rather than listing the rest
+            # naming an opt-in step without its flag is not a typo- say which flag brings it back
             missing = next((s for s in steps if s.key == start_at), None)
             if missing is not None:
                 sys.exit(
@@ -414,10 +373,34 @@ def select(steps: list[Step], with_agents: bool, start_at: str | None) -> list[S
                     f"needs --with-agents.\n"
                     f"      python run_pipeline.py --from {start_at} --with-agents"
                 )
-            sys.exit(f"[run] --from {start_at}: no such step. "
-                     f"Selected: {', '.join(keys)}")
+            sys.exit(f"[run] --from {start_at}: no such step.\n"
+                     f"      python run_pipeline.py --keys  lists them")
         out = out[keys.index(start_at):]
     return out
+
+
+# the --from menu: ALL keys in run order, since filtering by an unpassed flag hides what you came for
+def print_keys(steps: list[Step]) -> None:
+    # a bucket missing from RUNTIMES prints blank and reads as "instant", so a typo stops it here
+    bad = [s.key for s in steps if s.runtime not in RUNTIMES]
+    if bad:
+        sys.exit(f"[run] --keys: unknown runtime bucket on {', '.join(bad)}; "
+                 f"expected one of {', '.join(RUNTIMES)}")
+
+    kw = max(len(s.key) for s in steps)
+    rw = max(len(s.runtime) for s in steps)
+    print(f"{len(steps)} steps, in run order. `--from KEY` starts at one and runs "
+          f"everything after it.\n")
+    for s in steps:
+        tag = " (agent)" if s.agent else ""
+        print(f"  {s.key:<{kw}}  {s.runtime:<{rw}}  {s.desc}{tag}")
+    print("\nruntime is a relative scale, not a measurement- every step scales with how much "
+          "raw data\nyou have, so these hold their ORDER as the corpus grows, not their "
+          "wall-clock:")
+    for name, meaning in RUNTIMES.items():
+        print(f"  {name:<{rw}}  {meaning}")
+    print("\n(agent) steps need --with-agents, and spend API credit.")
+    print("--dry-run prints the exact command each one runs.")
 
 
 # fail fast with a clear message, before spending any time or any credit
@@ -452,9 +435,7 @@ def run_step(step: Step, dry_run: bool) -> bool:
 
     start = time.time()
     if step.fn is not None:
-        # In-process, so an exception is the failure signal rather than an exit code; caught
-        # here for the same reason a non-zero rc is: one step failing must stop the run with a
-        # resume hint, not unwind through the runner and lose which step it was
+        # in-process, so an exception is the failure signal; caught here to stop with a resume hint
         try:
             step.fn()
         except Exception as exc:
@@ -476,17 +457,10 @@ def run_step(step: Step, dry_run: bool) -> bool:
     return True
 
 
-# run the H-CARE pipeline end to end, from data/raw to runs/breakdown.md
-# no argparse: --dry-run already lists every step and the exact command it runs
-# an unrecognized flag must still be an error, not a silent no-op
-#   --with-agents  also run the paid agent steps (needs the API key)
-#   --from KEY     resume at this step; --dry-run lists the keys
-#   --dry-run      print each command without running it
-# `--verify` was removed 2026-08-04 and its two steps folded into the spine; a run that
-# still passes it fails by the rule above rather than quietly skipping the checks again
-USAGE = "usage: run_pipeline.py [--with-agents] [--from KEY] [--dry-run]"
+# run the pipeline end to end, data/raw -> runs/breakdown.md; an unrecognized flag is an error
+USAGE = "usage: run_pipeline.py [--with-agents] [--keys] [--from KEY] [--dry-run]"
 
-_FLAGS = {"--with-agents": "with_agents", "--dry-run": "dry_run"}
+_FLAGS = {"--with-agents": "with_agents", "--keys": "keys", "--dry-run": "dry_run"}
 
 
 # the parsed command line; plain attributes, same names argparse produced
@@ -494,11 +468,12 @@ class _Args:
 
     def __init__(self) -> None:
         self.with_agents = False
+        self.keys = False
         self.dry_run = False
         self.start_at: str | None = None
 
 
-# three flags, by hand; anything unrecognized exits 2 rather than being ignored
+# four flags, by hand; anything unrecognized is an error rather than ignored
 def _parse_args(argv: list[str]) -> _Args:
     args = _Args()
     it = iter(argv)
@@ -506,12 +481,11 @@ def _parse_args(argv: list[str]) -> _Args:
         if tok in _FLAGS:
             setattr(args, _FLAGS[tok], True)
         elif tok == "--from" or tok.startswith("--from="):
-            # `--from KEY` and `--from=KEY` both, because half-supporting one spelling is how a
-            # resume silently becomes a full re-run
+            # both spellings: half-supporting one is how a resume silently becomes a full re-run
             value = tok[len("--from="):] if "=" in tok else next(it, None)
             if not value:
                 sys.exit(f"{USAGE}\nrun_pipeline.py: error: --from needs a step key "
-                         f"(--dry-run lists them)")
+                         f"(--keys lists them)")
             args.start_at = value
         else:
             sys.exit(f"{USAGE}\nrun_pipeline.py: error: unrecognized argument: {tok}")
@@ -521,15 +495,19 @@ def _parse_args(argv: list[str]) -> _Args:
 def main() -> None:
     args = _parse_args(sys.argv[1:])
 
-    # Stage and agent text carries characters the cp949 console cannot encode; never let a stray
-    # print crash a run that has already been paid for; see stages/console.py
+    # stage text carries characters cp949 cannot encode; a stray print must not crash a paid run
     use_replacement_encoding()
 
-    selected = select(build_steps(), args.with_agents, args.start_at)
+    steps = build_steps()
 
-    # A dry run reads nothing and spends nothing, so it must not require raw data or a key
-    # it is now also the way to see the step keys `--from` accepts, which has to work on a
-    # checkout with no data in it yet
+    # before select() and preflight: it must work on a checkout with no data and no key
+    if args.keys:
+        print_keys(steps)
+        return
+
+    selected = select(steps, args.with_agents, args.start_at)
+
+    # a dry run reads nothing and spends nothing, so it must not require raw data or a key
     if not args.dry_run:
         preflight(selected)
 
@@ -545,10 +523,7 @@ def main() -> None:
 
     print(f"\n[run] done: {len(selected)} steps in {time.time() - started:.1f}s")
 
-    # The staleness check used to live here, against `runs/s4_fusion` by name; it moved out with
-    # the stage rather than being repointed: `breakdown` runs last and already calls the same
-    # `check_all` over every `runs/*` directory carrying an `_inputs.json`, so a hardcoded second
-    # copy could only ever cover less than the generic one and go stale the same way this one did
+    # the staleness check lives in `breakdown` now: a hardcoded second copy could only cover less
     report = RUNS / "breakdown.md"
     if report.exists():
         print(f"[run] report -> {report.relative_to(REPO_ROOT)}")

@@ -1,5 +1,4 @@
-# segment at gaps, then onto the canonical 100 Hz grid
-# never resample across a gap; never downsample without anti-aliasing
+# segment at gaps then resample to 100 Hz; never across a gap, never down without anti-aliasing
 
 from __future__ import annotations
 
@@ -59,8 +58,7 @@ def measure_hz(t: np.ndarray) -> float:
     return 1000.0 / med if med > 0 else float("nan")
 
 
-# snap to a nominal rate, None if it fits nowhere; not named *_family: that
-# word is the header family here, and it made the drop reason below misread
+# snap to a nominal rate, None if it fits nowhere; not *_family- that word means header family here
 def nominal_rate(hz: float) -> float | None:
     if not np.isfinite(hz):
         return None

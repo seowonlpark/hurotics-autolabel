@@ -1,7 +1,4 @@
-# locoeval: the blind measure layer- objective numbers, NO opinion
-# headline is macro-F1; the corpus is ~86% walk, so accuracy alone rewards a stub
-# an accuracy without the coverage it was bought at is meaningless
-# worst_rev_accuracy is the honest floor for the next person who wears the device
+# locoeval: blind measure layer, NO opinion- macro-F1 leads, since ~86% walk rewards a stub
 
 from __future__ import annotations
 
@@ -46,8 +43,7 @@ class EvalResult:
     confusion: dict[str, dict[str, int]]
     unknown_frac_mean: float
     per_rev_macro_f1: dict[str, float] = field(default_factory=dict)
-    # reported ALONGSIDE macro-F1, never instead of it: accuracy alone rewards the
-    # degenerate model, macro-F1 alone hides how much of a subject is called right
+    # ALONGSIDE macro-F1, never instead: accuracy rewards the degenerate model, macro-F1 hides subjects
     per_rev_accuracy: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -103,8 +99,7 @@ def evaluate(y_true: np.ndarray, y_pred: np.ndarray,
     )
 
 
-# coverage vs accuracy as the abstention threshold moves; confidence is max(p, 1-p), so
-# threshold 0.5 is no abstention and the first row is the full-coverage baseline
+# coverage vs accuracy as the threshold moves; confidence is max(p, 1-p), so 0.5 is no abstention
 def selective_curve(y_true: np.ndarray, p_walk: np.ndarray,
                     groups: np.ndarray | None = None,
                     thresholds: tuple[float, ...] = DEFAULT_THRESHOLDS) -> list[dict]:

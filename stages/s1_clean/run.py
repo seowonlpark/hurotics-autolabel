@@ -1,6 +1,4 @@
-# S1 census + manifest;  python -m stages.s1_clean.run
-# writes manifest.jsonl + census.md, both for humans; the load-bearing product is
-# census.py's fingerprint/family_of, which downstream imports directly
+# S1 census + manifest (python -m stages.s1_clean.run); fingerprint/family_of is the real product
 
 from __future__ import annotations
 
@@ -8,8 +6,10 @@ import argparse
 import json
 from pathlib import Path
 
+from freshness import stamp_inputs
 from stages.s1_clean.census import build_registry
 from stages.s1_clean.manifest import profile_file
+from stages.report import add_report_flag
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 S1_CENSUS_OUT_DIR = REPO_ROOT / "runs" / "s1_census"
@@ -66,6 +66,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--raw", default="data/raw")
     ap.add_argument("--out", type=Path, default=S1_CENSUS_OUT_DIR)
+    add_report_flag(ap)
     args = ap.parse_args()
 
     raw_dir = (REPO_ROOT / args.raw).resolve()
@@ -92,7 +93,13 @@ def main() -> None:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             print(f"[s1] {i}/{len(paths)} {row['path']}")
 
-    write_census_md(registry, rows, out_dir / "census.md")
+    if args.report:
+        write_census_md(registry, rows, out_dir / "census.md")
+
+    # Empty by declaration, not by omission: the only upstream is the `data/raw` tree, which
+    # is thousands of files rather than an artifact to hash. Stamping says this was checked
+    # and has nothing to declare, which is what keeps it out of breakdown's unchecked list.
+    stamp_inputs(out_dir, {}, stage="s1_census")
 
     errs = [r for r in rows if "read_error" in r]
     print(f"[s1] done. {len(rows)} rows, {len(errs)} read errors -> {out_dir}")

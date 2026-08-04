@@ -130,8 +130,7 @@ def _handled_divergent(rev: str, trial: int) -> dict:
                     "scored against, and nothing anywhere subtracts it")
 
 
-# separates swapped_channel (wrong everywhere) from misaligned_label_track
-# (wrong in a stretch); disagree_frac says how much, never where
+# separates swapped_channel (wrong everywhere) from misaligned_label_track (wrong in a stretch)
 def _spread(rec: dict) -> float | None:
     span = (rec.get("t_last_s") or 0) - (rec.get("t_first_s") or 0)
     bad = (rec.get("contradict_t_last_s") or 0) - (rec.get("contradict_t_first_s") or 0)

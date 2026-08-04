@@ -90,8 +90,7 @@ def parse_review(final_text: str) -> dict | None:
     return extract_json_object(final_text)
 
 
-# persist the review; an unparseable review becomes a revise, never an approve; `name` lets a
-# post-revision critique write to a distinct file so the first is not overwritten
+# persist the review; unparseable => revise, never approve; `name` keeps earlier files intact
 def write_review(out_dir: Path, review: dict | None, final_text: str,
                  name: str = REVIEW_FILENAME) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)

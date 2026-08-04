@@ -1,7 +1,4 @@
-# per-file gyro trust + unit normalization, all MEASURED, never asserted
-# this module does NOT know what sagittal means- that's per hardware rev, lives in
-# transform.py; conflating the two is what made the old `sagittal_gyro_axis` wrong
-# too static to fit => abstain to the documented convention, and record that it did
+# per-file gyro trust + unit normalization, all MEASURED; sagittality is transform.py's, not ours
 
 from __future__ import annotations
 
@@ -63,16 +60,14 @@ def _corr(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.corrcoef(x, y)[0, 1])
 
 
-# one side's Deg->Gyro permutation + unit, from the data; NOT the sagittal axis
-# None if the channels are absent; else method is 'detected' or 'fallback_documented'
+# one side's Deg->Gyro permutation + unit from the data; None if absent, else detected/fallback
 def detect_side(df: pd.DataFrame, side: str) -> dict | None:
     got = _pooled(df, side)
     if got is None:
         return None
     ddeg, gyro = got
 
-    # r-floor applied PER AXIS, not once to the side- Deg_Z is routinely noise,
-    # and scoring the side whole would launder that into a confident-looking anomaly
+    # r-floor PER AXIS, not once per side: Deg_Z is routinely noise and would launder into an anomaly
     match: dict[str, str | None] = {}
     r_by_axis: dict[str, float] = {}
     for A in GYRO_AXES:
@@ -108,8 +103,7 @@ def detect_side(df: pd.DataFrame, side: str) -> dict | None:
         "gyro_axis_by_deg_axis": match,
         "resolved_deg_axes": resolved,
         "r_by_deg_axis": {A: round(r, 4) for A, r in r_by_axis.items()},
-        # only claimable when all three answered- two axes on one gyro is a
-        # degenerate detection, not an exotic device
+        # only claimable when all three answered- two axes on one gyro is degenerate, not exotic
         "is_bijection": (len(resolved) == len(GYRO_AXES)
                          and len({match[A] for A in resolved}) == len(GYRO_AXES)),
         "conflicts_with_documented": conflicts,
@@ -159,8 +153,7 @@ def detect_drift(df: pd.DataFrame) -> dict:
     return {"min_segment_s": DRIFT_MIN_SEGMENT_S, "sides": sides, "contaminated": contaminated}
 
 
-# unit-only normalization; axes are NOT reordered and sign is left intact- both are
-# recorded instead, so polarity is never silently flipped
+# unit-only: axes are NOT reordered and sign is left intact, both recorded instead of flipped
 def detect_and_normalize(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     out = df.copy()
     sides: dict[str, dict] = {}

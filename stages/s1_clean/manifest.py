@@ -1,5 +1,4 @@
-# per-file measurement; numbers only, no verdicts
-# two rate estimates because they legitimately disagree- one number would hide it
+# per-file measurement, numbers only; two rate estimates because they legitimately disagree
 
 from __future__ import annotations
 

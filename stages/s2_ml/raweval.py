@@ -1,7 +1,4 @@
-# end-to-end accuracy of the RAW DEVICE path, scored against human labels
-#   python -m stages.s2_ml.raweval
-# the lockbox is refused in code, and no subject is scored by a model that saw it
-# read this next to roweval's number, not next to the lockbox one
+# end-to-end accuracy of the RAW DEVICE path vs human labels; python -m stages.s2_ml.raweval
 
 from __future__ import annotations
 
@@ -15,7 +12,9 @@ import numpy as np
 import pandas as pd
 
 from stages.console import use_replacement_encoding
+from stages.report import add_report_flag
 from stages.s2_ml.dataset import (
+    CLASS_NAME,
     DEFAULT_LOCKBOX_REVS,
     EXCLUDED_TRIALS,
     LABEL_COL,
@@ -29,15 +28,15 @@ from stages.s2_ml.dataset import (
     trial_of,
 )
 from stages.s2_ml.features import WindowSpec, build_windows, feature_columns
-from stages.s2_ml.label import DEFAULT_MODEL_DIR, label_csv
-from stages.s2_ml.locoeval import DEFAULT_THRESHOLDS
+from stages.s2_ml.label import label_csv
 from stages.s2_ml.roweval import fit_on
-from stages.s2_ml.train import PRESETS, load_spec, select_features, trainable
+from freshness import stamp_inputs
+from stages.s2_ml.train import (
+    CHAMPION_SPEC_PATH, PRESETS, load_spec, select_features, trainable,
+)
 from stages.s2_ml.verify_transform import find_pairs, index_raw_files
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-CLASS_NAME = {STAND: "stand", WALK: "walk"}
 
 
 # paired recordings, minus every sealed rev
@@ -275,6 +274,7 @@ def main() -> None:
     use_replacement_encoding()   # the lockbox notice prints a section sign
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="runs/s2_ml")
+    add_report_flag(ap)
     ap.add_argument("--threshold", type=float, default=PRESETS["balanced"])
     ap.add_argument("--no-baseline", action="store_true",
                     help="skip the matched-subject roweval comparison")
@@ -335,8 +335,14 @@ def main() -> None:
                          for a, r, _d, v in pairs],
                "transitive_lpf_view": transitive, **res}
     (out_dir / "raweval.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    (out_dir / "raweval.md").write_text(
-        render(res, args.threshold, pairs, transitive), encoding="utf-8")
+    if args.report:
+        (out_dir / "raweval.md").write_text(
+            render(res, args.threshold, pairs, transitive), encoding="utf-8")
+
+    # Per-rev models are fitted into a temp dir and thrown away, so the spec is the only
+    # upstream that can move under this report -- and it is what decides every fit above.
+    stamp_inputs(out_dir, {"champion_spec": CHAMPION_SPEC_PATH}, stage="raweval")
+
     print(f"[rawe] artifacts -> {out_dir}")
 
 

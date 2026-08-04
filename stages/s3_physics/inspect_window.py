@@ -1,6 +1,4 @@
-# print the raw interleg trace around one suspect window, for a human to adjudicate
-#   python -m stages.s3_physics.inspect_window rev6 6 --t 522.2
-# a READER: it computes no verdict and writes nothing
+# print the raw interleg trace around one suspect window; python -m stages.s3_physics.inspect_window
 
 from __future__ import annotations
 
@@ -10,9 +8,11 @@ import numpy as np
 import pandas as pd
 
 from stages.s2_ml.dataset import (
+    CLASS_NAME,
     DEFAULT_LOCKBOX_REVS,
     EXCLUDED_TRIALS,
     FEATURES,
+    HUMAN_UNKNOWN,
     LABEL_COL,
     LABELED_DIR,
     TIME_COL,
@@ -25,9 +25,13 @@ from stages.s2_ml.dataset import (
 from stages.console import use_replacement_encoding
 from stages.s2_ml.features import rest_reference
 from stages.s2_ml.rest import SWAP_DELTA_DEG
-from stages.s1_clean.config import CANONICAL_HZ
+from stages.s1_clean.config import CANONICAL_HZ, LABEL_UNKNOWN_MACHINE
 
-CLASS_NAME = {0: "stand", 10: "walk", -1: "human_unknown", 255: "machine_unknown"}
+# the trained pair plus both unknowns, built from the codes rather than restating them: this is a
+# debugging printer, and a printer that disagrees with the vocabulary is worse than no printer
+LABEL_NAME = {**CLASS_NAME,
+              HUMAN_UNKNOWN: "human_unknown",
+              LABEL_UNKNOWN_MACHINE: "machine_unknown"}
 
 
 # index of every commit past +delta or -delta, as the swap count sees them
@@ -45,12 +49,7 @@ def crossings(d: np.ndarray, delta: float = SWAP_DELTA_DEG) -> np.ndarray:
 
 def inspect(rev: str, trial_no: int, t_center_s: float, span_s: float = 12.0,
             every_ms: int = 100) -> None:
-    # `excluded=set()`, and it is load-bearing rather than defensive; `find_trials` applies
-    # `EXCLUDED_TRIALS` by default, so with the default this tool could not open the one
-    # trial in the corpus that has been excluded- while the entry in `EXCLUDED_TRIALS`
-    # asks for exactly the internal, model-free evidence this module prints, and re-checking
-    # an old exclusion is as legitimate as justifying a new one; a READER that hides the
-    # quarantine cannot audit the quarantine
+    # `excluded=set()` is load-bearing: a READER that hides the quarantine cannot audit it
     paths = [p for p in find_trials(LABELED_DIR, excluded=set())
              if rev_of(p) == rev and trial_of(p) == trial_no]
     if not paths:
@@ -58,13 +57,11 @@ def inspect(rev: str, trial_no: int, t_center_s: float, span_s: float = 12.0,
     if (rev, trial_no) in EXCLUDED_TRIALS:
         print(f"NOTE: {rev} trial {trial_no} is in dataset.EXCLUDED_TRIALS — it trains "
               f"nothing and is scored nowhere. You are reading it to check that call.\n")
-    # The trial's real split, not a made-up one: `Trial.split` is a three-value field and
-    # inventing a fourth value here would make the record lie about a lockbox trial
-    trial = load_trial(paths[0], assign_split(rev, DEFAULT_LOCKBOX_REVS, ()))
+    # the trial's real split: inventing a fourth value would make the record lie about a lockbox trial
+    trial = load_trial(paths[0], assign_split(rev, DEFAULT_LOCKBOX_REVS))
     frame = trial.frame.reset_index(drop=True)
 
-    # The SAME rest zero S2 and S3 use; measuring a fresh one here would adjudicate the
-    # window against an origin neither stage used
+    # the SAME rest zero S2 and S3 use; a fresh one would adjudicate against an origin neither used
     _zeros, center, trusted = rest_reference(frame, CANONICAL_HZ)
 
     t = frame[TIME_COL].to_numpy(float) / 1000.0
@@ -88,7 +85,7 @@ def inspect(rev: str, trial_no: int, t_center_s: float, span_s: float = 12.0,
           f"(the rule needs >=2 within one span to say WALKING)")
     seg = sub["segment"].unique() if "segment" in sub else []
     print(f"segments present: {list(seg)}   labels present: "
-          f"{[CLASS_NAME.get(int(v), v) for v in sorted(labels.dropna().unique())]}\n")
+          f"{[LABEL_NAME.get(int(v), v) for v in sorted(labels.dropna().unique())]}\n")
 
     step = max(1, int(round(every_ms * CANONICAL_HZ / 1000)))
     mark = np.zeros(len(sub), dtype=bool)
@@ -99,7 +96,7 @@ def inspect(rev: str, trial_no: int, t_center_s: float, span_s: float = 12.0,
         lab = labels.iloc[i]
         flag = "  <<< commit" if mark[j].any() else ""
         print(f"{ts[i]:>9.2f}{l[i]:>9.2f}{r[i]:>9.2f}{d[i]:>9.2f}  "
-              f"{CLASS_NAME.get(int(lab), '-') if pd.notna(lab) else '-':<14}{flag}")
+              f"{LABEL_NAME.get(int(lab), '-') if pd.notna(lab) else '-':<14}{flag}")
 
     if len(xs) >= 2:
         gaps = np.diff(ts[xs])

@@ -1,6 +1,4 @@
-# row-level evaluation of the labelling path, including the abstention reasons
-#   python -m stages.s2_ml.roweval [--lockbox]   # --lockbox is SINGLE USE
-# scores the shipping path over real rows, where train.py scores windows
+# row-level eval of the labelling path, abstentions included; python -m stages.s2_ml.roweval
 
 from __future__ import annotations
 
@@ -18,8 +16,11 @@ from stages.s2_ml.label import PHYSICS_FLOOR_THRESHOLD, explain, score_frame
 from stages.s3_physics.serve import STANDING, WALKING
 from stages.s2_ml.locoeval import DEFAULT_THRESHOLDS
 from stages.s2_ml import transitions as transitions_mod
+from stages.report import add_report_flag
+from freshness import stamp_inputs
 from stages.s2_ml.train import (
-    PRESETS, build_model, load_spec, reference_stats, select_features, trainable,
+    CHAMPION_SPEC_PATH, PRESETS, build_model, load_spec, reference_stats, select_features,
+    trainable,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -67,9 +68,7 @@ PHYSICS_POLICIES = {
     "both": (True, True),
 }
 
-# Fine grid for the matched-coverage comparison; `DEFAULT_THRESHOLDS` is the reporting grid
-# and is far too coarse to find the threshold that matches a gated policy's coverage- the
-# comparison would then be decided by which grid point happened to land nearest
+# fine grid for the matched-coverage comparison; `DEFAULT_THRESHOLDS` is too coarse to match one
 _MATCH_GRID = np.round(np.arange(0.50, 1.0001, 0.0025), 4)
 
 
@@ -123,11 +122,7 @@ def physics_gate_table(df: pd.DataFrame, threshold: float) -> dict:
                   **point(_committed_under(v, conf, t, False, False))}
                  for t in _MATCH_GRID]
 
-    # **Swept across thresholds, not evaluated at one.** The standing objection to a
-    # physics ceiling is explicitly threshold-conditional- "physics contradicts ~12% of
-    # S2's high-confidence errors, and at p >= 0.95 none"- so a table at a single
-    # operating point cannot confirm or refute it; it is also the shape of mistake this
-    # module exists to prevent: a policy measured only where it happens to look good
+    # **Swept across thresholds, not one.** The physics objection is explicitly threshold-conditional
     by_threshold = []
     for thr in DEFAULT_THRESHOLDS:
         base_k = _committed_under(v, conf, thr, False, False)
@@ -137,10 +132,7 @@ def physics_gate_table(df: pd.DataFrame, threshold: float) -> dict:
             pt = point(_committed_under(v, conf, thr, ceiling, floor))
             entry = {"policy": name, "ceiling": ceiling, "floor": floor, **pt}
             if name != "off":
-                # Nearest OFF operating point by coverage; nearest rather than
-                # interpolated: `errors_kept` is a count over a specific row set, and
-                # interpolating it would invent an error count for a threshold nobody
-                # evaluated
+                # nearest OFF point by coverage; interpolating `errors_kept` would invent a count
                 m = min(off_sweep, key=lambda r: abs(r["coverage"] - pt["coverage"]))
                 entry["matched_off"] = m
                 entry["errors_vs_matched_off"] = pt["errors_kept"] - m["errors_kept"]
@@ -148,9 +140,7 @@ def physics_gate_table(df: pd.DataFrame, threshold: float) -> dict:
             arms.append(entry)
         by_threshold.append({
             "threshold": float(thr),
-            # The ceiling's entire addressable set at this threshold: of the errors the
-            # ungated policy commits to, how many does the physics object to? If this is
-            # zero the ceiling cannot help here no matter how it is tuned
+            # the ceiling's addressable set here: of the errors committed to, how many does it object to
             "committed_errors": ce,
             "committed_errors_contradicted": int((~correct & contradicts & base_k).sum()),
             "policies": arms,
@@ -207,12 +197,7 @@ def per_rev(df: pd.DataFrame, threshold: float) -> list[dict]:
     for r in sorted(pd.unique(revs)):
         m = revs == r
         km = k & m
-        # Per-class recall on the committed rows; `confusion` says the residual failure is
-        # one-directional and tells the reader to watch stand recall rather than accuracy
-        # and then reported it pooled, so no row here said WHICH subject it was failing on
-        # The lockbox is the reason that matters: rev8's stand recall is 0.5752 against a
-        # walk recall of 1.0000 (`OPERATING_POINTS.md`), a split invisible in its 0.9308
-        # accuracy, and nothing measured whether the development subjects share the shape
+        # per-class recall on committed rows: rev8's stand recall 0.5752 hides inside 0.9308 accuracy
         per_class = {}
         for cls, name in ((STAND, "stand"), (WALK, "walk")):
             in_cls = km & (truth == cls)
@@ -420,6 +405,7 @@ def render(tag: str, c: list[dict], reasons: pd.DataFrame, unk: dict, revs: list
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="runs/s2_ml")
+    add_report_flag(ap)
     ap.add_argument("--threshold", type=float, default=PRESETS["balanced"])
     ap.add_argument("--lockbox", action="store_true",
                     help="SINGLE USE: fit on all training revs, score the sealed revs")
@@ -431,12 +417,7 @@ def main() -> None:
     trials = load_dataset()
     spec = WindowSpec()
     windows = build_windows([t for t in trials if t.split == "train"], spec)
-    # The CHAMPION's feature set, not every column `build_windows` emits; until 2026-08-04
-    # this took all 42 and so reported the accuracy of a model that is not the one shipped
-    #- the four moments `champion_spec.json` drops were silently back in; the ablation
-    # puts the two inside the noise band, which is why it survived unnoticed and is also
-    # why it had to be fixed rather than argued away: a headline that happens to be right
-    # for a reason nobody checked is not measurably different from one that is wrong
+    # the CHAMPION's feature set, not all 42 columns `build_windows` emits (wrong until 2026-08-04)
     feats = select_features(feature_columns(windows), load_spec()["drop_features"])
     train_df = trainable(windows, "train")
 
@@ -507,33 +488,32 @@ def main() -> None:
                   f"errors {r['errors_kept']:,}  vs threshold-only at matched coverage: "
                   f"{r['errors_vs_matched_off']:+,}")
 
-    # What `near_transition` is actually made of; computed HERE, on this scoring pass,
-    # rather than by a module with its own CLI: it times the annotated boundaries against
-    # the predictions in `df`, and a second leave-one-rev-out pass would let a refit drift
-    # between the coverage curve and the timing table and read as a timing effect; it owns
-    # its own artifact so no number has two homes
+    # what `near_transition` is made of, computed on THIS pass so no refit can drift between tables
     print()
     t_spec = WindowSpec(window_s=base_meta["window_s"],
                         stride_s=base_meta["inference_stride_s"],
                         fs_hz=base_meta["fs_hz"])
     t_stem = "transitions_lockbox" if args.lockbox else "transitions_loro"
-    t_sum = transitions_mod.run(df, t_spec, out_dir, t_stem, tag)
+    t_sum = transitions_mod.run(df, t_spec, out_dir, t_stem, tag, report=args.report)
     transitions_mod.print_summary(t_sum)
 
     stem = "roweval_lockbox" if args.lockbox else "roweval_loro"
-    (out_dir / f"{stem}.md").write_text(
-        render(tag, c, reasons, unk, revs, by_rev, args.threshold, conf, gate),
-        encoding="utf-8")
+    if args.report:
+        (out_dir / f"{stem}.md").write_text(
+            render(tag, c, reasons, unk, revs, by_rev, args.threshold, conf, gate),
+            encoding="utf-8")
     (out_dir / f"{stem}.json").write_text(json.dumps(
         {"tag": tag, "threshold": args.threshold, "revs": revs,
-         # Recorded so a stale artifact can be identified as stale; the feature set moved
-         # on 2026-08-04 and the lockbox arm could not be re-run to follow it, so
-         # "which model produced this curve" stopped being answerable from the file
+         # recorded so a stale artifact is identifiable: which model produced this curve
          "n_features": len(feats), "features": feats,
          "curve": c,
          "per_rev": by_rev, "confusion": conf, "reasons": reasons.to_dict("records"),
          "human_unknown": unk, "physics_gate": gate}, indent=2),
         encoding="utf-8")
+    # This is the accuracy claim the repo quotes, and it is re-fitted from the spec rather than
+    # loaded, so a promotion between this run and a reader silently changes what it describes.
+    stamp_inputs(out_dir, {"champion_spec": CHAMPION_SPEC_PATH}, stage=stem)
+
     print(f"\n[rowe] -> {out_dir / (stem + '.md')}")
     print(f"[rowe] -> {out_dir / (t_stem + '.md')}")
 

@@ -1,7 +1,4 @@
-# is this recording usable at all- the label-free gate in front of every consumer
-#   python -m stages.s1_clean.validate path/to.csv
-# every check is a way a file breaks WITHOUT being empty; usable=False means nothing
-# is scorable; a warning means the numbers are weaker than they look
+# is this recording usable at all- the label-free gate; python -m stages.s1_clean.validate path.csv
 
 from __future__ import annotations
 

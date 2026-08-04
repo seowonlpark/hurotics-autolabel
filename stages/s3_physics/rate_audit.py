@@ -1,6 +1,4 @@
-# S3 rate-invariance audit: does an anchor describe the body or the sampling grid?
-#   python -m stages.s3_physics.rate_audit
-# an anchor that moves with the grid is measuring the clock
+# S3 rate-invariance audit: the body or the sampling grid? python -m stages.s3_physics.rate_audit
 
 from __future__ import annotations
 
@@ -13,6 +11,7 @@ import pandas as pd
 from scipy.signal import decimate
 
 from stages.console import use_replacement_encoding
+from stages.report import add_report_flag
 from stages.s1_clean.config import CANONICAL_HZ, DECIMATE_FILTER
 from stages.s2_ml.dataset import FEATURES, Trial, load_dataset
 from stages.s2_ml.features import WindowSpec, rest_reference
@@ -27,14 +26,10 @@ AUDIT_FACTOR = 2
 # Change above this => the anchor tracks the grid, not the body
 AUDIT_TOL = 0.10
 
-# anchors this audit EXPECTS to fail, named rather than tolerated silently
-# main exits non-zero either way: a new rate confound, or a test that lost its teeth
-# the report is written before either exit, so the page explaining it is on disk
+# anchors this audit EXPECTS to fail, named rather than tolerated silently; main exits non-zero
 EXPECTED_RATE_DEPENDENT = frozenset({"gyro_energy"})
 
-# How each anchor's change is measured; mixing the two measures the wrong thing:
-# an absolute delta on a ratio-scale magnitude is meaningless, and a relative delta on a
-# correlation blows up whenever the correlation passes through zero
+# how each change is measured; mixing them measures the wrong thing (ratio scale vs correlation)
 ANCHOR_METRIC = {
     "periodicity": "abs",   # normalized autocorr, [0, 1]
     "antiphase": "abs",     # -pearson r, [-1, 1]
@@ -42,13 +37,10 @@ ANCHOR_METRIC = {
     "gyro_energy": "rel",   # sum of deg^2/s^2, ratio scale
 }
 
-# Denominator floor for ratio-scale anchors, so a near-zero native value cannot blow the
-# delta up and report a rate dependence that is really a division artefact
+# denominator floor for ratio-scale anchors: a near-zero native value would fake a rate dependence
 ANCHOR_FLOOR = {"gyro_energy": 1.0}
 
-# context taken either side of a window before decimating, in samples; 128 clears the
-# 123-sample filtfilt padlen with room; windows without full context on BOTH sides are
-# skipped rather than half-padded, and the skipped count is reported, never silent
+# context taken per side before decimating; 128 clears filtfilt's padlen, and skips are reported
 AUDIT_PAD_SAMPLES = 128
 
 
@@ -85,8 +77,7 @@ def audit_anchors(trials: list[Trial], spec: WindowSpec | None = None,
         frame = trial.frame.reset_index(drop=True)
         if frame.empty:
             continue
-        # The same rest zero the anchor table and the S2 features are centred on, so the
-        # audit never reads a trial on a different origin than the stage it audits
+        # the same rest zero the anchor table and the S2 features use, so the origin never differs
         _zeros, center, _trusted = rest_reference(frame, spec.fs_hz)
         for _seg_id, seg in frame.groupby("segment", sort=True):
             seg = seg.reset_index(drop=True)
@@ -177,16 +168,14 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description="S3 rate-invariance audit: is an anchor about the body or the clock?")
     ap.add_argument("--out", type=Path, default=S3_OUT_DIR)
+    add_report_flag(ap)
     ap.add_argument("--include-lockbox", action="store_true",
                     help="audit lockbox trials too (see the note below — normally wrong)")
     args = ap.parse_args()
 
     spec = WindowSpec()
 
-    # The lockbox stays sealed here too, and the reason is not that physics needs
-    # labels- it does not; it is that a rate verdict measured partly on lockbox windows
-    # would make the lockbox a thing we had looked at; carried verbatim from the deleted
-    # `run.py`, because deleting the driver must not delete the discipline it enforced
+    # the lockbox stays sealed: a rate verdict on lockbox windows would make it a thing we looked at
     trials = [t for t in load_dataset() if args.include_lockbox or t.split != "lockbox"]
     print(f"[rate] auditing {len(trials)} trials"
           + (" (LOCKBOX INCLUDED)" if args.include_lockbox else ""))
@@ -203,13 +192,16 @@ def main() -> None:
     out_dir = args.out if args.out.is_absolute() else REPO_ROOT / args.out
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "rate_audit.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    (out_dir / "rate_audit.md").write_text(render_report(report), encoding="utf-8")
+    if args.report:
+        (out_dir / "rate_audit.md").write_text(render_report(report), encoding="utf-8")
+
+    # Model-free by construction: this reads the window grid and the anchors, never the champion.
+    # Declared rather than left unstamped, so "no model dependency" and "never checked" stay distinct.
+    stamp_inputs(out_dir, {}, stage="rate_audit")
+
     print(f"[rate] -> {out_dir / 'rate_audit.md'}")
 
-    # The gate; written artifacts first, deliberately: a run that stops here must leave the
-    # page that explains why; `--include-lockbox` is exempted from the gate rather than the
-    # audit- it is a diagnostic run over a different window population, so failing the
-    # pipeline on its verdicts would let an opt-in flag change what the spine asserts
+    # the gate; artifacts written first, so a run that stops here leaves the page explaining why
     new = sorted(a for a in ANCHOR_NAMES
                  if report[a]["verdict"] == "rate_dependent"
                  and a not in EXPECTED_RATE_DEPENDENT)

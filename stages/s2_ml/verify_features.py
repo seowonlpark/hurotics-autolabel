@@ -1,8 +1,4 @@
-# hold the vectorized feature path to its scalar references
-#   python -m stages.s2_ml.verify_features
-# swap_counts is a prefix-sum rewrite of rest.swap_count- exact on most windows and off
-# by one on the rest, which no accuracy number would ever surface as a bug
-# compares against the reference on random input, degenerate cases included
+# hold the vectorized feature path to its scalar references; python -m stages.s2_ml.verify_features
 
 from __future__ import annotations
 

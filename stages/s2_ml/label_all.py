@@ -1,6 +1,4 @@
-# label every raw device log under data/raw, one file at a time
-#   python -m stages.s2_ml.label_all  ->  labeled_raw/
-# a refusal is an outcome, not a crash; grouped by reason so 12 files read as one
+# label every raw log under data/raw -> labeled_raw/; a refusal is an outcome, not a crash
 
 from __future__ import annotations
 
@@ -14,6 +12,7 @@ import pandas as pd
 
 from freshness import stamp_inputs
 from stages.s1_clean.manifest import session_of
+from stages.report import add_report_flag
 from stages.s3_physics.plausibility import summarize as summarize_plausibility
 from stages.s2_ml import label as label_mod
 from stages.s2_ml.locoeval import DEFAULT_THRESHOLDS
@@ -67,9 +66,7 @@ def label_one(path: Path, model_dir: Path, threshold: float
     amb = out["ambiguous"].to_numpy(bool)
     states = out.loc[~amb, "state"].value_counts()
     reasons = out.loc[amb, "reason"].value_counts()
-    # A labelled file can still be an implausible one, and the summary has to be able to
-    # say so; `implausible` is the boolean a reader filters on; `plausibility` names which
-    # bounds, because "this file is suspicious" without the bound is not actionable
+    # a labelled file can still be implausible; the boolean filters, the list names which bounds
     findings = provenance.get("plausibility") or []
     hard = [f["code"] for f in findings if f["severity"] == "implausible"]
     return out, {
@@ -97,11 +94,7 @@ def gates_off() -> dict:
     }
 
 
-# a row sitting EXACTLY on the threshold cannot be re-decided from the emitted column:
-# `confidence` prints rounded to 4dp but `ambiguous` was decided on the unrounded float
-# measured at 4 of 78 files, 25-75 rows each, always reason=model_split, one-directional
-# NOT corrected here- explain owns the abstention rule; measured instead, and `boundary`
-# rides beside every count so the number states its own resolution
+# `confidence` prints to 4dp but `ambiguous` was decided unrounded, so a row on the line is undecidable
 CONFIDENCE_HALF_ULP = 5e-5
 
 
@@ -111,8 +104,7 @@ def coverage_at(out: pd.DataFrame, thresholds) -> tuple[dict[str, int], dict[str
     committed, boundary = {}, {}
     for t in thresholds:
         key = f"{t:.2f}"
-        # NaN (uncovered) compares False in both tests, which is the wanted answer twice:
-        # never committed, and never on the boundary of a decision it was not part of
+        # NaN (uncovered) compares False in both tests: never committed, never on a boundary
         committed[key] = int((conf >= t).sum())
         boundary[key] = int((np.abs(conf - t) < CONFIDENCE_HALF_ULP).sum())
     return committed, boundary
@@ -140,10 +132,7 @@ def render_report(rows: list[dict], threshold: float, model_dir: Path,
         "# S2 Label — corpus sweep",
         "",
         f"- generated: **{datetime.now(timezone.utc).isoformat()}**",
-        # Repo-relative, like the per-file rows above; this header was the one path in the
-        # report printed as given, so a `--model-dir` that arrived absolute put the author's
-        # home directory into a git-tracked file- a machine-specific string in an artifact
-        # whose whole purpose is to be read on another machine
+        # repo-relative, like the rows above: an absolute `--model-dir` put a home directory in git
         f"- model: `{_rel_to_repo(model_dir)}`   threshold: **{threshold:.2f}**",
         f"- raw files: **{len(rows)}**, labelled: **{len(ok)}**, abstained: **{len(bad)}**",
         f"- **partition (gate): {len(ok)} labelled + {len(bad)} abstained = {len(rows)} "
@@ -170,12 +159,7 @@ def render_report(rows: list[dict], threshold: float, model_dir: Path,
     for kind, group in sorted(by_refusal.items(), key=lambda x: -len(x[1])):
         lines.append(f"### {kind} — {len(group)} file(s)")
         lines.append("")
-        # Grouped by the message, not one line per file; a refusal that fires on twelve
-        # files fires for the SAME stated reason on all twelve- printing that sentence
-        # twelve times buries the only part that varies, which recordings are affected, and
-        # makes one cause look like twelve problems; the grouping is by exact message rather
-        # than by `kind`, so two variants refused by the same exception still read as the two
-        # distinct causes they are
+        # grouped by exact message, not by file or `kind`: one cause must not read as twelve problems
         by_message: dict[str, list[dict]] = {}
         for r in group:
             by_message.setdefault(r["reason"], []).append(r)
@@ -192,8 +176,7 @@ def render_report(rows: list[dict], threshold: float, model_dir: Path,
         *[f"| `{k}` | {v} |" for k, v in sorted(by_reason.items(), key=lambda x: -x[1])],
         "",
     ]
-    # Last, and about the files that DID label; everything above says what the sweep could
-    # serve; this says which of those outputs should not be trusted as they stand
+    # last, and about the files that DID label: which of those outputs should not be trusted
     lines += summarize_plausibility(findings_by_file or {}, n_files=len(ok))
     return "\n".join(lines)
 
@@ -206,6 +189,7 @@ def main() -> None:
                     help="destination root; mirrors the data/raw session directories "
                          "(default: labeled_raw/ at the repo root)")
     ap.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
+    add_report_flag(ap)
     ap.add_argument("--preset", default=None, help="high_coverage | balanced | high_precision")
     ap.add_argument("--threshold", type=float, default=None)
     ap.add_argument("--full", action="store_true",
@@ -244,9 +228,7 @@ def main() -> None:
     print(f"[label_all] {len(paths)} raw files, threshold {threshold:.2f}, "
           f"model {args.model_dir}")
 
-    # Every operating point, from the one pass below; the shipped threshold is forced into
-    # the grid whatever it is, so the self-check further down always has a point at which
-    # the derived count and the frame's own `ambiguous` column must agree exactly
+    # the shipped threshold is forced into the grid, so the self-check always has a point to compare
     gates = gates_off()
     derivable = not any(gates.values())
     grid = sorted({*DEFAULT_THRESHOLDS, round(float(threshold), 4)})
@@ -267,12 +249,7 @@ def main() -> None:
 
         if out is not None and derivable:
             committed, boundary = coverage_at(out, grid)
-            # The derivation must reproduce the shipped commit rule on the one threshold
-            # where the frame already carries the answer, to within the rounding band it
-            # cannot see past; a disagreement LARGER than that band means some rule other
-            # than the confidence test is in play and the other eight columns are fiction
-            # Recorded per file rather than asserted, so one odd file names itself instead
-            # of ending a 91-file sweep with a traceback
+            # a disagreement past the rounding band means some other rule is in play; recorded per file
             key = f"{threshold:.2f}"
             delta = abs(committed[key] - row["n_confident"])
             if delta > boundary[key]:
@@ -298,9 +275,7 @@ def main() -> None:
         print(f"[{i:>3}/{len(paths)}] {p.name:<38} {row['variant']} Deg_{row['axis']}  "
               f"{row['rows']:>7,} rows  {row['confident_frac']:>6.1%} confident  "
               f"stand={row['n_stand']:,} walk={row['n_walk']:,}")
-        # Printed as it happens, not only in the report: a sweep over 91 files takes long
-        # enough that an operator watching it should learn a file is suspect while there is
-        # still time to stop and look, rather than reading it afterwards
+        # printed as it happens: a 91-file sweep is long enough that an operator can still stop it
         for f in findings:
             if f["severity"] == "implausible":
                 print(f"{'':>18} IMPLAUSIBLE {f['code']}: {f['detail']}")
@@ -310,20 +285,16 @@ def main() -> None:
         for r in rows:
             if not r["labelled"]:
                 fh.write(json.dumps({**r, "needs_human": True}, ensure_ascii=False) + "\n")
-    # Written even when empty, for the same reason `abstentions.jsonl` is: a zero-line file
-    # says the bounds ran and nothing tripped them, where a missing file says nobody looked
+    # written even when empty: a zero-line file says the bounds ran, a missing one says nobody looked
     with (out_dir / "plausibility.jsonl").open("w", encoding="utf-8") as fh:
         for f, xs in findings_by_file.items():
             for x in xs:
                 fh.write(json.dumps({"file": f, **x}, ensure_ascii=False) + "\n")
-    (out_dir / "label_report.md").write_text(
-        render_report(rows, threshold, args.model_dir, findings_by_file), encoding="utf-8")
+    if args.report:
+        (out_dir / "label_report.md").write_text(
+            render_report(rows, threshold, args.model_dir, findings_by_file), encoding="utf-8")
 
-    # Every operating point on the corpus a customer actually has, which is a different
-    # question from the curve in `OPERATING_POINTS.md`: that one says what accuracy a
-    # threshold buys on annotated data, this one says what coverage it costs on THIS data
-    # Neither answers the other, and the decision needs both- `stages.breakdown` puts them
-    # in one table; **Coverage only, and it always will be: there is no ground truth here.**
+    # what a threshold COSTS on the customer's corpus, not what it buys on annotated data- no truth here
     if derivable and sweep:
         if sweep_mismatch:
             print(f"\n[label_all] preset sweep NOT written: the confidence test disagrees "
@@ -342,13 +313,9 @@ def main() -> None:
                 corpus.append({
                     "threshold": t, "rows": total_rows, "committed": c,
                     "coverage": (c / total_rows) if total_rows else float("nan"),
-                    # The resolution of the count above, not a second finding: rows whose
-                    # emitted confidence cannot say which side of this threshold the
-                    # decision fell on; carried so a reader can see when a coverage
-                    # difference between two points is smaller than the uncertainty in it
+                    # the resolution of the count above: rows whose emitted confidence cannot pick a side
                     "boundary": sum(s["boundary"][key] for s in sweep),
-                    # Files committing to less than half their rows: the same reporting line
-                    # `breakdown` uses; a corpus mean cannot be acted on; a file count can
+                    # files committing to less than half their rows: a corpus mean cannot be acted on
                     "files_below_half": sum(
                         1 for s in sweep
                         if s["rows"] and s["committed"][key] / s["rows"] < 0.50),
@@ -375,12 +342,7 @@ def main() -> None:
                       f"files under 50%: {c['files_below_half']:>3}{mark}")
             print(f"[label_all] sweep -> {out_dir / PRESET_SWEEP_FILENAME}")
 
-    # Which champion produced these calls, recorded next to them; this sweep is the one step
-    # that reads another stage's artifact and writes its own, so it is the one place where
-    # re-running a stage alone- retraining, the normal way to iterate- leaves a whole corpus
-    # of labelled CSVs carrying a model that no longer exists; every file is present, every
-    # file parses, and they are wrong together; stamped here and checked in
-    # `stages.breakdown`: a sweep cannot know it has gone stale after it has finished running
+    # which champion produced these calls: a retrain alone would leave the whole corpus wrong together
     stamp_inputs(out_dir, {"champion": args.model_dir / "champion.joblib",
                            "model_meta": args.model_dir / "model_meta.json"})
 
@@ -402,8 +364,7 @@ def main() -> None:
     print(f"[label_all] summary -> {out_dir / 'label_summary.csv'}, "
           f"report -> {out_dir / 'label_report.md'}")
 
-    # An unexpected exception is not an abstention- the file was refused by a bug, not by
-    # a rule; non-zero exit so a batch run cannot pass while quietly skipping files
+    # an unexpected exception is a bug, not an abstention; non-zero exit so a batch cannot pass
     if unexpected:
         print(f"\n[label_all] {len(unexpected)} file(s) failed for UNEXPECTED reasons:")
         for r in unexpected:

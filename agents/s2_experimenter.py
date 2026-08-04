@@ -82,8 +82,7 @@ def build_prompt(report_md: str, ledger_rows: list[dict], champion: dict | None,
     )
 
 
-# revision request appended to the prompt when the critic returned 'revise': the held-back spec and
-# the changes asked for, so the experimenter fixes THAT spec rather than starting over
+# appended on a 'revise' verdict: the held-back spec + the asks, so it fixes THAT spec
 def revision_block(prev_proposal: dict, critic_reasons: list[str]) -> str:
     return (
         "\nREVISION REQUESTED - the critic did NOT reject your idea. It wants this same "
@@ -101,8 +100,7 @@ def parse_proposal(final_text: str) -> dict | None:
     return extract_json_object(final_text)
 
 
-# persist the proposal; `name` lets a revision attempt write to a
-# distinct file so no earlier attempt is overwritten
+# persist the proposal; `name` keeps a revision from overwriting an earlier attempt
 def write_proposal(out_dir: Path, proposal: dict | None, final_text: str,
                    name: str = PROPOSAL_FILENAME) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)

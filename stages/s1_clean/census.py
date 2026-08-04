@@ -53,8 +53,7 @@ def fingerprint(raw_columns: list[str]) -> str:
     return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:8]
 
 
-# what one header is; only index_by_name/label_columns have code consumers;
-# roles_present + unknown_names are the hole detector for ROLE_BY_NAME
+# what one header is; only index_by_name/label_columns have consumers, the rest detects holes
 @dataclass
 class Resolution:
     variant_id: str

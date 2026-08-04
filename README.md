@@ -11,13 +11,13 @@ Built on the [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overvi
 
 ## Every command in this repo
 
-Everything else is a module the runner invokes — `python run_pipeline.py --dry-run` is the
-index of those, and they are documented under [Running it](#running-it) for when you are
-iterating on one stage by hand.
+Everything else is a module the runner invokes — `python run_pipeline.py --keys` is the
+index of those, one line each, and they are documented under [Running it](#running-it) for
+when you are iterating on one stage by hand.
 
 | command | what it is for | when |
 |---|---|---|
-| `python run_pipeline.py` | **the pipeline.** `data/raw` → `runs/breakdown.md`, every stage gated on its output artifact. `--with-agents` adds the paid reviews, `--verify` adds the slow correctness checks, `--from KEY` resumes | after new data lands, or any change to a stage |
+| `python run_pipeline.py` | **the pipeline.** `data/raw` → `runs/breakdown.md`, every stage gated on its output artifact. `--with-agents` adds the paid reviews, `--from KEY` resumes | after new data lands, or any change to a stage |
 | `python -m stages.s2_ml.label FILE` | **the deliverable.** One recording in, one row out per row in, carrying `Label` / `guess` / `confidence` / `ambiguous` / `reason`. Takes a raw device log or an `lpf_view` file | labelling one recording |
 | `python -m stages.s2_ml.label_all` | the deliverable over the whole of `data/raw` in one sweep, same code path per file | labelling the corpus |
 | `python -m stages.s1_clean.validate FILE` | **is this recording usable at all?** Label-free, model-free pre-flight: rate, gaps, segment length, channel presence. Answers before you spend anything | a new recording arrives and you want to know if it can be scored |
@@ -116,9 +116,9 @@ See `.gitignore`, which explains itself.
 ### The whole thing
 
 ```powershell
-python run_pipeline.py                  # the deterministic spine
+python run_pipeline.py                  # the deterministic spine, verifications included
 python run_pipeline.py --with-agents    # + the paid agent reviews (spends API credit)
-python run_pipeline.py --verify         # + the slow correctness checks
+python run_pipeline.py --keys           # every step key, with one line on what it answers
 python run_pipeline.py --dry-run        # what would run, in order, without running it
 ```
 
@@ -190,8 +190,8 @@ python -m stages.s2_ml.verify_serve       # the same recording labelled BOTH way
 
 Run both after touching `transform.py`. **An unexercised bridge cannot be wrong out loud,
 and it was:** the sagittal axis for the majority variant was wrong until the serve path was
-built (`caveats.md` §5). Both are `--verify` steps because they are slow, not because they
-are optional.
+built (`caveats.md` §5). Both are slow, and neither is optional — they run on the spine, not
+behind a flag, because slow is not a reason to skip a check.
 
 ### S3 — the model-free second opinion
 

@@ -1,6 +1,4 @@
-# S3 anchor features: a model-free physics view of one window
-# the swap rule has zero fitted parameters and never sees a label
-# it is no longer independent of S2, which reads the same interleg signal
+# S3 anchor features: a model-free physics view of one window, zero fitted parameters, no labels
 
 from __future__ import annotations
 
@@ -9,27 +7,19 @@ import pandas as pd
 
 from stages.s1_clean.config import CANONICAL_HZ
 from stages.s2_ml.dataset import FEATURES, TIME_COL, Trial
-# _corr and rest_reference are shared with S2 deliberately
-# a second copy of _corr drifted once already, in a sibling repo
-# if S3 measured its own rest zero the two stages would disagree about where rest is,
-# and the swap count would be taken about a different origin than the model's features
+# _corr and rest_reference are shared with S2 deliberately: two copies would disagree about rest
 from stages.s2_ml.features import GAIT_BAND_HZ, WindowSpec, _corr, rest_reference
 from stages.s2_ml.rest import SWAP_DELTA_DEG, swap_count
 
-# Stride-adaptive analysis span; standing keeps the base window; only motion
-# grows one; capped so a span can never swallow a whole bout and average two states
+# stride-adaptive span: standing keeps the base window, motion grows one, capped below a bout
 MAX_SWAP_WINDOW_S = 6.0
 ADAPTIVE_PERIODICITY_FLOOR = 0.35  # autocorr peak height to accept a cell as periodic
 
-# Span-grow fallback; when the base verdict is NOT walking, re-count over the
-# full max span and accept WALKING only if the span GENUINELY alternates; all three
-# gates must pass, because a slow walker and a person shifting their weight twice look
-# identical to a bare swap count over a long span
+# span-grow fallback: re-count over the max span, accepting WALKING only if it GENUINELY alternates
 GROW_MIN_PTP_DEG = 8.0     # both halves must swing this far: a real stride, not jitter
 GROW_MIN_ANTIPHASE = 0.5   # -corr(L,R): alternation, not two isolated weight shifts
 
-# The four anchors PLAN.md requires a rate-invariance verdict for; the swap rule
-# and the descriptors ride alongside but are not candidate anchors
+# the four anchors PLAN.md requires a rate verdict for; the swap rule is not a candidate anchor
 ANCHOR_NAMES = ("periodicity", "antiphase", "grav_stab", "gyro_energy")
 
 # Swap-rule verdict bands
@@ -150,25 +140,16 @@ def window_anchors(win: pd.DataFrame, fs: float = CANONICAL_HZ,
     half = d.size // 2
     ileg_minhalf = (min(float(np.ptp(d[:half])), float(np.ptp(d[half:])))
                     if half >= 1 else 0.0)
-    # Full-window swing, ALONGSIDE the min-half version rather than replacing it; the two
-    # answer different questions and confusing them cost a wrong conclusion [2026-08-03]:
-    # `ileg_minhalf` asks "did BOTH halves swing", which is the right question for the
-    # grow gate and the wrong one for "how far did the legs separate"; it collapses
-    # when the motion sits in one half of the window- precisely what a start/stop ramp
-    # looks like, so reading it as amplitude under-reads the ramps hardest
+    # full-window swing ALONGSIDE the min-half version: `ileg_minhalf` collapses on a start/stop ramp
     ileg_ptp = float(np.ptp(d))
     interleg_offset = float(np.median(d))
 
-    # The four audited anchors
-    # antiphase: legs oppose when walking; NECESSARY, not sufficient
+    # the four audited anchors; antiphase: legs oppose when walking, NECESSARY not sufficient
     antiphase = -_corr1(l_ang, r_ang)
     # grav_stab: steadiness of tilt; -> 1 standing, -> 0 walking
     grav_stab = 1.0 / (1.0 + 0.5 * (float(l_ang.std()) + float(r_ang.std())))
     periodicity = 0.5 * (_periodicity(l_ang, fs) + _periodicity(r_ang, fs))
-    # gyro_energy: TOTAL rotational energy; scales with sample count, so it is a claim
-    # about the sampling grid, not about the body- defined the way that FAILS the rate
-    # audit, deliberately; it is the audit's negative control: an audit that has never
-    # rejected anything is not evidence that the others passed
+    # gyro_energy: TOTAL rotational energy, defined the way that FAILS the audit- its negative control
     gyro_energy = float(np.sum(l_vel ** 2) + np.sum(r_vel ** 2))
 
     return {

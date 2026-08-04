@@ -1,5 +1,4 @@
-# how long is a transition, how many are there, does the pipeline time them right
-# near_transition is the biggest abstention driver and nothing measured what it fires on
+# how long transitions are and whether the pipeline times them; near_transition drives abstention
 
 from __future__ import annotations
 
@@ -9,25 +8,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from stages.s2_ml.dataset import HUMAN_UNKNOWN, STAND, TIME_COL, WALK
+from stages.s2_ml.dataset import CLASS_NAME, HUMAN_UNKNOWN, STAND, TIME_COL, WALK
 from stages.s2_ml.features import WindowSpec
 
-CLASS_NAME = {STAND: "stand", WALK: "walk"}
-
-# A boundary is TIMEABLE when both sides hold at least one full window of their own class
-# Not a tuning knob: below it the model has no pure window on one side, so it cannot place
-# a change there, and scoring its timing would be measuring the window length; transitions
-# that fail this are counted and reported, never silently dropped
+# TIMEABLE needs a full window of each class on both sides; failures are counted, never dropped
 MIN_FLANK_WINDOWS = 1.0
 
-# ...and when the boundary is at least one window from either end of the segment, for the
-# same reason in the other direction: a predicted change needs room on both sides to exist
+# ...and one window of room from either segment end, for the same reason in the other direction
 EDGE_MARGIN_WINDOWS = 1.0
 
-# The tolerances the offset is reported against; HALF a window is the tight one because
-# that is exactly the radius `label.explain` marks `near_transition` over- a boundary timed
-# better than this is one the flag covers- and a FULL window is the loose one, the point
-# past which no window contains both the boundary and the row being judged
+# HALF a window is the radius `label.explain` marks `near_transition` over; a FULL one is the limit
 TIGHT_TOL_WINDOWS = 0.5
 LOOSE_TOL_WINDOWS = 1.0
 
@@ -55,8 +45,7 @@ def _predicted_changes(t_ms: np.ndarray, guess: np.ndarray) -> np.ndarray:
     ch = np.flatnonzero(g[1:] != g[:-1])
     if ch.size == 0:
         return np.empty(0)
-    # Midpoint of the two rows that straddle the flip: the change happened between them and
-    # attributing it to either would bias every offset by half a sample
+    # midpoint of the straddling rows: attributing the flip to either biases offsets half a sample
     return (t_ms[idx[ch]] + t_ms[idx[ch + 1]]) / 2.0
 
 
@@ -104,9 +93,7 @@ def find_transitions(df: pd.DataFrame, spec: WindowSpec) -> tuple[pd.DataFrame, 
                 rejected["near_segment_edge"] += 1
                 continue
 
-            # Nearest predicted change; `None` means the model never changed class anywhere
-            # in this segment- a miss, and a different failure from a badly timed hit, so
-            # it is never folded into the offset distribution as a large number
+            # nearest predicted change; None means it never changed class here- a miss, not a bad hit
             offset_s = None
             if preds.size:
                 offset_s = float((preds[np.argmin(np.abs(preds - t_truth))] - t_truth) / 1000.0)
@@ -116,8 +103,7 @@ def find_transitions(df: pd.DataFrame, spec: WindowSpec) -> tuple[pd.DataFrame, 
                 "rev": rev, "trial": int(trial), "segment": int(seg),
                 "direction": f"{CLASS_NAME[v0]}->{CLASS_NAME[v1]}",
                 "t_truth_s": round(t_truth / 1000.0, 3),
-                # The annotator's own unknown interval; 0.0 means the two runs are adjacent:
-                # the boundary was called to the sample, with no admitted doubt
+                # the annotator's own unknown interval; 0.0 means the boundary was called to the sample
                 "width_s": round((t_after - t_before) / 1000.0, 3),
                 "flank_before_s": round(flank_before / 1000.0, 3),
                 "flank_after_s": round(flank_after / 1000.0, 3),
@@ -150,8 +136,7 @@ def near_transition_regions(df: pd.DataFrame, trans: pd.DataFrame,
             if not v:
                 continue
             n_regions += 1
-            # The region's own span, widened by the tolerance; a long flagged stretch
-            # should not need the boundary at its centre- it only needs to contain one
+            # the region's span widened by the tolerance: a long stretch need only contain a boundary
             if not truths.size or not (
                     (truths >= t[s] - tol_ms) & (truths <= t[e - 1] + tol_ms)).any():
                 n_unmatched += 1
@@ -208,9 +193,7 @@ def summarize(trans: pd.DataFrame, rejected: dict, regions: dict,
             "frac_within_tight": float((np.abs(off) <= tight).mean()),
             "n_within_loose": int((np.abs(off) <= loose).sum()),
             "frac_within_loose": float((np.abs(off) <= loose).mean()),
-            # Sign convention stated once, here and in the report: positive means the model
-            # changed class LATE; direction matters because a systematic lag is a filter
-            # artifact with a fix, where symmetric scatter is just resolution
+            # positive is LATE; direction matters- a systematic lag is fixable, scatter is resolution
             "n_late": int((off > 0).sum()),
             "n_early": int((off < 0).sum()),
         }
@@ -345,14 +328,16 @@ def render(tag: str, s: dict, by_rev: list[dict], trans: pd.DataFrame) -> str:
 
 
 # measure, write `<stem>.md` + `<stem>.json`, return the summary for the caller
-def run(df: pd.DataFrame, spec: WindowSpec, out_dir: Path, stem: str, tag: str) -> dict:
+def run(df: pd.DataFrame, spec: WindowSpec, out_dir: Path, stem: str, tag: str,
+        report: bool = False) -> dict:
     trans, rejected = find_transitions(df, spec)
     regions = near_transition_regions(df, trans, spec)
     s = summarize(trans, rejected, regions, spec)
     by_rev = per_rev(trans, spec)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{stem}.md").write_text(render(tag, s, by_rev, trans), encoding="utf-8")
+    if report:
+        (out_dir / f"{stem}.md").write_text(render(tag, s, by_rev, trans), encoding="utf-8")
     (out_dir / f"{stem}.json").write_text(json.dumps(
         {"tag": tag, "summary": s, "per_rev": by_rev,
          "transitions": trans.to_dict("records")}, indent=2, default=float),
