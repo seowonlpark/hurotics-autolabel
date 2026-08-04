@@ -110,7 +110,7 @@ def extract_json_object(final_text: str) -> dict | None:
         return None
     return data if isinstance(data, dict) else None
 
-# append this agent's spend to the run's cost ledger 
+# append this agent's spend to the run's cost ledger
 def _record_cost(run_dir: Path, result: AgentResult) -> None:
     cost_path = run_dir / COST_FILENAME
     ledger = json.loads(cost_path.read_text()) if cost_path.exists() else {"stages": []}
@@ -140,7 +140,7 @@ async def run_agent(spec: AgentSpec, prompt: str, run_dir: Path) -> AgentResult:
         model=spec.model,
         max_turns=spec.max_turns,
         cwd=str(REPO_ROOT),
-        # matcher=None fires for every tool call.
+        # matcher=None fires for every tool call
         hooks={"PostToolUse": [HookMatcher(matcher=None, hooks=[_make_audit_hook(log_path, spec.name)])]},
     )
 

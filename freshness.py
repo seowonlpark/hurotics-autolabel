@@ -1,23 +1,7 @@
-# Artifact freshness: a stage records WHICH VERSION of each upstream artifact it consumed, so a later
-# reader can tell whether the output still describes its inputs.
-#
-# The failure this exists for is silent: `runs/` is gitignored and every stage overwrites its own
-# output in place, so re-running one stage alone -- the normal way to iterate -- leaves every
-# downstream artifact describing a model that no longer exists. The live case is `labeled_raw/`:
-# retrain the champion and every labelled CSV in it still carries the old model's calls, with
-# nothing to say so. The files are all present, all parseable, and wrong together.
-#
-# It has already happened once without this: `runs/s2_ml/oof_champion.csv` outlived both its
-# producer and its champion, and `stages/breakdown.py` reprinted a confusion table from it for a
-# model that had been retrained twenty minutes earlier (2026-08-04).
-#
-# This complements the column checks stages run against their own inputs. Those catch an artifact
-# written before a column existed -- a SCHEMA change. This one catches the same schema holding
-# different numbers, which is the more common and the less visible half.
-#
-# Content hash, not mtime: a fresh checkout, a file copy or a touch all move mtime without changing
-# what the stage actually read, and any of those would cry wolf. Hashing a ~20 MB csv costs
-# milliseconds against stage runtimes measured in minutes.
+# artifact freshness: a stage records WHICH VERSION of each upstream artifact it consumed
+# runs/ is gitignored and stages overwrite in place, so re-running one alone leaves every
+# downstream artifact describing a model that no longer exists, all present and all wrong
+# content hash, not mtime: a checkout or a touch moves mtime without changing what was read
 
 from __future__ import annotations
 
@@ -31,16 +15,9 @@ _CHUNK = 1 << 20
 REPO_ROOT = Path(__file__).resolve().parent
 
 
-# how a consumed artifact is NAMED in the stamp: repo-relative, forward slashes, whenever it
-# lives inside the repo. Anything outside keeps its absolute path, because nothing else can
-# identify it.
-#
-# Absolute paths were the original behaviour and they made the stamp machine-specific: moving
-# the repo, or reading it on another checkout, turned every input into "has since been
-# deleted" -- a false stale flag on a corpus that had not changed at all. `labeled_raw/` makes
-# that concrete, since its stamp is the one that is git-tracked and therefore the one that
-# actually travels. Forward slashes for the same reason: a stamp written here should read on a
-# machine whose separator is different.
+# repo-relative with forward slashes inside the repo, absolute outside
+# absolute everywhere made the stamp machine-specific: moving the repo turned every
+# input into "has since been deleted", a false stale flag on an unchanged corpus
 def _store(path: Path) -> str:
     path = Path(path)
     try:
@@ -49,16 +26,16 @@ def _store(path: Path) -> str:
         return str(path)
 
 
-# the reverse: a stored name back to a path on this machine. An absolute value is honoured as
+# the reverse: a stored name back to a path on this machine; an absolute value is honoured as
 # written, which is what keeps stamps made before this change readable rather than making the
-# fix itself the thing that invalidates them.
+# fix itself the thing that invalidates them
 def _locate(stored: str) -> Path:
     p = Path(stored)
     return p if p.is_absolute() else REPO_ROOT / p
 
 
-# sha256 + size of one file, or None when it does not exist. None is a legitimate answer, not an
-# error: a stage may legitimately run before an optional upstream artifact is ever produced.
+# sha256 + size of one file, or None when it does not exist; None is a legitimate answer, not an
+# error: a stage may legitimately run before an optional upstream artifact is ever produced
 def artifact_id(path: Path) -> dict | None:
     path = Path(path)
     if not path.is_file():
@@ -70,7 +47,7 @@ def artifact_id(path: Path) -> dict | None:
     return {"sha256": h.hexdigest(), "bytes": path.stat().st_size}
 
 
-# record what this stage consumed, next to what it produced. `inputs` maps a human label to a path.
+# record what this stage consumed, next to what it produced; `inputs` maps a human label to a path
 def stamp_inputs(out_dir: Path, inputs: dict[str, Path]) -> dict:
     record = {label: {"path": _store(p), **(artifact_id(p) or {"missing": True})}
               for label, p in inputs.items()}
@@ -80,9 +57,9 @@ def stamp_inputs(out_dir: Path, inputs: dict[str, Path]) -> dict:
     return record
 
 
-# complaints about `out_dir`, empty when it is current. An ABSENT stamp is reported, not passed:
+# complaints about `out_dir`, empty when it is current; an ABSENT stamp is reported, not passed:
 # an unstamped directory is exactly the state that hides this bug, so "cannot tell" and "stale"
-# are reported the same way -- the caller decides how loudly to fail.
+# are reported the same way- the caller decides how loudly to fail
 def check_inputs(out_dir: Path) -> list[str]:
     out_dir = Path(out_dir)
     stamp = out_dir / INPUTS_FILENAME
@@ -114,15 +91,8 @@ def check_all(out_dirs: list[Path]) -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------
-# Self-test. This module's whole value is that it SPEAKS UP, and a check that has silently
-# stopped firing is indistinguishable from a pipeline that is clean -- the same failure mode
-# `stages/s3_physics/anchors.py` keeps a negative control for. So each detection is exercised
-# against a case built to trip it, in temp directories, touching nothing real.
-#
-# The stale case is the one that matters. Every other complaint here is about a file that is
-# absent or unreadable, which announces itself; a digest that no longer matches is the one
-# state where every artifact is present, parseable, and describing something that no longer
-# exists.
+# self-test: a check that silently stopped firing looks exactly like a clean pipeline
+# the stale case is the one that matters; absent or unreadable announces itself
 # ------------------------------------------------------------------------------------------
 
 def _self_test() -> list[str]:
@@ -158,7 +128,7 @@ def _self_test() -> list[str]:
 
     # An input that did not exist is recorded as such, and its later APPEARANCE is a change
     # too: a stage that ran without an optional upstream is not the same stage as one that
-    # ran with it, and reporting only the reverse direction would miss half of that.
+    # ran with it, and reporting only the reverse direction would miss half of that
     absent = tmp / "not-yet.json"
     stamp_inputs(out, {"optional": absent})
     expect("an input absent both times", check_inputs(out), False)
@@ -166,7 +136,7 @@ def _self_test() -> list[str]:
     expect("an input that has since APPEARED", check_inputs(out), True)
 
     # Paths: repo-relative in the stamp, so it survives a move; absolute only when the input
-    # lives outside the repo, where nothing else could identify it.
+    # lives outside the repo, where nothing else could identify it
     inside = REPO_ROOT / "freshness.py"
     if _store(inside) != "freshness.py":
         failures.append(f"a repo file should be stored relative, got {_store(inside)!r}")
@@ -178,7 +148,7 @@ def _self_test() -> list[str]:
         failures.append("an absolute stored path must be honoured as written")
 
     # A stamp written before paths were made relative still has to read, or this fix would
-    # itself be the thing that invalidated every artifact it was meant to protect.
+    # itself be the thing that invalidated every artifact it was meant to protect
     legacy = tmp / "legacy"
     legacy.mkdir()
     (legacy / INPUTS_FILENAME).write_text(json.dumps(
@@ -192,7 +162,8 @@ def _self_test() -> list[str]:
 def main() -> None:
     import argparse
 
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(
+        description="Is every run artifact newer than the inputs it describes?")
     ap.add_argument("--self-test", action="store_true",
                     help="exercise every complaint against a case built to trip it")
     ap.add_argument("--check", nargs="*", metavar="DIR",

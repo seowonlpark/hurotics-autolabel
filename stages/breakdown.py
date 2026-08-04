@@ -1,11 +1,6 @@
-"""The whole pipeline on one page, regenerated every run
-
-    python -m stages.breakdown
-
-Reads   every artifact the four stages already wrote, plus `labeled_raw/`
-Writes  runs/breakdown.md     the human page — corpus, S1, S2, S3, sweep, flags
-        runs/breakdown.json   the same flags, machine-readable, for a future gate
-"""
+# the whole pipeline on one page, regenerated every run
+#   python -m stages.breakdown  ->  runs/breakdown.md
+# reads only what the stages already wrote; computes no metric of its own
 
 from __future__ import annotations
 
@@ -19,10 +14,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from freshness import check_all
-# one definition of run provenance, shared with the runner and the S2 ledger. This module kept a
-# private copy until 2026-08-04, which is two answers to "which commit produced this page".
+# one definition of run provenance, shared with the runner and the S2 ledger; this module kept a
+# private copy until 2026-08-04, which is two answers to "which commit produced this page"
 from runmeta import git_sha as _git_sha
 from stages.console import use_replacement_encoding
+# The hand-edited exclusion list, imported rather than restated: this page reports whether a
+# reviewed mislabel candidate was ever acted on, and a second copy of the list would answer that
+# wrongly the moment someone edits the real one
+from stages.s2_ml.dataset import EXCLUDED_TRIALS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNS = REPO_ROOT / "runs"
@@ -33,40 +32,32 @@ BREAKDOWN_JSON = "breakdown.json"
 
 ACCURACY_TARGET = 0.95
 
-# Which measured headline each checked-in document quotes. Explicit per artifact, because
-# "the file mentions coverage" is far too loose a trigger — a doc quoting a pair this repo
-# does not publish would be flagged against a headline it never claimed, and a check that
-# cries wolf is a check somebody switches off.
-#
-# There is one measured pair left to check against. Until 2026-08-04 there were two, S4's
-# window pair and S2's row pair, and the whole point of this map was telling them apart:
-# nothing in the text distinguishes one "coverage" from the other, and matching a doc to
-# the wrong one is a false alarm or a miss depending on the direction. S4 is gone, so the
-# ambiguity is gone with it — but the map stays per-artifact rather than collapsing to "check
-# every doc", because the next headline added brings the ambiguity straight back.
-#
-# Hand-maintained, and it has to be. A doc that starts quoting a headline belongs here.
+# which measured headline each checked-in document quotes, explicit per artifact
+# "the file mentions coverage" is far too loose a trigger, and a check that cries wolf
+# is a check somebody switches off
+# hand-maintained, and it has to be: a doc that starts quoting a headline belongs here
+# it is not only .md files- the property that matters is "quotes the headline"
 PROSE_CLAIMS = {
-    "S2 row-level": ["README.md", "caveats.md", "OPERATING_POINTS.md"],
+    "S2 row-level": ["README.md", "caveats.md", "OPERATING_POINTS.md", "needtowrite.md"],
 }
 
 # Below this a corpus file is committing to less than half its rows: not a hard recording,
-# something structural. The value is a reporting line, not a policy — nothing acts on it.
+# something structural; the value is a reporting line, not a policy- nothing acts on it
 LOW_COVERAGE_LINE = 0.50
 
-# A dropped segment this short at index 0 is the export preamble, not a data problem.
-# Grouping them is what stops 39 instances of one artifact reading as 39 findings.
+# A dropped segment this short at index 0 is the export preamble, not a data problem
+# Grouping them is what stops 39 instances of one artifact reading as 39 findings
 PREAMBLE_MAX_ROWS = 12
 
 
 # ----------------------------------------------------------------------------------------
-# Loading. Every artifact is optional, and an absent one is a REPORTED gap rather than a
-# skipped section — a stage that did not run must not read as a stage with nothing to say.
+# Loading; every artifact is optional, and an absent one is a REPORTED gap rather than a
+# skipped section- a stage that did not run must not read as a stage with nothing to say
 # ----------------------------------------------------------------------------------------
 
+# everything read this run, and everything that was not there
 @dataclass
 class Source:
-    """Everything read this run, and everything that was not there."""
     gaps: list[tuple[str, str]] = field(default_factory=list)   # (artifact, how to produce it)
 
     def json(self, path: Path, produced_by: str) -> dict | list | None:
@@ -94,7 +85,7 @@ class Source:
             self.gaps.append((self._rel(path), produced_by))
             return None
         # utf-8 explicitly: the default here is cp949 and the summary carries file paths
-        # with non-ASCII session names, which fail to decode rather than to parse.
+        # with non-ASCII session names, which fail to decode rather than to parse
         with path.open(encoding="utf-8", newline="") as fh:
             return list(csv.DictReader(fh))
 
@@ -106,8 +97,8 @@ class Source:
             return str(path)
 
 
+# CSV and JSON both hand back '' / None / NaN for absent; one coercion, one answer
 def _num(x, default=None):
-    """CSV and JSON both hand back '' / None / NaN for absent. One coercion, one answer."""
     try:
         v = float(x)
     except (TypeError, ValueError):
@@ -132,14 +123,8 @@ def _table(headers: list[str], rows: list[list[str]]) -> list[str]:
             ""]
 
 
+# the first sentence of a stage's reason, with absolute paths made repo-relative
 def _first_sentence(text: str) -> str:
-    """The first sentence of a stage's reason, with absolute paths made repo-relative.
-
-    Reasons are written to be read next to the file that raised them, so they carry a full
-    local path and several sentences of remedy. Both are wrong for a summary table: the
-    remedy belongs in the ledger the reader is being pointed at, and the absolute path is
-    this machine's, not the repo's.
-    """
     text = " ".join(str(text).split()).replace(str(REPO_ROOT) + "\\", "").replace(
         str(REPO_ROOT) + "/", "")
     head = text.split(". ")[0].rstrip(".")
@@ -151,12 +136,12 @@ def _missing(what: str, produced_by: str) -> list[str]:
 
 
 # ----------------------------------------------------------------------------------------
-# Sections. Each returns markdown lines and reads only what it needs, so one absent stage
-# blanks one section instead of failing the report.
+# Sections; each returns markdown lines and reads only what it needs, so one absent stage
+# blanks one section instead of failing the report
 # ----------------------------------------------------------------------------------------
 
+# what the corpus is; the three populations that get conflated constantly
 def section_corpus(src: Source) -> list[str]:
-    """What the corpus is — the three populations that get conflated constantly."""
     summary = src.csv(LABELED_RAW / "label_summary.csv", "python -m stages.s2_ml.label_all")
     meta = src.json(RUNS / "s2_ml" / "model_meta.json", "python -m stages.s2_ml.train")
     loco = src.json(RUNS / "s2_ml" / "locoeval.json", "python -m stages.s2_ml.train")
@@ -192,8 +177,8 @@ def section_corpus(src: Source) -> list[str]:
             out += [f"Sealed lockbox subject: **{', '.join(lb['revs'])}** — single use. "
                     f"See §2 for what it scored and `caveats.md` §3.2 before quoting it.", ""]
 
-    # Variant coverage: which hardware the serve path can and cannot read. The abstentions
-    # ledger is the authority — an unmapped variant is a refusal, not a low score.
+    # Variant coverage: which hardware the serve path can and cannot read; the abstentions
+    # ledger is the authority- an unmapped variant is a refusal, not a low score
     if summary:
         served = Counter(r["variant"] for r in summary if r["labelled"] == "True")
         abst = src.jsonl(LABELED_RAW / "abstentions.jsonl", "python -m stages.s2_ml.label_all") or []
@@ -219,8 +204,8 @@ def section_corpus(src: Source) -> list[str]:
     return out
 
 
+# S1; what was cleaned, what was thrown away, and what was flagged but kept
 def section_s1(src: Source) -> list[str]:
-    """S1 — what was cleaned, what was thrown away, and what was flagged but kept."""
     out = ["## §1 — S1 clean", "", "*Source: `runs/s1_clean/`*", ""]
     produced_by = "python -m stages.s1_clean.clean"
     segs = src.jsonl(RUNS / "s1_clean" / "segments.jsonl", produced_by)
@@ -252,18 +237,9 @@ def section_s1(src: Source) -> list[str]:
                   [[f"`{q['file']}`", f"`{q.get('category', '')}`", q.get("reason", ""),
                     "**yes**" if q.get("needs_human") else "no"] for q in (quar or [])])
 
-    # Dropped segments, grouped by cause rather than listed. The full list is in
-    # segments.jsonl; what a reader needs here is how many INDEPENDENT problems it
-    # represents, and the answer is far fewer than the count.
-    #
-    # Bucket on the stage's own reason string FIRST, then subdivide. Splitting on row count
-    # first is what silently filed the two rate-family rejects — both `seg 0`, both 2 rows —
-    # as export preamble, hiding a real hardware finding inside a known artifact.
-    #
-    # Two markers, both live. resample.py reworded this reason on 2026-08-04 ("family"
-    # collided with the header family census resolves), and segments.jsonl in runs/ still
-    # holds rows written under the old wording. Matching only the new one would silently
-    # reclassify those as length problems — the exact miscount this bucket exists to stop.
+    # dropped segments grouped by cause, not listed; the full list is in segments.jsonl
+    # bucket on the stage's own reason string FIRST, then subdivide: splitting on row
+    # count first hid a real hardware finding inside a known export artefact
     rate_markers = ("matches no known acquisition rate", "fits no known family")
     rate_rejects = [s for s in dropped
                     if any(m in str(s.get("reason", "")) for m in rate_markers)]
@@ -290,7 +266,7 @@ def section_s1(src: Source) -> list[str]:
                       [[f"`{Path(s['path']).name}`", s.get("index"),
                         f"{_num(s.get('source_hz'), 0):.3f} Hz", s.get("reason", "")]
                        for s in rate_rejects])
-    # One file losing several segments is a different finding from several files losing one.
+    # One file losing several segments is a different finding from several files losing one
     by_file = Counter(s["path"] for s in fragments)
     if by_file and by_file.most_common(1)[0][1] > 1:
         f_path, n = by_file.most_common(1)[0]
@@ -338,14 +314,8 @@ def section_s1(src: Source) -> list[str]:
     return out
 
 
+# the champion/challenger ledger: what was proposed, measured, promoted and refused
 def _section_s2_ledger(src: Source) -> list[str]:
-    """The champion/challenger ledger: what was proposed, measured, promoted and refused.
-
-    Read straight off `experiments.jsonl` / `proposals.jsonl`, including the rejections. The
-    rejections are the half worth printing: a table of promotions alone reads as a model that
-    only ever improved, and the reason a challenger lost is what stops the next cycle paying
-    for it again.
-    """
     ledger = src.jsonl(RUNS / "s2_ml" / "experiments.jsonl",
                        "python -m stages.s2_ml.experiment --seed")
     if not ledger:
@@ -353,9 +323,9 @@ def _section_s2_ledger(src: Source) -> list[str]:
 
     champ = src.json(RUNS / "s2_ml" / "champion.json",
                      "python -m stages.s2_ml.experiment --seed")
-    # Grouping only, and NOT the gate. `experiment.comparable` is the authority on whether two
+    # Grouping only, and NOT the gate; `experiment.comparable` is the authority on whether two
     # macro-F1s may be subtracted; this splits the table on the same fingerprint so a row
-    # measured on a superseded basis is never printed in a column next to one that is not.
+    # measured on a superseded basis is never printed in a column next to one that is not
     ref = (champ or {}).get("corpus")
     current = [e for e in ledger if e.get("corpus") and e["corpus"] == ref]
     prior = [e for e in ledger if e not in current]
@@ -401,8 +371,8 @@ def _section_s2_ledger(src: Source) -> list[str]:
     return out
 
 
+# S2; which model, why that one, and how well it does on seen vs unseen subjects
 def section_s2(src: Source) -> list[str]:
-    """S2 — which model, why that one, and how well it does on seen vs unseen subjects."""
     out = ["## §2 — S2 ml", "", "*Source: `runs/s2_ml/`, `stages/s2_ml/champion_spec.json`*", ""]
     train_cmd = "python -m stages.s2_ml.train"
     loco = src.json(RUNS / "s2_ml" / "locoeval.json", train_cmd)
@@ -426,8 +396,8 @@ def section_s2(src: Source) -> list[str]:
          f"{meta['presets'][meta['default_preset']]}"],
     ])
 
-    # Why this one, in the champion's own words. Kept as the spec's text rather than
-    # paraphrased: the rationale is the artifact, and a paraphrase would drift from it.
+    # Why this one, in the champion's own words; kept as the spec's text rather than
+    # paraphrased: the rationale is the artifact, and a paraphrase would drift from it
     if spec:
         out += ["### Why this champion, and what was rejected", "",
                 spec.get("rationale", "").strip(), ""]
@@ -443,7 +413,7 @@ def section_s2(src: Source) -> list[str]:
 
     out += _section_s2_ledger(src)
 
-    # The measured comparison behind the choice, if the sweep is still around.
+    # The measured comparison behind the choice, if the sweep is still around
     sweep = RUNS / "s2_ml_seedsweep.json"
     if sweep.is_file():
         rows_by_model: dict[str, list[dict]] = {}
@@ -462,7 +432,7 @@ def section_s2(src: Source) -> list[str]:
         out += ["The deciding line is coverage at equal precision: same quality of answer, "
                 "more answers.", ""]
 
-    # Ablations, if their run dirs survive. Each is a full locoeval, so they compare directly.
+    # Ablations, if their run dirs survive; each is a full locoeval, so they compare directly
     abl = sorted(RUNS.glob("s2_ml_abl_*"))
     if abl:
         rows = [["**shipped**", f"{len(meta['features'])}", _f(loco["macro_f1"]),
@@ -513,7 +483,7 @@ def section_s2(src: Source) -> list[str]:
                       [[f"`{f}`", _f(v), f"{i + 1} of {len(imp)}"]
                        for i, (f, v) in enumerate(list(imp)[:12])])
         # The interleg block is what makes S3 a dependent second opinion, so its weight in
-        # this table is the thing to read, not the ordering.
+        # this table is the thing to read, not the ordering
         ileg = sum(v for f, v in imp if f.startswith("ileg_"))
         if ileg:
             out += [f"The `ileg_*` block carries **{ileg:.1%}** of total importance. That is "
@@ -527,8 +497,8 @@ def section_s2(src: Source) -> list[str]:
     return out
 
 
+# the coverage/accuracy curve at every threshold, window level and row level
 def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
-    """The coverage/accuracy curve at every threshold, window level and row level."""
     out = ["### Selective accuracy — the coverage/accuracy pair", "",
            "Coverage and accuracy are quoted together everywhere. Either alone is "
            "meaningless: abstain on all but the easiest window and accuracy reads 1.000.", ""]
@@ -578,10 +548,10 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
                     f"{hu['abstain_rate_elsewhere']:.1%} elsewhere. `-1` never enters "
                     f"training, so the agreement is not circular.", ""]
 
-    # The route, not the population. Everything above scores the annotated `lpf_view`
-    # export; a caller feeds a raw device log. That gap was closed by argument —
-    # `verify_serve` shows the two routes agree, so the lpf_view accuracy was inherited —
-    # and this section closes it by measurement instead.
+    # The route, not the population; everything above scores the annotated `lpf_view`
+    # export; a caller feeds a raw device log; that gap was closed by argument
+    # `verify_serve` shows the two routes agree, so the lpf_view accuracy was inherited
+    # and this section closes it by measurement instead
     raw = src.json(RUNS / "s2_ml" / "raweval.json", "python -m stages.s2_ml.raweval")
     if raw:
         o, tr = raw["overall"], raw.get("transitive_lpf_view")
@@ -629,10 +599,10 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
                     if abs(r["threshold"] - shipped) < 1e-9), None)
         lb = next((r for r in lock["curve"] if abs(r["threshold"] - shipped) < 1e-9), None)
         out += [f"#### Lockbox — {', '.join(lock['revs'])}, held out of everything", ""]
-        # The one number in this repo that cannot be refreshed to match a code change.
+        # The one number in this repo that cannot be refreshed to match a code change
         # Everything else on this page is regenerated per run; if the feature set moves,
-        # the lockbox row silently keeps describing the model that ran before it. Stated
-        # rather than corrected — correcting it means re-reading a spent lockbox (§7).
+        # the lockbox row silently keeps describing the model that ran before it; stated
+        # rather than corrected- correcting it means re-reading a spent lockbox
         n_now = len(meta.get("features") or [])
         n_then = lock.get("n_features")
         if n_now and n_then != n_now:
@@ -658,7 +628,7 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
                     f"upper bound, not an estimate. The lockbox is single-use — check "
                     f"`caveats.md` §3.2 before re-reading it.", ""]
         # Non-monotonicity is the finding that does not fit in a single row: abstention is
-        # supposed to buy accuracy, and on a genuinely new subject here it does not.
+        # supposed to buy accuracy, and on a genuinely new subject here it does not
         accs = [r["selective_accuracy"] for r in lock["curve"]]
         if any(b < a for a, b in zip(accs, accs[1:])):
             worst = max((a - b, i) for i, (a, b) in enumerate(zip(accs, accs[1:])))
@@ -674,19 +644,8 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
     return out
 
 
+# which way the errors go- the one cut pooled accuracy hides completely
 def _section_error_direction(src: Source) -> list[str]:
-    """Which way the errors go — the one cut pooled accuracy hides completely.
-
-    Copied from `roweval_loro.json`, like everything else on this page. It was *computed*
-    here until 2026-08-04 — a `Counter` over S2's out-of-fold CSV, and the single exception
-    to this module's read-only rule. The exception broke in both of the ways the rule
-    exists to prevent. The count was window level while the coverage beside it was row
-    level, so one sentence spanned two units (`needtowrite.md` §5.4, gap 8). And `oof.py`
-    was deleted with S4, after which the CSV could not be regenerated: the champion was
-    retrained, every other number on the page moved, and this table went on describing the
-    old model with nothing to say so. **A page that measures nothing cannot disagree with
-    a stage; a page with one exception disagrees exactly there.**
-    """
     row = src.json(RUNS / "s2_ml" / "roweval_loro.json", "python -m stages.s2_ml.roweval")
     if not row:
         return []
@@ -719,13 +678,13 @@ def _section_error_direction(src: Source) -> list[str]:
     return out
 
 
+# S3; what a window is, what the label-free rule says, and where labels look wrong
 def section_s3(src: Source) -> list[str]:
-    """S3 — what a window is, what the label-free rule says, and where labels look wrong."""
     out = ["## §3 — S3 physics", "", "*Source: `runs/s3_physics/`*", ""]
     meta = src.json(RUNS / "s2_ml" / "model_meta.json", "python -m stages.s2_ml.train")
 
-    # The unit everything downstream is counted in. Read from the champion's card rather
-    # than restated, so a retrain at a different window size cannot leave this paragraph lying.
+    # The unit everything downstream is counted in; Read from the champion's card rather
+    # than restated, so a retrain at a different window size cannot leave this paragraph lying
     if meta:
         out += ["### What a *window* is — the unit every count below uses", ""]
         out += _table(["property", "value", "why"], [
@@ -744,9 +703,9 @@ def section_s3(src: Source) -> list[str]:
         ])
 
     # The per-window swap tally that used to be rendered here came from `anchors.csv`, a
-    # 1.4 MB table that existed only to feed S4's join and went when S4 did (2026-08-04).
-    # The rate audit did not go with it — `rate_audit.py`'s docstring holds that argument,
-    # and is the only place it is written down.
+    # 1.4 MB table that existed only to feed S4's join and went when S4 did (2026-08-04)
+    # The rate audit did not go with it- `rate_audit.py`'s docstring holds that argument,
+    # and is the only place it is written down
     out += ["### Where the swap rule is used, and how much it is worth in each place", "",
             "The rule has zero fitted parameters and never sees a label. Both are real; "
             "what they buy depends on what it is pointed at.", ""]
@@ -822,8 +781,8 @@ def section_s3(src: Source) -> list[str]:
     return out
 
 
+# the corpus sweep; coverage only; there is no ground truth here, ever
 def section_sweep(src: Source) -> list[str]:
-    """The corpus sweep — coverage only. There is no ground truth here, ever."""
     out = ["## §5 — Corpus sweep (`label_all`)", "",
            "*Source: `labeled_raw/`*", "",
            "**No ground truth exists here.** This section reports coverage — what fraction "
@@ -870,7 +829,7 @@ def section_sweep(src: Source) -> list[str]:
                        for k, v in by_kind.most_common()])
 
     # Coverage is bimodal on this corpus and the mean hides it entirely, so the shape is
-    # reported as percentiles and the tail is listed by name.
+    # reported as percentiles and the tail is listed by name
     fracs = sorted(v for v in (_num(r["confident_frac"]) for r in lab) if v is not None)
     if fracs:
         def pct_at(q: float) -> float:
@@ -895,26 +854,58 @@ def section_sweep(src: Source) -> list[str]:
     out += ["### Dominant abstention reason, by file", ""]
     out += _table(["reason", "files where it dominates"],
                   [[f"`{k}`", f"{v}"] for k, v in reasons.most_common()])
+    out += _section_by_session(lab)
     out += _section_operating_points(src)
     return out
 
 
+# coverage cut by SESSION inside each variant- the axis nothing else cuts
+def _section_by_session(lab: list[dict]) -> list[str]:
+    by_var: dict[str, list[dict]] = {}
+    for r in lab:
+        by_var.setdefault(r["variant"], []).append(r)
+    # Only variants where something is actually wrong; a per-session table for a clean
+    # variant is twelve rows of 0.99 and buries the one that is not
+    interesting = {v: rs for v, rs in by_var.items()
+                   if any((_num(r["confident_frac"]) or 1) < LOW_COVERAGE_LINE for r in rs)}
+    if not interesting:
+        return ["", "### Coverage by session", "",
+                "No variant holds a file under "
+                f"{LOW_COVERAGE_LINE:.0%} coverage, so there is no cluster to attribute.", ""]
+
+    out = ["", "### Coverage by session — is it the hardware or the dates?", "",
+           "Session is independent of rev and is the one axis nothing else in this repo "
+           "cuts. Shown within variant, for the variants that hold a low-coverage file: a "
+           "cause that is the *hardware* makes every session carrying it bad, a cause that "
+           "is the *dates* does not.", ""]
+    for variant, rs in sorted(interesting.items()):
+        by_sess: dict[str, list[dict]] = {}
+        for r in rs:
+            by_sess.setdefault(r["session"], []).append(r)
+        rows, bad_sessions = [], []
+        for sess, xs in sorted(by_sess.items()):
+            fr = sorted(_num(r["confident_frac"]) or 0.0 for r in xs)
+            med = fr[len(fr) // 2]
+            low = sum(1 for f in fr if f < LOW_COVERAGE_LINE)
+            if low:
+                bad_sessions.append(sess)
+            rows.append([f"`{sess}`", f"{len(xs)}", _f(med, 3),
+                         f"**{low}**" if low else "0"])
+        out += [f"**`{variant}`** — {len(rs)} files over {len(by_sess)} sessions", ""]
+        out += _table(["session", "files", "median coverage", "files < 50%"], rows)
+        clean = len(by_sess) - len(bad_sessions)
+        if bad_sessions and clean:
+            out += [f"**{len(bad_sessions)} of {len(by_sess)} sessions hold every "
+                    f"low-coverage file on this variant; the other {clean} hold none.** "
+                    f"The same hardware records fine outside "
+                    f"{bad_sessions[0]}–{bad_sessions[-1]}, so the variant is not the "
+                    f"cause — those dates are. Look for what changed about the rig or the "
+                    f"protocol in that window, not at the device revision.", ""]
+    return out
+
+
+# every operating point, with what it costs HERE beside what it buys THERE
 def _section_operating_points(src: Source) -> list[str]:
-    """Every operating point, with what it costs HERE beside what it buys THERE.
-
-    The one table in this repo that puts both halves of the decision in one place, and the
-    only reason it can exist is that neither stage measures the other's half:
-
-      - `label_all` sweeps the RAW corpus and can only ever report coverage — there is no
-        ground truth under `data/raw`, so an accuracy column here would be invented.
-      - `roweval` measures accuracy on the ANNOTATED corpus, which is 43 trials from 8
-        subjects and is not the data a caller has.
-
-    Quoting either alone is the mistake: coverage without accuracy is gameable to 1.000,
-    and an accuracy measured on eight subjects is not a promise about a ninth. **This
-    section measures nothing** — both columns are copied from the artifact that owns them,
-    and the join is on the threshold.
-    """
     cmd = "python -m stages.s2_ml.label_all"
     sweep = src.json(LABELED_RAW / "preset_sweep.json", cmd)
     if sweep is None:
@@ -926,8 +917,8 @@ def _section_operating_points(src: Source) -> list[str]:
            "accuracy from `runs/s2_ml/roweval_loro.json` (annotated corpus, held out per "
            "subject). Two populations — read across the row, never down one column.*", ""]
 
-    # The accuracy half. Absent is fine and is stated: the coverage half still answers what
-    # each point costs, which is the question this corpus can speak to.
+    # The accuracy half; absent is fine and is stated: the coverage half still answers what
+    # each point costs, which is the question this corpus can speak to
     row = src.json(RUNS / "s2_ml" / "roweval_loro.json", "python -m stages.s2_ml.roweval")
     acc_by_thr = {round(c["threshold"], 4): c for c in row["curve"]} if row else {}
 
@@ -964,8 +955,8 @@ def _section_operating_points(src: Source) -> list[str]:
             f"disagree.", ""]
 
     # The two coverages are over different denominators, and the 0.50 row measures the
-    # difference rather than asserting it. Stated because a reader who knows the
-    # development figure will compare it to this one and the gap is not all population.
+    # difference rather than asserting it; stated because a reader who knows the
+    # development figure will compare it to this one and the gap is not all population
     zero_row = min(sweep["corpus"], key=lambda c: c["threshold"])
     uncovered = 1.0 - (_num(zero_row["coverage"]) or 0.0)
     out += [f"**The two halves count different denominators.** `coverage HERE` is over "
@@ -976,7 +967,7 @@ def _section_operating_points(src: Source) -> list[str]:
             f"**{uncovered:.2%} of corpus rows are uncovered at every threshold** and are "
             f"abstentions of the recording, not of the model.", ""]
 
-    # The resolution of the coverage column, not a second finding.
+    # The resolution of the coverage column, not a second finding
     worst_band = max(sweep["corpus"], key=lambda c: c.get("boundary", 0))
     if worst_band.get("boundary"):
         shipped_band = next((c for c in sweep["corpus"]
@@ -997,9 +988,9 @@ def _section_operating_points(src: Source) -> list[str]:
                 f"these set, abstention is not a function of confidence alone and the swept "
                 f"columns would overstate coverage; `label_all` does not write them.", ""]
 
-    # The cliff. A corpus mean moves smoothly across the presets and hides that individual
-    # recordings do not — a file at 55% coverage is usable and the same file at 45% is a
-    # review queue, and which files those are is the part an operator can act on.
+    # The cliff; a corpus mean moves smoothly across the presets and hides that individual
+    # recordings do not- a file at 55% coverage is usable and the same file at 45% is a
+    # review queue, and which files those are is the part an operator can act on
     zero = [c for c in sweep["corpus"] if c.get("files_zero")]
     if zero:
         worst = max(zero, key=lambda c: c["files_zero"])
@@ -1012,9 +1003,9 @@ def _section_operating_points(src: Source) -> list[str]:
 
 
 # ----------------------------------------------------------------------------------------
-# Flags. Mechanical rules only — a threshold crossed, a doc that does not quote the current
-# pair. Each names what to look at and none of them conclude anything. A generated file that
-# reached conclusions would be the fifth stage nobody documented.
+# Flags; mechanical rules only- a threshold crossed, a doc that does not quote the current
+# pair; each names what to look at and none of them conclude anything; a generated file that
+# reached conclusions would be the fifth stage nobody documented
 # ----------------------------------------------------------------------------------------
 
 @dataclass
@@ -1024,26 +1015,14 @@ class Flag:
     detail: str
 
 
+# does this prose carry that (coverage, accuracy) pair, in any reasonable rounding?
 def _quotes(text: str, coverage: float, accuracy: float) -> tuple[bool, bool]:
-    """Does this prose carry that (coverage, accuracy) pair, in any reasonable rounding?
-
-    The repo writes coverage at one decimal in narrative and two in tables, and accuracy at
-    three or four — all correct, all different strings. Matching one spelling would flag
-    every document that rounded differently, which is noise, not staleness.
-    """
     return (any(f"{coverage:.{d}%}" in text for d in (0, 1, 2)),
             any(f"{accuracy:.{d}f}" in text for d in (3, 4)))
 
 
+# does the checked-in prose still quote the live headlines?
 def _flag_stale_prose(src: Source, meta: dict | None) -> list[Flag]:
-    """Does the checked-in prose still quote the live headlines?
-
-    This is the check that caught `README.md` and `caveats.md` sitting at "coverage 95.9%
-    at 0.9805" while the artifact read 65.1% / 0.9972. Both files told the reader to prefer
-    the report; neither stopped being wrong to a reader who did not.
-
-    Each pair is checked against the artifact that owns it — see `PROSE_CLAIMS`.
-    """
     pairs: dict[str, tuple[float, float, str]] = {}
     row = src.json(RUNS / "s2_ml" / "roweval_loro.json", "python -m stages.s2_ml.roweval")
     if row and meta:
@@ -1058,9 +1037,9 @@ def _flag_stale_prose(src: Source, meta: dict | None) -> list[Flag]:
         for name in PROSE_CLAIMS.get(claim, []):
             p = REPO_ROOT / name
             if not p.is_file():
-                # Listed as quoting a headline and not on disk. Skipping silently would let
-                # a deleted document stay deleted without anything ever saying so — the same
-                # failure this module refuses for artifacts, one layer up.
+                # Listed as quoting a headline and not on disk; skipping silently would let
+                # a deleted document stay deleted without anything ever saying so- the same
+                # failure this module refuses for artifacts, one layer up
                 out.append(Flag(
                     "gap", f"`{name}` is listed as quoting the {claim} headline but is missing",
                     f"nothing checks the {claim} pair against prose until it is rewritten. "
@@ -1109,9 +1088,8 @@ def _flag_subject_spread(loco: dict | None) -> list[Flag]:
     return []
 
 
+# do the worst corpus files concentrate?
 def _flag_low_coverage_cluster(summary: list[dict] | None) -> list[Flag]:
-    """Do the worst corpus files concentrate? Twelve hard recordings and one bad batch
-    look identical in an average and want completely different responses."""
     if not summary:
         return []
     lab = [r for r in summary if r["labelled"] == "True"]
@@ -1145,36 +1123,86 @@ def _flag_unserved(abst: list[dict] | None) -> list[Flag]:
     return []
 
 
-def _flag_unadjudicated(audit: dict | None) -> list[Flag]:
-    """Trials below the exclusion line but above everything else. The flag line has
-    separated one case, so its false-positive rate is unmeasured in both directions."""
+# the S3 label review's verdicts, keyed (rev, trial), from the most recent run
+# the counter is compared as an INTEGER: run10 sorts before run2 by name, and the failure
+# is silent- it would read an older run and report a trial as unread
+def _latest_reviews() -> tuple[Path | None, dict[tuple[str, int], dict]]:
+    def order(p: Path) -> tuple[str, int]:
+        date, _, run = p.name.partition("_run")
+        return date, int(run) if run.isdigit() else 0
+
+    for d in sorted((p for p in RUNS.glob("*_run*") if p.is_dir()), key=order, reverse=True):
+        path = d / "label_review.jsonl"
+        if not path.is_file():
+            continue
+        out: dict[tuple[str, int], dict] = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            if r.get("rev") is not None and r.get("trial") is not None:
+                out[(r["rev"], int(r["trial"]))] = r.get("review") or {}
+        if out:
+            return d, out
+    return None, {}
+
+
+# trials below the exclusion line but above everything else
+def _flag_unadjudicated(audit: dict | None,
+                        reviewed: dict[tuple[str, int], dict] | None = None,
+                        review_dir: Path | None = None) -> list[Flag]:
     if not audit:
         return []
-    unflagged = sorted((t for t in audit["trials"] if not t.get("flag")),
-                       key=lambda t: -t["disagree_frac"])[:4]
-    near = [t for t in unflagged if t["disagree_frac"] >= audit["max_disagree"] / 4]
+    reviewed = reviewed or {}
+    floor = _num(audit.get("min_windows"), 0) or 0
+    testable = [t for t in audit["trials"]
+                if not t.get("flag") and (_num(t.get("windows"), 0) or 0) >= floor]
+    near = [t for t in sorted(testable, key=lambda t: -t["disagree_frac"])[:4]
+            if t["disagree_frac"] >= audit["max_disagree"] / 4]
     if not near:
         return []
-    return [Flag("gap", "label-audit trials below the line and unadjudicated",
-                 "; ".join(f"{t['rev']}/t{t['trial']} at {t['disagree_frac']:.2f}"
-                           for t in near)
-                 + f" — under the `disagree > {audit['max_disagree']}` exclusion line and "
-                   f"above everything else. Nothing excludes them and nobody has read them.")]
+
+    where = f" (`{review_dir.name}`)" if review_dir else ""
+    unread = [t for t in near if (t["rev"], int(t["trial"])) not in reviewed]
+    judged = [(t, reviewed[(t["rev"], int(t["trial"]))]) for t in near
+              if (t["rev"], int(t["trial"])) in reviewed]
+
+    out: list[Flag] = []
+    if unread:
+        out.append(Flag("gap", "label-audit trials below the line and unadjudicated",
+                        "; ".join(f"{t['rev']}/t{t['trial']} at {t['disagree_frac']:.2f} "
+                                  f"({int(t['windows'])} windows)" for t in unread)
+                        + f" — under the `disagree > {audit['max_disagree']}` exclusion line, "
+                          f"above everything else, and over the {floor:.0f}-window floor a "
+                          f"fraction needs to mean anything. Nothing excludes them and no "
+                          f"review has judged them"
+                        + (f"; the newest ledger{where} covers the others." if judged
+                           else " — run `run_pipeline.py --with-agents --from s3_label_review`.")))
+
+    # Read, judged bad data, and still in the corpus; `EXCLUDED_TRIALS` is edited BY HAND with
+    # the evidence beside it (an agent may nominate a label change, never make one), so this is
+    # the state where the loop is genuinely open- as against `annotation_policy`, where not
+    # excluding is the answer
+    stuck = [(t, r) for t, r in judged
+             if r.get("disposition") == "mislabel_candidate"
+             and (t["rev"], int(t["trial"])) not in EXCLUDED_TRIALS]
+    if stuck:
+        out.append(Flag("gap", "a trial judged a mislabel candidate is still in the corpus",
+                        "; ".join(f"{t['rev']}/t{t['trial']} — cause `{r.get('cause')}`"
+                                  for t, r in stuck)
+                        + f", reviewed{where} but absent from `dataset.EXCLUDED_TRIALS`. That "
+                          f"list is edited by hand on purpose; this flag is the reminder, not "
+                          f"the edit."))
+    return out
 
 
 def collect_flags(src: Source, loco: dict | None, meta: dict | None,
                   summary: list[dict] | None, abst: list[dict] | None,
                   audit: dict | None) -> list[Flag]:
     flags: list[Flag] = []
-    # Freshness first: it invalidates every other number rather than sitting beside them.
-    #
-    # `labeled_raw/` is checked UNCONDITIONALLY, the `runs/*` directories only when stamped.
-    # The asymmetry is the point. `label_all` is the one step left that consumes another
-    # stage's artifact and writes its own, so it is the one place where re-running a stage
-    # alone leaves a whole corpus of CSVs carrying a replaced champion's calls — and an
-    # unstamped sweep is exactly the state that hides that, which is why `check_inputs`
-    # reports "cannot tell" the same way it reports "stale". A stage output that consumes
-    # nothing has nothing to go stale against, and demanding a stamp from each would be noise.
+    # freshness first: it invalidates every other number rather than sitting beside them
+    # labeled_raw/ is checked UNCONDITIONALLY, runs/* only when stamped; label_all is the
+    # one step that consumes another stage's artifact and writes its own
     stamped = [d for d in RUNS.glob("*") if (d / "_inputs.json").is_file()]
     if LABELED_RAW.is_dir():
         stamped.append(LABELED_RAW)
@@ -1185,7 +1213,8 @@ def collect_flags(src: Source, loco: dict | None, meta: dict | None,
     flags += _flag_subject_spread(loco)
     flags += _flag_low_coverage_cluster(summary)
     flags += _flag_unserved(abst)
-    flags += _flag_unadjudicated(audit)
+    review_dir, reviewed = _latest_reviews()
+    flags += _flag_unadjudicated(audit, reviewed, review_dir)
     return flags
 
 
@@ -1239,7 +1268,7 @@ def build(src: Source) -> tuple[str, dict]:
         "cannot disagree with a stage. Re-run the stage, not this, to change a number.", "",
         "---", "",
     ]
-    # Flags first. A reader who stops after one screen should stop on the problems.
+    # Flags first; a reader who stops after one screen should stop on the problems
     body += section_flags(flags)
     body += ["---", ""]
     for fn in (section_corpus, section_s1, section_s2, section_s3, section_sweep):
@@ -1272,7 +1301,7 @@ def main() -> None:
     (out_dir / BREAKDOWN_MD).write_text(md, encoding="utf-8")
     (out_dir / BREAKDOWN_JSON).write_text(json.dumps(machine, indent=2), encoding="utf-8")
 
-    # ASCII on the console: it is cp949 here. The .md keeps its typography.
+    # ASCII on the console: it is cp949 here; the .md keeps its typography
     print(f"[breakdown] {len(md.splitlines()):,} lines -> {out_dir / BREAKDOWN_MD}")
     if machine["missing_artifacts"]:
         print(f"[breakdown] {len(machine['missing_artifacts'])} artifact(s) missing:")

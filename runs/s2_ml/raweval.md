@@ -5,7 +5,7 @@ Raw device CSVs labelled through `label_csv` at threshold **0.85** and scored ag
 - paired recordings: **13** across **3** subjects (rev13, rev4, rev7)
 - rows returned: 480,700  →  scorable: **474,773** (dropped 5,927 human `-1`, 0 with no annotated sample in range)
 
-**The lockbox is not in this table.** `rev8`'s four pairs are refused in code (§7), so every subject here is a development subject. Read this against `roweval_loro`'s 0.9904, not against rev8's 0.9308.
+**The lockbox is not in this table.** `rev8`'s four pairs are refused in code (§7), so every subject here is a development subject. Read this against `roweval_loro`'s 0.9901, not against rev8's 0.9308.
 
 | | |
 |---|---|

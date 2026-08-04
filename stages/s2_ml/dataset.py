@@ -1,23 +1,6 @@
-"""S2 dataset: load the labeled rev* trials onto the canonical grid, split by rev.
-
-The only labeled data is `data/labeled/rev*/csv/annotated_loco_rev*_trial_*.csv`
-(DOMAIN_NOTES §5.7): the `lpf_view` family — four rotational features
-(`L/R_ang_LPF`, `L/R_angvel_LPF`) + `Label` (0=stand, 10=walk, -1=human-unknown).
-
-**Eight revisions, not one:** rev2, rev3, rev4, rev5, rev6, rev7, rev8, rev13. They all
-carry the same six columns, which is why the family is named for the representation and
-not for a revision (`config.FAMILY_MARKERS`).
-
-Two disciplines carried straight from S1, because they are not optional here either:
-  - **Canonical grid.** rev* logs at ~494 Hz with jitter (§7). Every trial is put on
-    the 100 Hz grid by the same `resample_file` S1 uses — segment at gaps, FIR-decimate
-    the continuous channels, nearest-sample the label (never average a class code).
-  - **Group = rev.** A rev is one subject on one day (§7); trials within a rev share
-    both. CV groups by rev and the lockbox holds out whole revs, so nothing leaks.
-
-This module does NOT window or train — it hands back normalized, grouped, split
-frames. Feature extraction and modelling live in their own modules.
-"""
+# S2 dataset: load the labeled rev* trials onto the canonical grid, split by rev
+# same resampler as S1, and group == rev (one subject, one day) so nothing leaks
+# does NOT window or train- just normalized, grouped, split frames
 
 from __future__ import annotations
 
@@ -32,43 +15,26 @@ from stages.s1_clean.resample import resample_file
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LABELED_DIR = REPO_ROOT / "data" / "labeled"
 
-# The `lpf_view` family's four channels. Names carry stray whitespace in some trials —
-# normalized on read.
+# the lpf_view four; some trials carry stray whitespace- normalized on read
 FEATURES = ("L_ang_LPF", "R_ang_LPF", "L_angvel_LPF", "R_angvel_LPF")
 LABEL_COL = "Label"
 TIME_COL = "Time"
 
-# Label codes (§5.1/§5.2). -1 is excluded from training targets, kept for eval.
+# -1 is excluded from training targets, kept for eval
 STAND, WALK, HUMAN_UNKNOWN = 0, 10, -1
 TRAIN_CLASSES = (STAND, WALK)
 
-# Lockbox: whole revs sealed until the very end (§7).
-#
-# rev8 ONLY. rev13 was sealed alongside it and opened deliberately: the first lockbox run
-# showed the confidence signal did not transfer to it at all — its accuracy is flat from
-# threshold 0.50 to 0.95 — and a failure that cannot be looked at cannot be fixed. rev13 is
-# now a development subject, held out one fold at a time by the leave-one-rev-out CV like
-# any other.
-#
-# rev8 has been read exactly once and must not be read again until the work is frozen.
-# Re-running `roweval --lockbox` to check whether a change helped would turn the only
-# measurement in this repo that was never optimized against into a second validation set.
+# whole revs sealed until the work is frozen; rev8 has been read exactly ONCE --
+# re-reading it to check whether a change helped makes it a second validation set
+# rev13 was sealed too and opened deliberately: it failed and a failure you cannot
+# look at cannot be fixed; it is a development subject now
 DEFAULT_LOCKBOX_REVS = ("rev8",)
 
-# Trials quarantined for a demonstrated label error, as (rev, trial). Excluded from both
-# training and scoring, and never silently: a mislabelled trial teaches the model the wrong
-# thing AND depresses every metric computed against it, so leaving it in is not the
-# conservative choice it looks like.
-#
-# rev13/4: 12,691 rows, every one annotated `stand`. The file contains two runs under that
-# one label - 7.0 s at 2.1 deg/s angular-velocity std, then 119.9 s at 45.3 deg/s with 71
-# deg of interleg swing and 39 deg of thigh excursion. rev13's own labelled WALKING runs
-# measure 35-50 deg/s across the other six trials. The second run is walking.
-#
-# The evidence is INTERNAL to the file - one run 20x the other under the same label, and
-# the larger matching that subject's own walking - not "the classifier disagreed".
-# Excluding data because a model dislikes it is how a corpus gets quietly fitted to its
-# model; this entry stands on the measurement and would stand with no model at all.
+# quarantined for a demonstrated label error; leaving one in is not the conservative
+# choice- it teaches the wrong thing AND depresses every metric scored against it
+# rev13/4: all 12,691 rows annotated stand, but it holds two runs- 7.0 s at 2.1 deg/s
+# then 119.9 s at 45.3, and this subject's own labelled walking is 35-50; evidence is
+# INTERNAL to the file, not "the classifier disagreed"
 EXCLUDED_TRIALS = {("rev13", 4)}
 
 _REV = re.compile(r"(rev\d+)")
@@ -85,38 +51,24 @@ def trial_of(path: Path) -> int:
     return int(m.group(1)) if m else 0
 
 
+# every labeled trial minus the quarantined; excluded=set() loads the raw corpus,
+# which is what label_audit does so it can still see what it flagged
 def find_trials(labeled_dir: Path = LABELED_DIR,
                 excluded: set[tuple[str, int]] | None = None) -> list[Path]:
-    """Every labeled trial, minus the quarantined ones.
-
-    `stages.s3_physics.label_audit` proposes exclusions with evidence; they take effect
-    only once written into `EXCLUDED_TRIALS` by hand. Pass `excluded=set()` to load the raw
-    corpus, which is what the audit itself does so it can still see what it flagged.
-    """
     excluded = EXCLUDED_TRIALS if excluded is None else excluded
     return sorted(p for p in labeled_dir.rglob("annotated_loco_*_trial_*.csv")
                   if (rev_of(p), trial_of(p)) not in excluded)
 
 
-# The input channels an experiment spec may ask a trial for. In the sibling repo this was
-# FEATURES plus an optional yaw channel, and the difference mattered: asking for the optional
-# one silently shrank the corpus to the trials that carried it. Here every labeled trial
-# carries exactly the sagittal four and nothing else, so the set is FEATURES itself and a
-# spec has no channel choice to make. `experiment.validate_spec` still checks against this
-# name, which is what makes the day a richer corpus arrives a one-line change rather than a
-# rediscovery of why the check existed.
+# == FEATURES today, since every trial carries the same four; kept as its own name so
+# validate_spec still has something to check when a richer corpus arrives
 SELECTABLE_FEATURES = FEATURES
 
 
+# header-only, so it's free; a challenger measured on a quietly smaller corpus is not
+# comparable to a champion measured on the whole one- report it, don't crash mid-fit
 def partition_trials(features: tuple[str, ...] = FEATURES,
                      labeled_dir: Path = LABELED_DIR) -> tuple[list[Path], list[Path]]:
-    """Split the corpus by whether a trial carries every requested channel.
-
-    Reads only the header, so it costs nothing. Which trials lack a channel is a fact worth
-    REPORTING rather than discovering as a crash mid-fit — and a challenger measured on a
-    quietly smaller corpus is not comparable to a champion measured on the whole one, which
-    is the failure this exists to make visible.
-    """
     want = {TIME_COL, *features, LABEL_COL}
     have, lack = [], []
     for p in find_trials(labeled_dir):
@@ -125,23 +77,21 @@ def partition_trials(features: tuple[str, ...] = FEATURES,
     return have, lack
 
 
+# one labeled trial, normalized onto the canonical grid
 @dataclass
 class Trial:
-    """One labeled trial, normalized onto the canonical grid."""
-
     path: str
     rev: str
     trial: int
     split: str          # "train" | "val" | "lockbox"
-    frame: pd.DataFrame  # Time, segment, FEATURES..., Label — usable segments only
+    frame: pd.DataFrame  # Time, segment, FEATURES..., Label- usable segments only
     n_source_rows: int  # rows in the raw trial, before normalization
-    dropped_rows: int   # raw rows in segments too short / off-grid to keep (§3.2 burst)
+    dropped_rows: int   # raw rows in segments too short / off-grid to keep
 
 
+# strip header whitespace, keep Time + 4 features + Label BY NAME
 def _read_raw(path: Path) -> pd.DataFrame:
-    """Read a trial, strip header whitespace, keep Time + 4 features + Label by name."""
-    # index_col=False for the same reason as the raw readers: no file in the labeled family
-    # is ragged today, and nothing should quietly start shifting if one ever is.
+    # index_col=False: no labeled file is ragged today, and none should start shifting
     df = pd.read_csv(path, index_col=False)
     df.columns = [c.strip() for c in df.columns]
     want = [TIME_COL, *FEATURES, LABEL_COL]
@@ -151,12 +101,11 @@ def _read_raw(path: Path) -> pd.DataFrame:
     return df[want]
 
 
+# 100 Hz via S1's resampler: features FIR-decimated, Label nearest-sampled
 def load_trial(path: Path, split: str) -> Trial:
-    """Normalize one trial to 100 Hz. Reuses S1's resampler: continuous features are
-    FIR-decimated, the categorical Label is nearest-sampled (role `label`)."""
     df = _read_raw(path)
     frame, segments = resample_file(df, TIME_COL)
-    # resample_file emits float Label from nearest sampling; restore integer codes.
+    # nearest sampling emits float Label; restore integer codes
     if LABEL_COL in frame.columns:
         frame[LABEL_COL] = frame[LABEL_COL].round().astype(int)
     dropped = sum(s.n_source_rows for s in segments if not s.usable)
@@ -178,10 +127,7 @@ def load_dataset(
     val_revs: tuple[str, ...] = (),
     excluded: set[tuple[str, int]] | None = None,
 ) -> list[Trial]:
-    """Load every trial, normalized and split. `val_revs` may be empty when the caller
-    prefers grouped CV over a fixed validation rev; the lockbox is always held out.
-
-    `excluded` defaults to the quarantine list; pass `set()` to load the raw corpus."""
+    # val_revs may be empty (grouped CV instead); the lockbox is always held out
     trials = []
     for p in find_trials(labeled_dir, excluded):
         split = assign_split(rev_of(p), lockbox_revs, val_revs)
@@ -189,8 +135,8 @@ def load_dataset(
     return trials
 
 
+# per-rev row counts by split and class- the sanity check before any modelling
 def census(trials: list[Trial]) -> pd.DataFrame:
-    """Per-rev row counts by split and class — the sanity check before any modelling."""
     rows = []
     for t in trials:
         lab = t.frame[LABEL_COL]

@@ -1,21 +1,7 @@
-"""Is this recording usable at all? The label-free gate in front of every consumer.
-
-    python -m stages.s1_clean.validate path/to.csv
-
-S1 already refuses raw device logs it cannot trust — degenerate time base, unknown rate
-family, dead channels — and records the refusal in a quarantine ledger. This is that same
-job for the `lpf_view` family: the four rotational channels plus `Time`, which is what the
-labelling path actually consumes.
-
-It belongs in S1 and not in S2 because nothing here needs a model, a label, or a training
-set. It answers "was anything measured properly", which is a property of the file.
-
-**Every check is a way a file can be broken without being empty.** An empty file fails
-loudly on its own; a file with a flat channel, or one that never rests, produces confident
-numbers built on nothing, and that is the failure worth catching. `usable=False` means no
-row of the file can be scored; warnings mean the numbers are weaker than they look and the
-reason travels with them.
-"""
+# is this recording usable at all- the label-free gate in front of every consumer
+#   python -m stages.s1_clean.validate path/to.csv
+# every check is a way a file breaks WITHOUT being empty; usable=False means nothing
+# is scorable; a warning means the numbers are weaker than they look
 
 from __future__ import annotations
 
@@ -28,12 +14,11 @@ import pandas as pd
 
 from stages.s1_clean.config import CANONICAL_HZ
 
-# The `lpf_view` family this pipeline serves (config.FAMILY_MARKERS). Kept here rather than
-# imported from S2 so the gate does not depend on the stage it guards.
+# duplicated, not imported from S2- the gate must not depend on the stage it guards
 TIME_COL = "Time"
 FEATURE_COLUMNS = ("L_ang_LPF", "R_ang_LPF", "L_angvel_LPF", "R_angvel_LPF")
 
-# A channel whose spread is below this is not a measurement.
+# below this spread it is not a measurement
 FLAT_STD_DEG = 1e-6
 
 
@@ -56,13 +41,13 @@ class Health:
         return "\n".join(lines)
 
 
+# by name, never by position
 def check_columns(df: pd.DataFrame) -> list[str]:
-    """Resolve the required columns BY NAME (§1.3 - the numeric prefix is a lie)."""
     return [c for c in (TIME_COL, *FEATURE_COLUMNS) if c not in df.columns]
 
 
+# a time base that doesn't advance makes every rate, gap and window meaningless
 def check_time(t: np.ndarray) -> list[str]:
-    """A time base that does not advance makes every rate, gap and window meaningless (§2.6)."""
     errors = []
     if t.size < 2:
         return ["fewer than 2 samples: no time base"]
@@ -77,14 +62,9 @@ def check_time(t: np.ndarray) -> list[str]:
     return errors
 
 
+# judges a frame already on the canonical grid; rest_reference imported lazily, same reason
 def health(frame: pd.DataFrame, window_s: float = 2.0,
            fs_hz: float = CANONICAL_HZ) -> Health:
-    """Judge a frame that is already on the canonical grid (has a `segment` column).
-
-    `rest_trusted` is imported lazily: the rest search lives in S2 next to the features
-    that consume it, and importing it at module scope would make this gate depend on the
-    stage it guards.
-    """
     if frame.empty:
         return Health(usable=False, rows=0, errors=["frame is empty"])
 
@@ -111,7 +91,7 @@ def health(frame: pd.DataFrame, window_s: float = 2.0,
     from stages.s2_ml.features import rest_reference
     _zeros, _ileg, trusted = rest_reference(frame, fs_hz)
     if not trusted:
-        # ASCII only: this string reaches a cp949 console, where a section sign mangles.
+        # ASCII only- this reaches a cp949 console and a section sign mangles
         warnings.append("no rest span found: the interleg zero falls back to a "
                         "whole-recording median, so every interleg feature on this file is "
                         "weaker evidence (10.2 expects recordings to begin at rest)")
@@ -121,12 +101,11 @@ def health(frame: pd.DataFrame, window_s: float = 2.0,
                   errors=errors, warnings=warnings)
 
 
+# read a CSV, put it on the canonical grid, judge it
 def health_of_csv(path: Path, window_s: float = 2.0) -> Health:
-    """Read a CSV, put it on the canonical grid, and judge it."""
     from stages.s1_clean.resample import resample_file
 
-    # index_col=False: see stages/s1_clean/clean.py — a trailing comma otherwise shifts every
-    # column left by one, silently, under unchanged names.
+    # index_col=False: a trailing comma otherwise shifts every column left by one
     df = pd.read_csv(path, encoding="utf-8-sig", index_col=False)
     df.columns = [c.strip() for c in df.columns]
     if (missing := check_columns(df)):

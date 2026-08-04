@@ -1,16 +1,9 @@
-"""Regression guard for the raw -> `lpf_view` bridge.
-
-    python -m stages.s2_ml.verify_transform
-
-The model trains on the labeled `lpf_view` features but runs on raw CSVs. If
-`transform.raw_to_features` ever stops reproducing the labeled columns, the classifier
-silently sees a different distribution than it learned — train/serve skew that no test
-downstream would catch, because both sides would still "look like" angles.
-
-So this pairs annotated trials with their raw source (identical `Time` vector and row
-count — the same recording exported twice) and asserts the reproduction still lands at
-float roundoff. Run it after touching anything in `transform.py`.
-"""
+# regression guard for the raw -> lpf_view bridge
+#   python -m stages.s2_ml.verify_transform
+# pairs annotated trials with their raw source and asserts the reproduction still lands
+# at float roundoff; run it after touching anything in transform.py
+# without it, drift is train/serve skew nothing downstream catches, because both sides
+# still "look like" angles
 
 from __future__ import annotations
 
@@ -33,18 +26,14 @@ from stages.s2_ml.transform import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Float roundoff on ~1e5-sample IIR recursions. Anything materially larger means the
-# transform drifted from the MATLAB it is supposed to mirror.
+# Float roundoff on ~1e5-sample IIR recursions; anything materially larger means the
+# transform drifted from the MATLAB it is supposed to mirror
 TOLERANCE = 1e-9
 
 
+# every readable raw file, keyed by path; reads through load_raw_frame, the same reader
+# serve uses- a private one here would bless a read production never performs
 def index_raw_files(raw_glob: str = "data/raw/**/*.csv") -> dict[str, tuple]:
-    """Every readable raw file, keyed by path, with the facts pairing needs.
-
-    Reads through `transform.load_raw_frame` — the same reader the serve path uses. A
-    second, private reader here would mean this verification blesses a read that nothing
-    in production performs.
-    """
     index = {}
     for f in sorted(glob.glob(str(REPO_ROOT / raw_glob), recursive=True)):
         try:
@@ -56,15 +45,11 @@ def index_raw_files(raw_glob: str = "data/raw/**/*.csv") -> dict[str, tuple]:
     return index
 
 
+# annotated trials whose raw source is present, matched on the time vector
+# excluded=set() on purpose: the quarantine is about LABELS and this never reads one, it
+# asks whether four columns rebuild from raw; honouring it would drop rev13/4, one of only
+# seven pairs behind the majority variant, for an unrelated reason
 def find_pairs(index: dict[str, tuple]) -> list[tuple[Path, str, pd.DataFrame, str]]:
-    """Annotated trials whose raw source is present, matched on the time vector.
-
-    `excluded=set()` on purpose: `EXCLUDED_TRIALS` quarantines trials whose *labels* are
-    wrong, and this check never reads a label — it asks whether the four feature columns
-    can be rebuilt from raw. Honouring a label quarantine here would shrink the evidence
-    for the axis map for a reason that has nothing to do with it (it costs `rev13/4`, one
-    of only seven pairs behind the majority variant).
-    """
     pairs = []
     for p in find_trials(excluded=set()):
         t = _read_raw(p)[TIME_COL].to_numpy(float)
@@ -86,9 +71,9 @@ def main() -> None:
         ann.columns = [c.strip() for c in ann.columns]
         try:
             # TRUST_UNCHECKED deliberately: this verifies the transform MATH against
-            # ground truth, on files whose features the MATLAB already produced. The
+            # ground truth, on files whose features the MATLAB already produced; the
             # per-file axis check is a provenance guard for inference on new raw files;
-            # applying it here would make a regression test refuse its own fixtures.
+            # applying it here would make a regression test refuse its own fixtures
             feat = raw_to_features(raw, vid, trust=TRUST_UNCHECKED,
                                    dt_s=matlab_dt(raw["Time"].to_numpy(float)))
         except UnknownVariantError:

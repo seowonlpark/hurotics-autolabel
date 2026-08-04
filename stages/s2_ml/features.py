@@ -1,31 +1,8 @@
-"""S2 windowing + feature extraction: the model-agnostic boundary.
-
-Per DOMAIN_NOTES §9 feature selection lives here, not in the clean layer: the clean layer
-keeps the honest superset, this module decides what a model sees.
-
-Three rules it enforces in code:
-
-  1. **Never window across a gap.** A window is drawn inside one segment; spanning a gap
-     would invent continuity that was never measured (§3.1).
-  2. **A mixed window is not a training example.** A window spanning a stand->walk
-     transition has a genuinely ambiguous label, mirroring the human `-1` (§5.2). It is
-     kept, marked `transition`, and excluded from training targets.
-  3. **Per-file calibration, never corpus-wide** (§7). The interleg features are centred
-     on this recording's own rest posture, measured by `rest.py`.
-
-**Why the interleg block exists.** Measured on this corpus: per-trial `L_angvel` standard
-deviation spans 10.6-52.8 deg/s for walking and 1.3-44.0 for standing. Those ranges
-overlap almost entirely, so no absolute amplitude threshold separates the classes across
-subjects — which is how an amplitude-led feature set fails, confidently calling
-small-amplitude gait "standing". The interleg signal `L_ang - R_ang` is a difference
-between two legs on one body, so mounting offset and amplitude scale largely cancel, and
-§10 says the same thing from the physics side: walking is the legs *alternating*, not how
-far they swing.
-
-Everything is computed for all windows of a segment at once. That is not a micro
-optimization: dense per-row inference needs a window every 25 samples over million-row
-recordings, which a per-window Python loop cannot deliver.
-"""
+# S2 windowing + feature extraction: the model-agnostic boundary
+# never window across a gap; a mixed window is kept but excluded from training
+# per-file calibration, never corpus-wide
+# interleg exists because no absolute amplitude threshold separates the classes
+# all windows of a segment at once- dense inference cannot afford a Python loop
 
 from __future__ import annotations
 
@@ -55,15 +32,15 @@ from stages.s2_ml.rest import (
 )
 
 # Non-overlapping for training: overlapping windows manufacture near-duplicate rows, which
-# inflate the apparent sample count and flatter any metric computed on them.
+# inflate the apparent sample count and flatter any metric computed on them
 DEFAULT_WINDOW_S = 2.0
 DEFAULT_STRIDE_S = 2.0
 
-# A training window must be label-pure. Anything less is a transition (rule 2).
+# A training window must be label-pure; anything less is a transition (rule 2)
 PURITY_MIN = 1.0
 
-# The band a stride can plausibly occupy for this population (§9): cadence 16-102
-# steps/min. Deliberately NOT the healthy-adult (0.5, 3.0) Hz band.
+# the band a stride can plausibly occupy for this population: cadence 16-102 steps/min
+# deliberately NOT the healthy-adult (0.5, 3.0) Hz band
 GAIT_BAND_HZ = (0.13, 3.0)
 HF_BAND_HZ = (GAIT_BAND_HZ[1], 15.0)
 CYCLE_BAND_S = (0.6, 2.5)
@@ -71,39 +48,21 @@ MAX_LAG_S = 1.0
 
 TRANSITION = "transition"
 
-# The tail excluded from each annotated class when measuring the ambiguity band below.
+# The tail excluded from each annotated class when measuring the ambiguity band below
 # 1%, not 5%: at 5% the band narrows to roughly [6.5, 11.9]° and 11 of 41 trials contain
 # no band window at all, which makes the per-trial policy statistic in
-# `s3_physics.label_audit` undefined for a quarter of the corpus. At 1% one trial is empty.
+# `s3_physics.label_audit` undefined for a quarter of the corpus; at 1% one trial is empty
 BAND_TAIL_PCT = 1.0
 
 META_COLUMNS = {"rev", "trial", "split", "segment", "t_start_ms", "start_row",
                 "label", "purity", "unknown_frac", "rest_trusted"}
 
 
+# the interleg-amplitude interval where the two ANNOTATED classes overlap
+# inside it BOTH human labels genuinely occur, so no amplitude rule separates it
+# NO model output goes into either edge, which is what keeps label_audit model-free
+# degenerate input returns (inf, -inf), which every lo <= x <= hi test reads as empty
 def amplitude_band(minhalf, labels, tail_pct: float = BAND_TAIL_PCT) -> tuple[float, float]:
-    """The interleg-amplitude interval where the two ANNOTATED classes overlap.
-
-    `ileg_minhalf` separates the classes better than anything else measured (§10.1, AUC
-    0.967/0.972) — but not perfectly, and *where* it fails is not noise. Below the low
-    edge, 99% of annotated walking sits above; above the high edge, 99% of annotated
-    standing sits below. Between them **both human labels genuinely occur**, so no
-    amplitude rule separates that region and neither does a model reading amplitude.
-
-    Both edges come from the annotation and one label-free descriptor. **No model output
-    goes into either**, which is what lets `s3_physics.label_audit` use this without
-    forfeiting its model-free property, and what makes a trial's disagreement with the
-    corpus about this band evidence about the LABELS rather than about the classifier.
-
-    Measured 2026-08-03: the band is 2.62–20.34°, holds 32% of windows and 84% of the
-    windows where physics contradicted the annotation — that share was measured on the S4
-    fusion run of that date, and S4 was deleted 2026-08-04; the band itself is label-side
-    and unaffected. The fraction of it annotated
-    `walk` ranges 0.38–1.00 across trials — i.e. the trials do not share a convention here.
-
-    Returns (lo, hi). Degenerate input (either class absent) returns an empty band
-    `(inf, -inf)`, which every `lo <= x <= hi` test reads as "no window is in the band".
-    """
     minhalf = np.asarray(minhalf, dtype=float)
     labels = np.asarray(labels)
     walk = minhalf[(labels == WALK) & np.isfinite(minhalf)]
@@ -129,20 +88,12 @@ class WindowSpec:
         return int(round(self.stride_s * self.fs_hz))
 
 
+# rest.swap_count for every window [s, s+n) at once; swaps == sign changes with BOTH
+# endpoints inside the window, and "both endpoints" is what a plain prefix sum gets wrong
+# it also counts the change carried by the first committed sample, whose predecessor is
+# outside; the final subtraction removes that; verify_features holds the two to agreement
 def swap_counts(d: np.ndarray, starts: np.ndarray, n: int,
                 delta: float = SWAP_DELTA_DEG) -> np.ndarray:
-    """`rest.swap_count` for every window `[s, s+n)` at once.
-
-    The scalar reference is a hysteresis state machine whose commit list is the run-length
-    encoding of the signs of samples exceeding +/-delta, so swaps == groups - 1 == the
-    number of sign changes with BOTH endpoints inside the window.
-
-    "Both endpoints inside" is the subtlety a plain prefix sum gets wrong: it also counts
-    the change carried by the window's first committed sample, whose predecessor lies
-    before the window, while the reference enters every window uncommitted. That is what
-    the final subtraction removes. Held to exact agreement with `rest.swap_count` by
-    `verify_features.py`.
-    """
     s = np.where(d > delta, 1, np.where(d < -delta, -1, 0))
     nz = np.flatnonzero(s)
     change = np.zeros(d.size, dtype=np.int64)
@@ -173,12 +124,8 @@ def _power(A: np.ndarray) -> np.ndarray:
                               axis=1)) ** 2
 
 
+# (dominant frequency in the gait band, fraction of non-DC power inside it)
 def _spectral(A: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarray]:
-    """(dominant frequency in the gait band, fraction of non-DC power inside it).
-
-    Resolution is 1/window_s, so at 2 s the low edge of the band is unresolvable. The
-    number is still computed; §9's tradeoff is made visible rather than hidden.
-    """
     P = _power(A)
     freq = np.fft.rfftfreq(A.shape[1], 1.0 / fs)
     band = (freq >= GAIT_BAND_HZ[0]) & (freq <= GAIT_BAND_HZ[1])
@@ -196,13 +143,9 @@ def _spectral(A: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarray]:
     return dom, frac
 
 
+# power fraction above the gait band; the transform already low-passed at 1 Hz so most of
+# it is gone, but dropping the whole spectral block measurably lowers worst-subject accuracy
 def _hf_ratio(A: np.ndarray, fs: float) -> np.ndarray:
-    """Power fraction above the gait band.
-
-    The transform low-passes both channels at 1 Hz, so most of this band is already gone
-    before windowing. Kept because dropping the whole spectral block measurably lowers
-    worst-subject accuracy, but do not expect much of it on its own.
-    """
     P = _power(A)
     freq = np.fft.rfftfreq(A.shape[1], 1.0 / fs)
     band = (freq >= HF_BAND_HZ[0]) & (freq <= HF_BAND_HZ[1])
@@ -215,8 +158,8 @@ def _hf_ratio(A: np.ndarray, fs: float) -> np.ndarray:
     return out
 
 
+# standardized k-th central moment; 0 where the window is constant
 def _moment(A: np.ndarray, k: int) -> np.ndarray:
-    """Standardized k-th central moment; 0 where the window is constant."""
     c = A - A.mean(1, keepdims=True)
     s = A.std(1)
     out = np.zeros(A.shape[0])
@@ -233,11 +176,9 @@ def _autocorr(A: np.ndarray) -> np.ndarray:
     return np.fft.irfft(F * np.conj(F), nfft, axis=1)[:, :n]
 
 
+# stride period from the first in-band autocorrelation peak; sub-bin by construction,
+# unlike _spectral's 1/window_s grid, which at 2 s is 0.5 Hz
 def _cycle_s(A: np.ndarray, fs: float) -> np.ndarray:
-    """Stride period from the first in-band autocorrelation peak.
-
-    Sub-bin by construction, unlike `_spectral`'s 1/window_s grid, which at 2 s is 0.5 Hz.
-    """
     n = A.shape[1]
     lo, hi = int(CYCLE_BAND_S[0] * fs), min(int(CYCLE_BAND_S[1] * fs), n - 1)
     if hi <= lo:
@@ -249,9 +190,9 @@ def _cycle_s(A: np.ndarray, fs: float) -> np.ndarray:
     return out
 
 
+# inter-leg timing offset from the cross-correlation peak; level gait is a half cycle out
+# of phase
 def _lag_s(A: np.ndarray, B: np.ndarray, fs: float) -> np.ndarray:
-    """Inter-leg timing offset from the cross-correlation peak; level gait is a half cycle
-    out of phase."""
     n = A.shape[1]
     sa, sb = A.std(1), B.std(1)
     ok = (sa > 0) & (sb > 0)
@@ -269,14 +210,10 @@ def _lag_s(A: np.ndarray, B: np.ndarray, fs: float) -> np.ndarray:
     return out
 
 
+# smallest interleg ptp among k equal sub-windows; NOT the whole-window ptp, since one
+# weight shift reads high on that while only one part of the window moves- continuous gait
+# moves in every part, which is what separates walking from a standing subject who turns
 def _min_over_parts(D: np.ndarray, k: int) -> np.ndarray:
-    """Smallest interleg peak-to-peak among `k` equal sub-windows.
-
-    Not the whole-window peak-to-peak: a single weight shift makes one large excursion and
-    reads high on ptp while only one part of the window actually moves. Continuous gait
-    moves in every part, so the minimum is what separates walking from a standing subject
-    who shifts weight or turns — the dominant residual error on this corpus.
-    """
     n = D.shape[1] // k
     if n < 2:
         return np.zeros(D.shape[0])
@@ -284,13 +221,12 @@ def _min_over_parts(D: np.ndarray, k: int) -> np.ndarray:
                               for i in range(k)])
 
 
+# the feature vector's column order; the single source of truth for it
 def feature_names() -> list[str]:
-    """The feature vector's column order — the single source of truth for it."""
     names: list[str] = []
     for c in FEATURES:
-        # The static-offset family (angle mean/absmean per side, and the interleg median)
-        # is deliberately absent: §4.6 shows it carries the subject's zeroing bias rather
-        # than gait, and keeping it measurably hurt held-out subjects.
+        # the static-offset family is deliberately absent: it carries the subject's
+        # zeroing bias rather than gait, and keeping it hurt held-out subjects
         stats = ("std", "ptp") if c in ANGLE_CHANNELS else ("mean", "std", "ptp", "absmean")
         names += [f"{c}_{s}" for s in stats]
     names += ["ang_LR_corr", "angvel_LR_corr"]
@@ -304,16 +240,11 @@ def feature_names() -> list[str]:
     return names
 
 
+# (X, start_row) for every window of one gap-free segment; zeros/ileg_zero are required,
+# not defaulted- substituting one silently is the train/serve skew this pipeline avoids
 def segment_features(chan: dict[str, np.ndarray], spec: WindowSpec,
                      zeros: dict[str, float], ileg_zero: float
                      ) -> tuple[np.ndarray, np.ndarray]:
-    """(X, start_row) for every window of one gap-free segment.
-
-    `zeros` is the per-side rest posture and `ileg_zero` the rest interleg offset, both
-    measured once per recording by `rest_reference`. They are required rather than
-    defaulted: substituting one silently is exactly the train/serve skew this pipeline
-    exists to avoid.
-    """
     n, step, fs = spec.n, spec.step, spec.fs_hz
     W = {c: sliding_window_view(chan[c], n)[::step] for c in FEATURES}
     starts = np.arange(W[FEATURES[0]].shape[0]) * step
@@ -349,7 +280,7 @@ def segment_features(chan: dict[str, np.ndarray], spec: WindowSpec,
         p95 = np.percentile(A, 95, axis=1)
         p05 = np.percentile(A, 5, axis=1)
         z = zeros[f"{side}_ang_LPF"]
-        # How far the thigh lifts above THIS subject's own standing posture (§4.6).
+        # How far the thigh lifts above THIS subject's own standing posture
         cols[f"{side}_ang_p95_rest"] = p95 - z
         cols[f"{side}_ang_med_rest"] = np.median(A, 1) - z
         cols[f"{side}_ang_p95_p05"] = p95 - p05
@@ -363,14 +294,11 @@ def segment_features(chan: dict[str, np.ndarray], spec: WindowSpec,
     return np.column_stack([cols[k] for k in names]), starts
 
 
+# (per-side rest posture, rest interleg offset, trusted) for one recording; untrusted means
+# it never rests and the zeros fall back to whole-recording medians- returned, not raised,
+# so the flag travels with the features and label.py can say so instead of guessing
 def rest_reference(frame: pd.DataFrame, fs: float = CANONICAL_HZ
                    ) -> tuple[dict[str, float], float, bool]:
-    """(per-side rest posture, rest interleg offset, trusted) for one recording.
-
-    Untrusted means the recording never rests, so the zeros fall back to whole-recording
-    medians. Returned rather than raised: such a recording still has to yield features, and
-    the flag travels with them so `label.py` can say so instead of quietly guessing.
-    """
     span = int(round(REST_ANCHOR_S * fs))
     seg0 = frame[frame["segment"] == frame["segment"].min()]
     opening = seg0.iloc[:span]
@@ -387,13 +315,9 @@ def rest_reference(frame: pd.DataFrame, fs: float = CANONICAL_HZ
     return zeros, zeros[ANGLE_CHANNELS[0]] - zeros[ANGLE_CHANNELS[1]], True
 
 
+# (label, purity, unknown_fraction) per window; -1 is excluded before voting but its share
+# is reported; a window not pure over {stand, walk} is TRANSITION, never a coin-flip vote
 def label_windows(labels_2d: np.ndarray):
-    """(label, purity, unknown_fraction) per window.
-
-    `-1` is excluded before voting (§5.2: training-poison, evaluation-gold) but its share
-    is reported so the confidence signal can be scored against it. A window that is not
-    pure over {stand, walk} is TRANSITION, never a coin-flip majority vote.
-    """
     unknown = (labels_2d == HUMAN_UNKNOWN).mean(1)
     counts = np.stack([(labels_2d == c).sum(1) for c in TRAIN_CLASSES], axis=1)
     valid = counts.sum(1)
@@ -403,8 +327,8 @@ def label_windows(labels_2d: np.ndarray):
     return np.where(valid == 0, None, label), purity, unknown
 
 
+# every window of one trial, never spanning a gap
 def windows_of_trial(trial: Trial, spec: WindowSpec) -> pd.DataFrame:
-    """Every window of one trial, never spanning a gap."""
     frame = trial.frame.reset_index(drop=True)
     if frame.empty:
         return pd.DataFrame()
@@ -436,6 +360,6 @@ def build_windows(trials: list[Trial], spec: WindowSpec | None = None) -> pd.Dat
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+# feature columns only, never the metadata or the target
 def feature_columns(df: pd.DataFrame) -> list[str]:
-    """Feature columns only, never the metadata or the target."""
     return [c for c in df.columns if c not in META_COLUMNS]

@@ -1,27 +1,6 @@
-"""Row-level evaluation of the labelling path, including the abstention reasons.
-
-    python -m stages.s2_ml.roweval          # leave-one-rev-out
-    python -m stages.s2_ml.roweval --lockbox  # SINGLE USE
-
-Why a second evaluator when `train.py` already reports CV numbers: `train.py` scores
-WINDOWS, which is the unit the model learns on. A caller labels a CSV and gets ROWS, and
-the two differ — rows are scored by averaging every window that covers them, which changes
-both the accuracy and, more importantly, the confidence ordering the abstention threshold
-is set from. Publishing window numbers and shipping row behaviour would be measuring one
-thing and selling another.
-
-This runs the real `label.py` path, not a reimplementation of it. Anything that drifts
-between evaluation and deployment is train/serve skew, and the whole point of the module
-is to be the number you can believe.
-
-**The lockbox is single use, and it is spent.** `rev8` was sealed through feature
-selection, model selection and threshold selection; `--lockbox` fits on every training rev
-and scores it once. It has now been read (twice, both logged in `caveats.md` §3.2) and
-must not be read again without a new sealed subject: running it repeatedly and keeping the
-best result converts the only measurement in this repo that was never optimized against
-into a second validation set (§7). `rev13` was sealed alongside it and was deliberately
-released to development — see `dataset.DEFAULT_LOCKBOX_REVS` for why.
-"""
+# row-level evaluation of the labelling path, including the abstention reasons
+#   python -m stages.s2_ml.roweval [--lockbox]   # --lockbox is SINGLE USE
+# scores the shipping path over real rows, where train.py scores windows
 
 from __future__ import annotations
 
@@ -46,18 +25,16 @@ from stages.s2_ml.train import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+# champion fitted on every training rev except `exclude_rev`, with its own reference stats
 def fit_on(train_df: pd.DataFrame, feats: list[str], exclude_rev: str | None):
-    """Champion fitted on every training rev except `exclude_rev`, with its own reference
-    stats. The stats must come from the SAME subset as the model: computing them once over
-    all revs would leak the held-out subject into the ambiguity explanations."""
     sub = train_df if exclude_rev is None else train_df[train_df["rev"] != exclude_rev]
     model = build_model()
     model.fit(sub[feats].to_numpy(float), sub["label"].to_numpy(int))
     return model, reference_stats(sub, feats)
 
 
+# run the shipping path over trials and join ground truth back on
 def score_trials(model, meta: dict, trials, threshold: float) -> pd.DataFrame:
-    """Run the shipping path over trials and join ground truth back on."""
     out = []
     for tr in trials:
         frame = tr.frame.reset_index(drop=True)
@@ -76,25 +53,13 @@ def score_trials(model, meta: dict, trials, threshold: float) -> pd.DataFrame:
     return pd.concat(out, ignore_index=True)
 
 
+# the rows `label.py` would commit to at `thr`- threshold, band AND physics gate
 def _committed(v: pd.DataFrame, conf: np.ndarray, thr: float) -> np.ndarray:
-    """The rows `label.py` would commit to at `thr` — threshold, band AND physics gate.
-
-    Coverage is not a threshold sweep alone any more. `label.BAND_ABSTAINS` abstains on
-    every row in the annotation-ambiguity band regardless of probability, and
-    `label.PHYSICS_CEILING` / `PHYSICS_FLOOR` move the bar per row, so a curve built from
-    `conf >= thr` would report a coverage the shipping module does not deliver — the
-    precise failure this file exists to prevent (§6.7: measuring one thing and selling
-    another).
-
-    The flags are read off the module at call time rather than imported by value: the point
-    of this function is to track what `label.py` actually ships, and a value bound at import
-    would keep reporting the old policy for the rest of the process after a change.
-    """
     return _committed_under(v, conf, thr,
                             label_mod.PHYSICS_CEILING, label_mod.PHYSICS_FLOOR)
 
 
-# The four settings of `label.PHYSICS_CEILING` / `label.PHYSICS_FLOOR`.
+# The four settings of `label.PHYSICS_CEILING` / `label.PHYSICS_FLOOR`
 PHYSICS_POLICIES = {
     "off": (False, False),
     "ceiling": (True, False),
@@ -102,21 +67,14 @@ PHYSICS_POLICIES = {
     "both": (True, True),
 }
 
-# Fine grid for the matched-coverage comparison. `DEFAULT_THRESHOLDS` is the reporting grid
-# and is far too coarse to find the threshold that matches a gated policy's coverage — the
-# comparison would then be decided by which grid point happened to land nearest.
+# Fine grid for the matched-coverage comparison; `DEFAULT_THRESHOLDS` is the reporting grid
+# and is far too coarse to find the threshold that matches a gated policy's coverage- the
+# comparison would then be decided by which grid point happened to land nearest
 _MATCH_GRID = np.round(np.arange(0.50, 1.0001, 0.0025), 4)
 
 
+# (agrees, contradicts) per row: the swap rule against the model's own guess
 def _physics_masks(v: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
-    """(agrees, contradicts) per row: the swap rule against the model's own guess.
-
-    Derived from the scored frame rather than by re-running `explain` under each flag.
-    The gate is a pure function of (physics verdict, guess, confidence, threshold), so one
-    scoring pass answers for all four policies — and, more to the point, all four are then
-    measured on the IDENTICAL predictions. Re-scoring per policy would let a refit or a
-    seed drift between the arms and show up as a policy effect.
-    """
     if "physics" not in v.columns:
         empty = np.zeros(len(v), dtype=bool)
         return empty, empty
@@ -129,13 +87,9 @@ def _physics_masks(v: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     return decisive & (cls == guess), decisive & (cls != guess)
 
 
+# `_committed`, but under an arbitrary physics policy rather than the shipped one
 def _committed_under(v: pd.DataFrame, conf: np.ndarray, thr: float,
                      ceiling: bool, floor: bool) -> np.ndarray:
-    """`_committed`, but under an arbitrary physics policy rather than the shipped one.
-
-    Mirrors `label.explain`'s effective-threshold vector exactly, including the band, so a
-    row counted as committed here is one the serve path would commit to under those flags.
-    """
     band = (v["in_band"].to_numpy(bool) if "in_band" in v.columns
             else np.zeros(len(v), dtype=bool))
     agrees, contradicts = _physics_masks(v)
@@ -147,19 +101,8 @@ def _committed_under(v: pd.DataFrame, conf: np.ndarray, thr: float,
     return (conf >= eff) & ~band
 
 
+# does the physics floor/ceiling beat simply moving the threshold?
 def physics_gate_table(df: pd.DataFrame, threshold: float) -> dict:
-    """Does the physics floor/ceiling beat simply moving the threshold?
-
-    This is the comparison that settled the amplitude band, applied to the other contested
-    policy in `label.py`, and it is the only reason `PHYSICS_CEILING` / `PHYSICS_FLOOR`
-    exist as switches rather than as an argument in a docstring. **A policy that changes
-    coverage cannot be judged on accuracy at a fixed threshold** — giving up the rows you
-    are least sure about always raises accuracy. The question is whether it raises it more
-    than spending the same coverage on the threshold would have.
-
-    So each gated policy is matched against the OFF policy at the same coverage, and the
-    verdict is `errors_kept`: at equal coverage, fewer surviving errors is strictly better.
-    """
     v = df[df["truth"].isin(TRAIN_CLASSES) & df["p_walk"].notna()]
     p = v["p_walk"].to_numpy(float)
     conf = np.maximum(p, 1 - p)
@@ -175,16 +118,16 @@ def physics_gate_table(df: pd.DataFrame, threshold: float) -> dict:
                 "worst_rev_accuracy": float(min(per)) if per else float("nan"),
                 "errors_kept": int((~correct[k]).sum())}
 
-    # The OFF arm swept finely, so any gated coverage can be matched against it.
+    # The OFF arm swept finely, so any gated coverage can be matched against it
     off_sweep = [{"threshold": float(t),
                   **point(_committed_under(v, conf, t, False, False))}
                  for t in _MATCH_GRID]
 
     # **Swept across thresholds, not evaluated at one.** The standing objection to a
-    # physics ceiling is explicitly threshold-conditional — "physics contradicts ~12% of
-    # S2's high-confidence errors, and at p >= 0.95 none" — so a table at a single
-    # operating point cannot confirm or refute it. It is also the shape of mistake this
-    # module exists to prevent: a policy measured only where it happens to look good.
+    # physics ceiling is explicitly threshold-conditional- "physics contradicts ~12% of
+    # S2's high-confidence errors, and at p >= 0.95 none"- so a table at a single
+    # operating point cannot confirm or refute it; it is also the shape of mistake this
+    # module exists to prevent: a policy measured only where it happens to look good
     by_threshold = []
     for thr in DEFAULT_THRESHOLDS:
         base_k = _committed_under(v, conf, thr, False, False)
@@ -194,10 +137,10 @@ def physics_gate_table(df: pd.DataFrame, threshold: float) -> dict:
             pt = point(_committed_under(v, conf, thr, ceiling, floor))
             entry = {"policy": name, "ceiling": ceiling, "floor": floor, **pt}
             if name != "off":
-                # Nearest OFF operating point by coverage. Nearest rather than
+                # Nearest OFF operating point by coverage; nearest rather than
                 # interpolated: `errors_kept` is a count over a specific row set, and
                 # interpolating it would invent an error count for a threshold nobody
-                # evaluated.
+                # evaluated
                 m = min(off_sweep, key=lambda r: abs(r["coverage"] - pt["coverage"]))
                 entry["matched_off"] = m
                 entry["errors_vs_matched_off"] = pt["errors_kept"] - m["errors_kept"]
@@ -207,7 +150,7 @@ def physics_gate_table(df: pd.DataFrame, threshold: float) -> dict:
             "threshold": float(thr),
             # The ceiling's entire addressable set at this threshold: of the errors the
             # ungated policy commits to, how many does the physics object to? If this is
-            # zero the ceiling cannot help here no matter how it is tuned.
+            # zero the ceiling cannot help here no matter how it is tuned
             "committed_errors": ce,
             "committed_errors_contradicted": int((~correct & contradicts & base_k).sum()),
             "policies": arms,
@@ -228,8 +171,8 @@ def physics_gate_table(df: pd.DataFrame, threshold: float) -> dict:
     }
 
 
+# row-level coverage vs accuracy; only rows with a trainable ground truth count
 def curve(df: pd.DataFrame) -> list[dict]:
-    """Row-level coverage vs accuracy. Only rows with a trainable ground truth count (§7)."""
     v = df[df["truth"].isin(TRAIN_CLASSES) & df["p_walk"].notna()]
     p = v["p_walk"].to_numpy(float)
     conf = np.maximum(p, 1 - p)
@@ -250,20 +193,8 @@ def curve(df: pd.DataFrame) -> list[dict]:
     return rows
 
 
+# (coverage, accuracy) per held-out subject at the shipped threshold
 def per_rev(df: pd.DataFrame, threshold: float) -> list[dict]:
-    """(coverage, accuracy) per held-out subject at the shipped threshold.
-
-    `curve` already reports `worst_rev_accuracy`, but as a bare scalar: it names no subject
-    and shows no spread, so a reader cannot tell one bad subject from six mediocre ones, nor
-    see that the subjects the pipeline is most accurate on may be the ones it answers least
-    of. Both columns belong to a row, and reading either alone is what this table exists to
-    prevent — high accuracy over a small committed set is not a subject handled well, it is
-    one mostly declined.
-
-    Each rev here was scored by a model that never saw it (`fit_on(..., exclude_rev=rev)`),
-    including its band edges, so a row is a genuine held-out subject rather than a slice of
-    a pooled fit.
-    """
     v = df[df["truth"].isin(TRAIN_CLASSES) & df["p_walk"].notna()]
     p = v["p_walk"].to_numpy(float)
     conf = np.maximum(p, 1 - p)
@@ -276,12 +207,12 @@ def per_rev(df: pd.DataFrame, threshold: float) -> list[dict]:
     for r in sorted(pd.unique(revs)):
         m = revs == r
         km = k & m
-        # Per-class recall on the committed rows. `confusion` says the residual failure is
-        # one-directional and tells the reader to watch stand recall rather than accuracy —
-        # and then reported it pooled, so no row here said WHICH subject it was failing on.
+        # Per-class recall on the committed rows; `confusion` says the residual failure is
+        # one-directional and tells the reader to watch stand recall rather than accuracy
+        # and then reported it pooled, so no row here said WHICH subject it was failing on
         # The lockbox is the reason that matters: rev8's stand recall is 0.5752 against a
         # walk recall of 1.0000 (`OPERATING_POINTS.md`), a split invisible in its 0.9308
-        # accuracy, and nothing measured whether the development subjects share the shape.
+        # accuracy, and nothing measured whether the development subjects share the shape
         per_class = {}
         for cls, name in ((STAND, "stand"), (WALK, "walk")):
             in_cls = km & (truth == cls)
@@ -300,20 +231,8 @@ def per_rev(df: pd.DataFrame, threshold: float) -> list[dict]:
     return rows
 
 
+# which way the committed errors go- the one cut pooled accuracy hides completely
 def confusion(df: pd.DataFrame, threshold: float) -> dict:
-    """Which way the committed errors go — the one cut pooled accuracy hides completely.
-
-    Row level, and that is the whole reason it moved here. The figure this replaces was a
-    `Counter` over S2's out-of-fold CSV, computed inside `stages/breakdown.py`: a WINDOW
-    count, quoted beside row-level coverage, so "86% of errors are stand read as walk" was
-    a claim about one unit sitting in a table about another (`needtowrite.md` §5.4, gap 8).
-    It also outlived its own artifact — `oof.py` went with S4 on 2026-08-04, after which the
-    CSV could not be regenerated and the table silently described the previous champion.
-    Here truth, guess and the commit rule are the ones a caller actually receives.
-
-    Counted over `_committed`, never `conf >= threshold`: an error the band suppressed is
-    not an error the pipeline made.
-    """
     v = df[df["truth"].isin(TRAIN_CLASSES) & df["p_walk"].notna()]
     p = v["p_walk"].to_numpy(float)
     conf = np.maximum(p, 1 - p)
@@ -332,14 +251,8 @@ def confusion(df: pd.DataFrame, threshold: float) -> dict:
     }
 
 
+# is each ambiguity reason earning its place?
 def reason_report(df: pd.DataFrame) -> pd.DataFrame:
-    """Is each ambiguity reason earning its place?
-
-    A reason is useful when the rows carrying it are measurably harder than the rows the
-    model kept: lower accuracy for the guess it would have made, and a higher share of
-    human `-1`. A reason that fires on rows the model would have got right is noise
-    dressed as an explanation.
-    """
     v = df[df["truth"].isin(TRAIN_CLASSES) & df["p_walk"].notna()].copy()
     v["would_be_correct"] = v["label"] == v["truth"]
     rows = []
@@ -352,12 +265,8 @@ def reason_report(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("rows", ascending=False)
 
 
+# does the model abstain where a trained human also could not call it?
 def unknown_agreement(df: pd.DataFrame) -> dict:
-    """Does the model abstain where a trained human also could not call it (§5.2)?
-
-    The model never sees `-1`, so agreement here is independent evidence that the
-    confidence signal tracks genuine ambiguity rather than its own miscalibration.
-    """
     v = df[df["p_walk"].notna()]
     unk = v["truth"] == HUMAN_UNKNOWN
     if not unk.any():
@@ -369,9 +278,8 @@ def unknown_agreement(df: pd.DataFrame) -> dict:
     }
 
 
+# the floor/ceiling section
 def render_physics_gate(g: dict) -> list[str]:
-    """The floor/ceiling section. Written to be readable by someone deciding whether to
-    switch a flag on, so it leads with the number that decides it."""
     if not g:
         return []
     ce, cec = g["committed_errors"], g["committed_errors_contradicted"]
@@ -523,12 +431,12 @@ def main() -> None:
     trials = load_dataset()
     spec = WindowSpec()
     windows = build_windows([t for t in trials if t.split == "train"], spec)
-    # The CHAMPION's feature set, not every column `build_windows` emits. Until 2026-08-04
+    # The CHAMPION's feature set, not every column `build_windows` emits; until 2026-08-04
     # this took all 42 and so reported the accuracy of a model that is not the one shipped
-    # — the four moments `champion_spec.json` drops were silently back in. The ablation
+    #- the four moments `champion_spec.json` drops were silently back in; the ablation
     # puts the two inside the noise band, which is why it survived unnoticed and is also
     # why it had to be fixed rather than argued away: a headline that happens to be right
-    # for a reason nobody checked is not measurably different from one that is wrong.
+    # for a reason nobody checked is not measurably different from one that is wrong
     feats = select_features(feature_columns(windows), load_spec()["drop_features"])
     train_df = trainable(windows, "train")
 
@@ -599,11 +507,11 @@ def main() -> None:
                   f"errors {r['errors_kept']:,}  vs threshold-only at matched coverage: "
                   f"{r['errors_vs_matched_off']:+,}")
 
-    # What `near_transition` is actually made of. Computed HERE, on this scoring pass,
+    # What `near_transition` is actually made of; computed HERE, on this scoring pass,
     # rather than by a module with its own CLI: it times the annotated boundaries against
     # the predictions in `df`, and a second leave-one-rev-out pass would let a refit drift
-    # between the coverage curve and the timing table and read as a timing effect. It owns
-    # its own artifact so no number has two homes.
+    # between the coverage curve and the timing table and read as a timing effect; it owns
+    # its own artifact so no number has two homes
     print()
     t_spec = WindowSpec(window_s=base_meta["window_s"],
                         stride_s=base_meta["inference_stride_s"],
@@ -618,9 +526,9 @@ def main() -> None:
         encoding="utf-8")
     (out_dir / f"{stem}.json").write_text(json.dumps(
         {"tag": tag, "threshold": args.threshold, "revs": revs,
-         # Recorded so a stale artifact can be identified as stale. The feature set moved
-         # on 2026-08-04 and the lockbox arm could not be re-run to follow it (§7), so
-         # "which model produced this curve" stopped being answerable from the file.
+         # Recorded so a stale artifact can be identified as stale; the feature set moved
+         # on 2026-08-04 and the lockbox arm could not be re-run to follow it, so
+         # "which model produced this curve" stopped being answerable from the file
          "n_features": len(feats), "features": feats,
          "curve": c,
          "per_rev": by_rev, "confusion": conf, "reasons": reasons.to_dict("records"),

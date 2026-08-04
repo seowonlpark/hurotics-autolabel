@@ -1,21 +1,4 @@
-# S1 exception triage (read-only): judge the clean stage's exception queue, recompute nothing.
-#
-# The clean stage MEASURES and refuses to conclude. What it leaves behind is a pile of flags —
-# a quarantined file, a gyro axis that disagrees with the documented convention, a yaw channel
-# marked drift-contaminated — and each one needs two answers that live on different axes: does
-# DOMAIN NOTES account for it, and is a person needed before the data can be used. Collapsing
-# those into one choice was the original design and it was wrong: a documented cause can still
-# need a re-export, and an unexplained anomaly can be inert. `collapse()` derives the
-# disposition from the pair, in one place, so two runs cannot disposition the same item
-# differently.
-#
-# The load-bearing part is `handled`. Every queue item carries a machine-derived {value, why}
-# computed from the ACTUAL downstream consumers rather than from prose, because this repo has
-# already been bitten by the difference: a note saying a flag is "recorded" is not evidence that
-# anything reads it, and `drift_contaminated` is exactly that case — inert, not honoured. The
-# prompt tells the agent to follow `handled` over the notes and mark the disagreement
-# `contradicts`, which turns "the docs are stale" into a queue item instead of a silent
-# assumption.
+# S1 exception triage: judge the clean stage's queue, recompute nothing
 
 from __future__ import annotations
 
@@ -74,31 +57,28 @@ SYSTEM_PROMPT = (
     "No text outside the JSON array."
 )
 
+
 S1_EXCEPTION_AGENT = AgentSpec(
     name="s1_exception",
     system_prompt=SYSTEM_PROMPT,
-    allowed_tools=["Read", "Grep"],
+    allowed_tools=[],
     model=MODEL_CHEAP,
-    max_turns=15,
+    max_turns=2,
 )
 
 
 def _handled(value: bool, why: str) -> dict:
     return {"value": value, "why": why}
 
-# A quarantined file is EXCLUDED, and excluded is not repaired: downstream is safe because the
-# file never reaches data/clean, but the recording itself is still lost until someone re-exports
-# it. `handled=False` says that, where "it is out of the corpus" would have read as handled.
+
+# excluded is not repaired: downstream is safe, the recording is still lost
 def _handled_quarantine() -> dict:
     return _handled(False,
                     "the file is kept out of data/clean so downstream is safe, but the "
                     "pipeline cannot repair it — recovery needs a person (§2.6)")
 
-# Does the pipeline handle this end to end, or is a person needed? The question is NOT "is the
-# axis wrong" — it is "does anything the feature path reads touch this axis". Both exits below
-# are `True` for the same reason: an anomaly on a channel no consumer opens cannot hurt a
-# number. Note the third exit is `False` even though `check_axis_trust` hard-fails the file:
-# FATAL IS NOT HANDLED. Nothing is corrupted, and nothing is featurized either.
+
+# does the feature path read this axis
 def _handled_axis_anomaly(side: str, conflicts: list[str]) -> dict:
     if side not in _DATA_PATH_SIDES:
         return _handled(True,
@@ -116,11 +96,7 @@ def _handled_axis_anomaly(side: str, conflicts: list[str]) -> dict:
                     f"so nothing is corrupted, but nothing is featurized either until "
                     f"someone resolves the axis")
 
-# The `drift_contaminated` flag has NO consumer — nothing in the pipeline reads it. That is
-# tolerable only where the flagged channel is one no feature reads either, which §4.2 predicts is
-# the yaw-like `Deg_Z`. So the split below is between "inert" and "unhandled", never between
-# "honoured" and "not": on `Deg_Z` the flag costs nothing because the feature path uses the
-# sagittal Deg axis and its gyro rate; on any other channel the flag is a warning nothing acts on.
+
 def _handled_drift(channel: str) -> dict:
     if channel.endswith("_Deg_Z"):
         return _handled(True,
@@ -131,11 +107,8 @@ def _handled_drift(channel: str) -> dict:
                     f"{channel} is not the yaw-like Deg_Z axis §4.2 predicts, and no "
                     f"code consumes the drift flag, so nothing would exclude it")
 
-# Genuine exceptions from a clean run's artifacts. Routine gyro-abstentions are COUNTED and
-# summarized rather than queued item by item: they are designed-normal behaviour (a static file
-# falling back to the documented convention), and 19 of them would bury the handful of real
-# anomalies in noise. The count still reaches the agent through `build_prompt`, so a corpus where
-# that number itself looks wrong is still reportable.
+
+# genuine exceptions only
 def build_queue(clean_run_dir: Path) -> tuple[list[dict], dict]:
     queue: list[dict] = []
 
@@ -157,7 +130,7 @@ def build_queue(clean_run_dir: Path) -> tuple[list[dict], dict]:
         for line in o_path.read_text(encoding="utf-8").splitlines():
             o = json.loads(line)
             ct = o["channel_trust"]
-            if o.get("kind") == "channel_trust_abstained":
+            if ct["abstained"]:
                 abstain_files += 1
             for side in ct.get("anomalies", []):
                 rec = ct["sides"][side]
@@ -202,57 +175,28 @@ def build_prompt(queue: list[dict], summary: dict) -> str:
     )
 
 
+# thin alias over base.extract_json_array; one tolerant parse for every agent
 def parse_review(final_text: str) -> list[dict] | None:
-    """Extract the JSON array from the agent's final text; tolerant of fences/prose.
-
-    Thin alias over `base.extract_json_array` — every agent parses its output the same
-    way, so a fix to the tolerant-parse logic reaches all of them.
-    """
     return extract_json_array(final_text)
 
 
 _REVIEW_KEYS = ("explained", "action", "sections", "rationale", "confidence")
 
 
+# combine 2 judgements
 def collapse(explained: str | None, action: str | None) -> tuple[str, str]:
-    """Collapse the agent's two orthogonal judgements into (disposition, action).
-
-    The agent answers two questions that live on different axes; this is the only place
-    the pipeline decides how they combine, so two runs cannot disposition the same item
-    differently. `explained` names the bucket, `action` rides along and is never lost:
-
-        explained    action        disposition
-        yes          none       -> known_expected
-        yes          human      -> needs_human
-        no           (kept)     -> novel
-        contradicts  -> human   -> novel
-
-    Unexplained wins the label because "surface it" is the point of the bucket, and it
-    costs nothing: `action` still carries whether the pipeline is blocked, so a novel
-    item that also needs a person is not demoted to a queue of routine repairs. A
-    contradicted note is a find too — but it is never acted on (§ DOMAIN_NOTES header),
-    so its action is forced, not read.
-    """
     if explained == "contradicts":
         return "novel", "human"
     if explained == "no":
         return "novel", action if action in ("none", "human") else "human"
     if explained == "yes" and action in ("none", "human"):
         return ("known_expected" if action == "none" else "needs_human"), action
-    # Unrecognized pair: judge nothing, escalate. Same conservatism as a parse failure.
+    # unrecognized pair: judge nothing, escalate
     return "needs_human", "human"
 
 
 def write_review(out_dir: Path, queue: list[dict], decisions: list[dict] | None,
                  final_text: str) -> Path:
-    """Write one review row per queue item, agent verdict merged in.
-
-    The agent's two judgements are recorded as given; `disposition` is DERIVED here by
-    `collapse`, never taken from the model — the taxonomy is the pipeline's, not a thing
-    each run re-decides. A queue item with no parseable verdict is conservatively marked
-    needs_human, so a parsing failure never silently drops an exception. Raw text is kept
-    for audit.
-    """
     out_dir.mkdir(parents=True, exist_ok=True)
     by_ref = {d.get("ref"): d for d in decisions} if decisions else {}
     out = out_dir / REVIEW_FILENAME

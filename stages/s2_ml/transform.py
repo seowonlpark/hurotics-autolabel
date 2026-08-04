@@ -1,46 +1,8 @@
-"""The raw -> lpf_view bridge: reproduce the labeled columns from a raw CSV.
-
-The model trains on the `lpf_view` family (four rotational features) but must RUN on
-raw device CSVs. This module is the bridge, and it reproduces HUROTICS' MATLAB
-(`LPF.m` / `csv2mat.m`) exactly — verified to ~1e-13 against every paired recording the
-corpus holds (18 as of 2026-08-03; DOMAIN_NOTES §6.2 records why the long-quoted "19"
-was never reproducible). Any drift between this and the training features is silent
-train/serve skew, so it is regression-tested against those pairs.
-
-Two things here are easy to get wrong:
-
-  1. **The filter is CAUSAL.** First-order IIR, one pole, fc = 1 Hz. It has phase lag
-     by construction. `filtfilt` would be "better" signal processing and WRONG here —
-     it would shift the features relative to the labels the model learned.
-  2. **The sagittal axis is a DEVICE property, not a signal property.** It is fixed by
-     how the IMU sat in that hardware revision, so it is resolved by schema variant,
-     never guessed from the waveform. Signal-only detection was measured and scored
-     BELOW CHANCE (§6.2) — do not reintroduce it. Unknown variant => abstain.
-
-Sagittality vs the permutation — keep them apart (§4.1b/§6.2). S1 measures the
-**permutation** (which Gyro axis is the rate of which Deg axis: X->X, Y->Z, Z->Y); that
-is universal across variants and knowable from inside one file. It does NOT say which
-plane is sagittal. Sagittality is per hardware revision, unanswerable from inside a
-file, and lives here — resolved against paired ground truth. Because the permutation is
-universal, the only independent per-variant fact is **which Deg axis is sagittal**; the
-gyro axis follows from it, so storing both would invite the two to drift apart.
-
-But "universal" is a corpus finding, not a guarantee, and §4.1b names two files that
-break it. So the variant lookup is checked against the file's own measured record
-(`check_axis_trust`) before any column is read: the lookup says which axis SHOULD be
-sagittal, S1 says whether THIS file obeys the permutation, and a disagreement is fatal.
-Until 2026-07-20 this path resolved axes from the documented map alone and never opened
-`channel_trust.json` — S1 measured the answer and nothing read it. That is why `trust`
-is a required argument with an explicit opt-out rather than an optional one.
-
-`raw_csv_to_features` is the entry point a caller actually runs a file through: it resolves
-the variant from the header, opens that file's trust record, runs both guards, and refuses
-with a stated reason rather than returning a frame it cannot defend. Until 2026-08-03 no
-such entry point existed — the only caller was a verification script passing
-TRUST_UNCHECKED, so `load_trust` had zero callers and `check_axis_trust` had never once run
-against a real record (caveats §3.1). The cost of that gap was not hypothetical: the
-sagittal axis for the majority variant was wrong the whole time (see the table below).
-"""
+# the raw -> lpf_view bridge: rebuild the labeled columns from a raw CSV
+# reproduces their MATLAB to ~1e-13; any drift is silent train/serve skew
+# the filter is CAUSAL- filtfilt is better signal processing and WRONG here
+# the sagittal axis is a DEVICE property, resolved by variant, never guessed
+# sagittality is not the permutation; unknown variant ABSTAINS
 
 from __future__ import annotations
 
@@ -59,152 +21,107 @@ from stages.s1_clean.config import (
     GAP_FACTOR,
 )
 
-# csv2mat.m: f_ang = 1; f_angvel = 1;  ("for locomotion classification").
-# f_angvel = 10 is the GCP variant and must NOT be used for this task.
+# csv2mat.m: f_ang = 1; f_angvel = 1;  ("for locomotion classification")
+# f_angvel = 10 is the GCP variant and must NOT be used for this task
 FC_ANG_HZ = 1.0
 FC_ANGVEL_HZ = 1.0
 
-# variant_id -> the Deg axis that revision's exporter treated as SAGITTAL.
-# The matching Gyro axis is NOT stored: it follows from DOCUMENTED_GYRO_PERMUTATION,
-# which every variant obeys. Extend only with new evidence: one paired raw+annotated
-# file, never a guess.
+# variant_id -> the Deg axis that revision's exporter treated as SAGITTAL
+# the gyro axis is NOT stored, it follows from DOCUMENTED_GYRO_PERMUTATION
+# extend only with new evidence: one paired raw+annotated file, never a guess
 #
-# Re-measured 2026-08-03 against every pair the corpus holds — 18 annotated trials whose
-# raw source is present with a bit-identical `Time` vector. All 18, on all three variants,
-# reproduce the labeled columns from `Deg_Y` (+ `Gyro_Z`) to <=7.3e-13, float roundoff on a
-# ~1e5-sample IIR. The alternatives are nowhere near: `Deg_X` lands 177-381 deg away and
-# `Deg_Z` 99-460. Per variant: fb5ea2c2 7 pairs (all rev13), 0fda484e 10 (rev7 + rev8),
-# 4bfd6ab2 1 (rev4).
+# re-measured 2026-08-03 on all 18 pairs; every one reproduces from Deg_Y to <=7.3e-13,
+# and the alternatives are nowhere near (Deg_X lands 177-381 deg away, Deg_Z 99-460)
 #
-# **`fb5ea2c2` read "X" here until 2026-08-03, and it was wrong.** It is the majority
-# variant — 62 of 91 raw files — so every serve-path read of those files would have fed the
-# classifier the frontal plane instead of the sagittal one, silently, with no downstream
-# check able to notice. It survived because nothing ever ran this module against a raw file
-# in anger (caveats §3.1) — an unexercised bridge cannot be wrong out loud, and it was. It
-# was found the day the serve path was built and read one. See caveats §5.
+# fb5ea2c2 read "X" here until 2026-08-03 and it was WRONG; it is 62 of 91 raw files, so
+# every serve read fed the classifier the frontal plane instead of the sagittal one, with
+# nothing downstream able to notice; it survived because nothing ever ran this module
+# against a raw file, and it was found the day the serve path was built and read one
 #
-# Every measured variant reads `Deg_Y`, so this corpus contains no variant whose sagittal
-# plane differs. The per-variant shape is kept anyway: "all three agree" is a fact about
-# three revisions, not a licence to default a fourth (§6.2 argues it; §6.3 is the standing
-# ask for the two that are still unmapped). **Unknown variant still abstains.**
+# all three measured variants read Deg_Y, but the per-variant shape stays: three
+# revisions agreeing is not a licence to default a fourth; unknown variant ABSTAINS
 SAGITTAL_DEG_AXIS_BY_VARIANT = {
-    "fb5ea2c2": "Y",   # rev13 / rev14  (majority variant) — 7 pairs, all rev13
-    "0fda484e": "Y",   # rev7  / rev8                      — 10 pairs
-    "4bfd6ab2": "Y",   # rev4                              — 1 pair
+    "fb5ea2c2": "Y",   # rev13 / rev14  (majority variant), 7 pairs, all rev13
+    "0fda484e": "Y",   # rev7  / rev8, 10 pairs
+    "4bfd6ab2": "Y",   # rev4, 1 pair
 }
 
 FEATURE_COLUMNS = ("L_ang_LPF", "R_ang_LPF", "L_angvel_LPF", "R_angvel_LPF")
 TIME_COL = "Time"
 
 
+# no measured axis mapping for this variant; fatal rather than defaulted, since a guessed
+# axis feeds the classifier a channel it was not trained on and nothing would notice
 class UnknownVariantError(Exception):
-    """Raised when a file's schema variant has no measured axis mapping.
-
-    Deliberately fatal rather than defaulted: guessing the axis feeds the classifier a
-    channel that is not the one it was trained on, and nothing downstream would notice.
-    """
+    pass
 
 
+# an lpf_view file came down the raw path; the families share only `Time`, so reading it
+# here resolves columns that do not exist; separate from KeyError because the remedy is
+# different- this file wants the other path
 class NotRawDeviceError(Exception):
-    """Raised when the file handed to the raw path is not a raw device log.
-
-    The two families share only `Time` (§1.3/config.FAMILY_MARKERS), so reading an
-    `lpf_view` file through here would resolve columns that do not exist. Named separately from a
-    bare KeyError because the remedy is different: this file wants the other path.
-    """
+    pass
 
 
+# gyro is not natively deg/s; converting would be defensible physics and is still refused,
+# because all 91 trust records measure 1.0 so a 57.3x rescale has no ground truth behind it
 class GyroUnitError(Exception):
-    """Raised when a file's measured gyro unit is not the one the model was trained on.
-
-    S1 records `scale_to_degps` per side and normalizes the CLEAN layer with it, but this
-    path reads the raw CSV, which is un-normalized by construction. Converting here would
-    be defensible physics and is still refused: every one of the 91 trust records in this
-    corpus measures L and R at exactly 1.0, so a 57.3x rescale has never been checked
-    against paired ground truth, and an unverified transform of the classifier's input is
-    the same class of silent skew this module exists to prevent. Refuse, state it, and let
-    a human extend the verification with the first rad/s pair that appears.
-    """
+    pass
 
 
+# the FINAL interval cannot carry the filter, and matlab_dt sets alpha for the whole
+# recording from it- so a bad last tick is a bad filter everywhere, not a bad last sample
+# (tie the last two stamps and the output freezes flat with nothing raised)
 class DegenerateClockError(Exception):
-    """Raised when the file's FINAL inter-sample interval cannot carry the filter.
-
-    `matlab_dt` reads that one interval and it sets `alpha` for the whole recording, so a
-    bad final tick is not a bad last sample — it is a bad filter everywhere. §6.2 records
-    the failure mode: if the last two timestamps tie, `alpha = 0`, the recursion collapses
-    to `y[n] = y[n-1]`, and the output freezes flat for the entire trial with nothing
-    raised. Measured over all 91 raw files, the final interval is sane on every one
-    (0 degenerate, 0 gap-sized), so this guard is a tripwire, not a routine branch.
-    """
+    pass
 
 
+# this file's MEASURED permutation contradicts the documented one on the axis about to be
+# read; the variant lookup cannot answer whether THIS file obeys the permutation, S1 can
 class AxisConflictError(Exception):
-    """Raised when a file's MEASURED permutation contradicts the documented one on the
-    axis this path is about to read.
-
-    Same failure as `UnknownVariantError` and the same remedy — refuse rather than
-    guess. The variant lookup answers "which axis is sagittal for this hardware"; it
-    cannot answer "does this particular file obey the permutation." S1 measures that
-    per file, and until now nothing read the answer.
-    """
+    pass
 
 
-# Explicit opt-out for callers with no per-file trust record to offer. A sentinel
-# rather than `None`, so skipping the check is a decision in the call site instead of
-# the silent default that let this gap sit open.
+# a sentinel, not `None`, so skipping the check is a decision at the call site rather than
+# the silent default that let this gap sit open
 TRUST_UNCHECKED = "trust_unchecked"
 
 
+# the MATLAB coefficient: a = 2*pi*dt*fc / (2*pi*dt*fc + 1)
 def alpha(dt_s: float, fc_hz: float) -> float:
-    """The MATLAB coefficient: a = 2*pi*dt*fc / (2*pi*dt*fc + 1)."""
     w = 2.0 * math.pi * dt_s * fc_hz
     return w / (w + 1.0)
 
 
+# y[n] = a*x[n] + (1-a)*y[n-1], seeded y[0] = x[0]; exact transcription of LPF.m
 def lpf(x: np.ndarray, dt_s: float, fc_hz: float) -> np.ndarray:
-    """First-order causal IIR, seeded y[0] = x[0]. Exact transcription of LPF.m.
-
-    y[n] = a*x[n] + (1-a)*y[n-1]
-    """
     x = np.asarray(x, dtype=float)
     if x.size == 0:
         return x.copy()
     a = alpha(dt_s, fc_hz)
-    # lfilter state form: zi = (1-a)*y[-1]; seeding with x[0] gives y[0] = x[0].
+    # lfilter state form: zi = (1-a)*y[-1]; seeding with x[0] gives y[0] = x[0]
     y, _ = lfilter([a], [1.0, -(1.0 - a)], x, zi=[(1.0 - a) * x[0]])
     return y
 
 
+# the dt their pipeline actually uses: the LAST interval, in seconds; timestamp.m
+# overwrites del_t each pass so only the final one survives, and it filters the whole
+# trial; reproduced because matching the training features beats being correct
 def matlab_dt(time_ms: np.ndarray) -> float:
-    """The dt their pipeline actually uses: the LAST inter-sample interval, in seconds.
-
-    `timestamp.m` loops the whole time vector but overwrites `del_t` each pass, so only
-    the final interval survives — and `csv2mat.m` passes the full vector once, so one dt
-    filters the entire trial (§6.2). Reproduced here because matching the training
-    features matters more than being correct; see `safe_dt` for the honest version.
-    """
     t = np.asarray(time_ms, dtype=float)
     return float(t[-1] - t[-2]) / 1000.0
 
 
+# median interval- what timestamp.m should have used; robust to one bad final tick,
+# which in the MATLAB can be dt=0 and freeze the output flat for a whole trial
 def safe_dt(time_ms: np.ndarray) -> float:
-    """Median interval — what `timestamp.m` should have used.
-
-    Robust to a single bad final interval, which in the MATLAB can be dt=0 and freeze
-    the filter output flat for a whole trial. Use this on the canonical grid, where it
-    equals the nominal dt anyway.
-    """
     t = np.asarray(time_ms, dtype=float)
     return float(np.median(np.diff(t))) / 1000.0
 
 
+# (deg_axis, gyro_axis) or raise; never guesses; the gyro axis is derived through the
+# permutation, so the two cannot fall out of sync
 def resolve_axes(variant_id: str) -> tuple[str, str]:
-    """(deg_axis, gyro_axis) for a schema variant, or raise. Never guesses.
-
-    Only the Deg axis is stored; the Gyro axis is derived through the permutation S1
-    measures, so the two cannot fall out of sync.
-    """
     deg_axis = SAGITTAL_DEG_AXIS_BY_VARIANT.get(variant_id)
     if deg_axis is None:
         raise UnknownVariantError(
@@ -216,21 +133,17 @@ def resolve_axes(variant_id: str) -> tuple[str, str]:
     return deg_axis, DOCUMENTED_GYRO_PERMUTATION[deg_axis]
 
 
+# one definition, so the loader and the provenance line cannot disagree about which
+# file was consulted
 def trust_path(raw_path: Path, repo_root: Path | None = None) -> Path:
-    """Where S1 wrote this raw file's trust record. One definition, so the loader and the
-    provenance line can never disagree about which file was consulted."""
     root = repo_root or Path(__file__).resolve().parents[2]
     return (root / "data" / "clean" / raw_path.parent.name /
             f"{raw_path.stem}.channel_trust.json")
 
 
+# missing is an ERROR, not an empty record: no trust record means the file was never
+# cleaned, and a permissive default here is the exact hole this check exists to close
 def load_trust(raw_path: Path, repo_root: Path | None = None) -> dict:
-    """The `channel_trust.json` S1 wrote beside a raw file's clean parquet.
-
-    Missing is an error, not an empty record: a raw file with no trust record was never
-    cleaned (quarantined, or S1 has not run), and inventing a permissive default here is
-    exactly the "recorded but never read" hole this check exists to close.
-    """
     p = trust_path(raw_path, repo_root)
     if not p.exists():
         raise FileNotFoundError(
@@ -241,17 +154,9 @@ def load_trust(raw_path: Path, repo_root: Path | None = None) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+# refuse a file whose measured permutation breaks on the axis about to be read; only L/R
+# and only deg_axis matter, a conflict elsewhere is real but inert here
 def check_axis_trust(trust: dict | str, deg_axis: str) -> None:
-    """Refuse a file whose measured permutation breaks on the axis we are about to read.
-
-    Only L and R matter — those are the sides `raw_to_features` reads — and only
-    `deg_axis`, the one this revision treats as sagittal. A conflict on any other axis
-    is real but inert here (`Deg_Z` in particular is the yaw-like axis whose derivative
-    is often noise, §4.1b), and an abstaining axis is silent rather than dissenting, so
-    it never reaches `conflicts_with_documented` in the first place.
-
-    `trust` is the file's `channel_trust.json`, written beside its clean parquet.
-    """
     if trust is TRUST_UNCHECKED:
         return
     if not isinstance(trust, dict):
@@ -275,14 +180,9 @@ def check_axis_trust(trust: dict | str, deg_axis: str) -> None:
         )
 
 
+# a rad/s file read through here hands the classifier velocities 57.3x too small- well
+# inside the range the trees split on, and invisible downstream
 def check_gyro_unit(trust: dict | str) -> None:
-    """Refuse a file whose gyro is not natively deg/s on the sides this path reads.
-
-    The angle channels are degrees, so the model's `*_angvel_LPF` features are deg/s. A
-    rad/s file read through here would hand the classifier angular velocities 57.3x too
-    small — well inside the range the trees split on, and invisible downstream. See
-    `GyroUnitError` for why this refuses rather than converting.
-    """
     if trust is TRUST_UNCHECKED:
         return
     if not isinstance(trust, dict):
@@ -306,18 +206,15 @@ def check_gyro_unit(trust: dict | str) -> None:
         )
 
 
+# (frame, variant_id, family), columns resolved BY NAME; the single reader for both the
+# verification and the serve path- two copies drifting apart would mean "verified to
+# 1e-13" describes a read production never performs
 def load_raw_frame(path: Path) -> tuple[pd.DataFrame, str, str]:
-    """(frame, variant_id, family) for a raw device CSV, columns resolved BY NAME (§1.3).
-
-    The single reader for both the verification and the serve path. Two copies of this
-    drifting apart would mean "verified to 1e-13" describes a read that production never
-    performs, which is the same train/serve skew one level up.
-    """
     header = read_header(path)
     names = [strip_prefix(c) for c in header]
     # index_col=False: without it a trailing comma (data one field wider than the header) makes
-    # pandas promote column 0 to the index, shifting every column left by one. The count check
-    # below cannot see that — the shift leaves the count correct — so it must not happen at all.
+    # pandas promote column 0 to the index, shifting every column left by one; the count check
+    # below cannot see that- the shift leaves the count correct- so it must not happen at all
     df = pd.read_csv(path, encoding="utf-8-sig", index_col=False)
     df = df.loc[:, [c for c in df.columns if not c.startswith("Unnamed")]]
     if len(df.columns) > len(names):
@@ -336,17 +233,10 @@ def load_raw_frame(path: Path) -> tuple[pd.DataFrame, str, str]:
     return df, fingerprint(header), family_of(list(df.columns))
 
 
+# (dt seconds, last/median ratio) or raise; matlab_dt NOT safe_dt, and that is measured
+# rather than stylistic- the median moves the features up to 20.1 deg on the paired
+# recordings, which is the train/serve skew this module exists to prevent
 def serve_dt(time_ms: np.ndarray) -> tuple[float, float]:
-    """(dt in seconds, last/median ratio) for a raw file, or raise.
-
-    `matlab_dt`, not `safe_dt`, and the choice is measured rather than stylistic: the
-    labeled features this model trained on were produced by the MATLAB, which filters a
-    whole trial with its final interval. Substituting the median moves the features by up
-    to **20.1 deg** across the paired recordings (worst `rev7_trial_1`, whose last interval
-    is 12.0 ms against a 10.0 ms median). That is train/serve skew of the exact kind this
-    module exists to prevent, so serve reproduces the upstream quirk deliberately — and
-    guards the one case where the quirk is not merely odd but fatal.
-    """
     t = np.asarray(time_ms, dtype=float)
     if t.size < 2:
         raise DegenerateClockError("fewer than 2 samples: no inter-sample interval exists")
@@ -372,19 +262,12 @@ def serve_dt(time_ms: np.ndarray) -> tuple[float, float]:
     return matlab_dt(t), last / med
 
 
+# the four lpf_view features from a name-resolved raw frame; `trust` is required, not
+# optional- the variant lookup cannot tell whether THIS file obeys the permutation
 def raw_to_features(df: pd.DataFrame, variant_id: str, *, trust: dict | str,
                     dt_s: float | None = None,
                     time_col: str = TIME_COL) -> pd.DataFrame:
-    """Build the four `lpf_view` features from a name-resolved raw device frame.
-
-    `dt_s` defaults to the median interval; pass `matlab_dt(...)` to reproduce the
-    training pipeline bit-for-bit on an un-resampled raw file.
-
-    `trust` is required, not optional: the variant lookup alone cannot tell whether THIS
-    file obeys the permutation, and the honest answer S1 already measured is worthless
-    if the read path defaults to ignoring it. Pass `TRUST_UNCHECKED` to skip the check
-    deliberately.
-    """
+    # dt_s defaults to the median; pass matlab_dt() to reproduce training bit-for-bit
     deg_axis, gyro_axis = resolve_axes(variant_id)
     check_axis_trust(trust, deg_axis)
     if dt_s is None:
@@ -402,22 +285,13 @@ def raw_to_features(df: pd.DataFrame, variant_id: str, *, trust: dict | str,
     return pd.DataFrame({time_col: df[time_col].to_numpy(float), **out})
 
 
+# the serve entry point: (raw rows, features, provenance) or refuse with a reason
+# every guard in this module runs HERE against a real record, which is the whole point;
+# a file that fails any of them raises, it does not quietly get a frame
+# both frames come back because the deliverable is rows-in/rows-out
 def raw_csv_to_features(path: Path, *, repo_root: Path | None = None,
                         trust: dict | str | None = None
                         ) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """(raw rows as read, the four `lpf_view` features, provenance) — or refuse with a reason.
-
-    The serve entry point. Every guard in this module runs here, against a real record,
-    which is the whole point: the variant lookup says which axis SHOULD be sagittal, S1's
-    per-file record says whether this file obeys the permutation and what unit its gyro is
-    in, and the clock check says whether the filter coefficient is meaningful at all. A
-    file that fails any of them raises — the caller reports an abstention, it does not
-    quietly get a frame.
-
-    Both frames come back because the deliverable is rows-in/rows-out: the caller's own
-    rows are returned with columns appended, and re-reading a 132k-row CSV to recover them
-    would be the only reason to open the file twice.
-    """
     df, variant_id, family = load_raw_frame(path)
     if family != "raw_device":
         raise NotRawDeviceError(

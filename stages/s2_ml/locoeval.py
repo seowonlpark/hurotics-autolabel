@@ -1,22 +1,7 @@
-"""locoeval: the blind measure layer.
-
-DOMAIN_NOTES §7: this layer emits objective numbers and NO opinion. Every judgement —
-"is this good", "should this ship" — belongs above it. Keeping that separation is what
-stops a model from being adopted because a narrative sounded convincing.
-
-Headline metric is **macro-F1** (§5.4): the corpus is ~86% walking, so a "predict walk
-always" model scores >0.8 accuracy while being useless. Macro-F1 refuses to reward that.
-
-The second headline is the **selective curve**. Once the classifier may abstain, a lone
-accuracy number is meaningless without the coverage it was bought at, so the two are
-always reported together — plus `worst_rev_accuracy`, the same accuracy on the single
-worst held-out subject. Pooled accuracy averages a new subject together with subjects the
-model has effectively seen; the worst-rev column is the honest floor for the next person
-who wears the device, and the two disagree by several points at every threshold.
-
-`-1` (human-unknown) never enters training and is excluded from metrics consistently (§7),
-but its share is reported so the confidence signal can be scored against it.
-"""
+# locoeval: the blind measure layer- objective numbers, NO opinion
+# headline is macro-F1; the corpus is ~86% walk, so accuracy alone rewards a stub
+# an accuracy without the coverage it was bought at is meaningless
+# worst_rev_accuracy is the honest floor for the next person who wears the device
 
 from __future__ import annotations
 
@@ -50,10 +35,9 @@ class ClassMetrics:
     f1: float
 
 
+# numbers only; no verdict, no recommendation
 @dataclass
 class EvalResult:
-    """Numbers only. No verdict, no recommendation."""
-
     n: int
     macro_f1: float
     accuracy: float
@@ -62,10 +46,8 @@ class EvalResult:
     confusion: dict[str, dict[str, int]]
     unknown_frac_mean: float
     per_rev_macro_f1: dict[str, float] = field(default_factory=dict)
-    # Window-level accuracy on the same held-out rev, reported ALONGSIDE macro-F1 and never
-    # instead of it: on an ~86% walk corpus accuracy alone rewards the degenerate model
-    # (§5.4), while macro-F1 alone hides how much of a subject's data is actually being
-    # called right. The pair is readable; either half on its own is not.
+    # reported ALONGSIDE macro-F1, never instead of it: accuracy alone rewards the
+    # degenerate model, macro-F1 alone hides how much of a subject is called right
     per_rev_accuracy: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -74,10 +56,10 @@ class EvalResult:
         return d
 
 
+# macro-F1 and friends over {stand, walk}; computes, never judges
 def evaluate(y_true: np.ndarray, y_pred: np.ndarray,
              groups: np.ndarray | None = None,
              unknown_frac: np.ndarray | None = None) -> EvalResult:
-    """Macro-F1 and friends over {stand, walk}. Blind: computes, never judges."""
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
     classes = [STAND, WALK]
@@ -121,14 +103,11 @@ def evaluate(y_true: np.ndarray, y_pred: np.ndarray,
     )
 
 
+# coverage vs accuracy as the abstention threshold moves; confidence is max(p, 1-p), so
+# threshold 0.5 is no abstention and the first row is the full-coverage baseline
 def selective_curve(y_true: np.ndarray, p_walk: np.ndarray,
                     groups: np.ndarray | None = None,
                     thresholds: tuple[float, ...] = DEFAULT_THRESHOLDS) -> list[dict]:
-    """Coverage vs accuracy as the abstention threshold moves.
-
-    `p_walk` is P(walk); confidence is `max(p, 1-p)`, so threshold 0.5 means "no
-    abstention" and the first row is always the full-coverage baseline.
-    """
     y_true = np.asarray(y_true)
     p_walk = np.asarray(p_walk, dtype=float)
     conf = np.maximum(p_walk, 1.0 - p_walk)
@@ -160,7 +139,7 @@ def render(result: EvalResult, curve: list[dict] | None = None,
     lines = [
         f"# {title}", "",
         f"- windows: **{result.n:,}**",
-        f"- **macro-F1: {result.macro_f1:.4f}**  (headline, §5.4)",
+        f"- **macro-F1: {result.macro_f1:.4f}**  (headline)",
         f"- accuracy: {result.accuracy:.4f}  ·  balanced accuracy: "
         f"{result.balanced_accuracy:.4f}",
         "", "| class | support | precision | recall | F1 |", "|---|---|---|---|---|",
@@ -175,7 +154,7 @@ def render(result: EvalResult, curve: list[dict] | None = None,
         lines.append(f"| **{t}** | {row['stand']:,} | {row['walk']:,} |")
 
     if result.per_rev_macro_f1:
-        lines += ["", "per-rev held-out scores (each rev = one subject/day, §7):", "",
+        lines += ["", "per-rev held-out scores (each rev = one subject/day):", "",
                   "| rev | macro-F1 | window accuracy |", "|---|---|---|"]
         for rev, f1 in sorted(result.per_rev_macro_f1.items()):
             acc = result.per_rev_accuracy.get(rev)

@@ -1,30 +1,7 @@
-"""End-to-end guard for the raw serve path: does a device log label like its lpf_view export?
-
-    python -m stages.s2_ml.verify_serve
-
-`verify_transform.py` checks the bridge's MATH — four columns reproduced to float roundoff.
-That is necessary and it is not the deliverable. This checks the thing a caller actually
-gets: feed the SAME recording in both shapes — the raw device CSV and the annotated lpf_view
-export HUROTICS' MATLAB produced from it — and assert `label.py` returns the same state,
-the same confidence and the same reason on every row.
-
-Why the end-to-end version earns its runtime: between the four columns and the answer sit
-gap segmentation, FIR decimation to 100 Hz, the rest reference, 42 windowed features and a
-400-tree ensemble. Each is a place where a 1e-13 input difference could stop being 1e-13,
-and none of them is exercised by comparing columns. A bridge that is exact and a pipeline
-that disagrees anyway is a failure mode this repo can actually produce.
-
-**It also sweeps the corpus**, attempting the raw path on every file under `data/raw` and
-reporting what is servable and what abstains, by reason. Abstentions are not failures — an
-unmapped hardware revision SHOULD refuse (§6.2) — but the count belongs in the open, since
-"the serve path works" and "the serve path works on 86% of the corpus" are different
-claims and only one of them is true.
-
-**No label is read here, so the lockbox stays sealed (§7).** The comparison is between two
-routes to the same prediction, never between a prediction and ground truth; `Label` is
-dropped from both frames before anything is compared, in code rather than by intention. So
-rev8 files may take part: nothing about their annotations is observed.
-"""
+# end-to-end guard: does a device log label like its lpf_view export?
+#   python -m stages.s2_ml.verify_serve
+# verify_transform checks the MATH; this checks the thing a caller actually runs
+# drops Label before comparing, so it proves equivalence and never correctness
 
 from __future__ import annotations
 
@@ -43,37 +20,33 @@ from stages.s2_ml.verify_transform import find_pairs, index_raw_files
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = REPO_ROOT / "data" / "raw"
 
-# The columns that ARE the deliverable. `confidence` is compared numerically, the rest
-# exactly — a reason that changes is a different explanation for the same row, which is a
-# regression even when the state survives.
+# The columns that ARE the deliverable; `confidence` is compared numerically, the rest
+# exactly- a reason that changes is a different explanation for the same row, which is a
+# regression even when the state survives
 VERDICT_COLS = ("state", "ambiguous", "reason", "alternative", "n_windows")
 
 # The two routes differ only by float roundoff in the fourth feature column, so the
-# ensemble should land on identical probabilities. A tree split sitting exactly between two
+# ensemble should land on identical probabilities; a tree split sitting exactly between two
 # values that differ at 1e-13 could in principle flip one window; this bound says such a
-# flip is not what we are seeing, rather than tolerating it in advance.
+# flip is not what we are seeing, rather than tolerating it in advance
 CONFIDENCE_TOLERANCE = 1e-9
 
 
+# the verdict columns only, with ground truth structurally removed
 def _comparable(df: pd.DataFrame) -> pd.DataFrame:
-    """The verdict columns only, with ground truth structurally removed.
-
-    Dropping `Label` is the lockbox guarantee expressed as code: this function cannot
-    return a column that anything downstream could score against.
-    """
     out = df.drop(columns=[c for c in (LABEL_COL,) if c in df.columns])
     cols = [c for c in VERDICT_COLS if c in out.columns]
     got = out[cols].copy()
-    # None and NaN both mean "no call"; normalize so the comparison is about verdicts.
+    # None and NaN both mean "no call"; normalize so the comparison is about verdicts
     for c in ("state", "reason", "alternative"):
         if c in got.columns:
             got[c] = got[c].where(got[c].notna(), "")
     return got
 
 
+# label one recording both ways and count every row where the two disagree
 def compare_pair(ann_path: Path, raw_path: Path, model_dir: Path,
                  threshold: float) -> dict:
-    """Label one recording both ways and count every row where the two disagree."""
     ann_out, _ann_prov = label_csv(ann_path, model_dir, threshold)
     raw_out, raw_prov = label_csv(raw_path, model_dir, threshold)
 
@@ -88,7 +61,7 @@ def compare_pair(ann_path: Path, raw_path: Path, model_dir: Path,
     cb = raw_out["confidence"].to_numpy(float)
     both = np.isfinite(ca) & np.isfinite(cb)
     conf_delta = float(np.max(np.abs(ca[both] - cb[both]))) if both.any() else 0.0
-    # A row scored on one route and not the other is a disagreement of its own kind.
+    # A row scored on one route and not the other is a disagreement of its own kind
     coverage_mismatch = int((np.isfinite(ca) != np.isfinite(cb)).sum())
 
     return {
@@ -103,8 +76,8 @@ def compare_pair(ann_path: Path, raw_path: Path, model_dir: Path,
     }
 
 
+# attempt the bridge on every raw file; records the outcome, never raises
 def sweep(raw_dir: Path, model_dir: Path) -> list[dict]:
-    """Attempt the bridge on every raw file. Records the outcome, never raises."""
     rows = []
     for p in sorted(raw_dir.rglob("*.csv")):
         rel = str(p.relative_to(REPO_ROOT))

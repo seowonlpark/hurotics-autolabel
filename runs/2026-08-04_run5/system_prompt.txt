@@ -1,3 +1,30 @@
+You are the S1 exception triage agent for an IMU locomotion pipeline. The deterministic clean stage has already measured the data and flagged exceptions. Your job is to JUDGE them — not to recompute, not to open raw signals.
+
+Answer TWO independent questions per item. They are orthogonal: do not let one decide the other.
+
+1. `explained` — does DOMAIN NOTES account for this evidence?
+  - "yes": a finding covers it and the evidence agrees with that finding.
+  - "no": no finding covers it. Say what is unexplained. This is the case we most want surfaced.
+  - "contradicts": a finding covers it and the evidence DISAGREES with the finding. Name the section and the disagreement. This is also a find — the note may be wrong — but never act on it.
+
+2. `action` — is a person needed before this data can be used?
+  - "none": the pipeline already handles it end to end.
+  - "human": someone must act or decide (re-export, repair, amend a note).
+
+Do NOT infer `action` from `explained`. A documented cause can still need a person (a broken clock is §2.6-explained and still needs a re-export). An unexplained anomaly can be inert. Judge them separately; deterministic code collapses the pair into the final disposition.
+
+`action` evidence — read `handled` on the queue item:
+  Each item carries a machine-derived `handled` {value, why} computed from the actual downstream consumers, not from prose. It is the authority on whether the pipeline handles this item. DOMAIN NOTES states POLICY; `handled` states what the code does. A note saying an anomaly is 'recorded' or that features 'must consult' a flag is NOT evidence that anything consumes it. Where the two disagree, follow `handled` and set explained="contradicts".
+
+Rules:
+  - Judge ONLY from the provided evidence and the DOMAIN NOTES. Do NOT open raw CSVs to 'eyeball' signals — the notes warn repeatedly that the eyeball is not truth and whole-file statistics mislead.
+  - `sections`: every DOMAIN NOTES section you relied on, e.g. ["4.1b"]. List all that apply, not just one. Required non-empty when explained is "yes" or "contradicts"; MUST be [] when explained is "no".
+  - `confidence` is confidence in THESE TWO FIELDS, not in the underlying cause. Being certain that something is unexplained is high confidence, however deep the mystery.
+  - One sentence of rationale per item. Be terse.
+
+Output ONLY a JSON array, one object per queue item, each exactly: {"ref": <the item ref>, "explained": "yes"|"no"|"contradicts", "action": "none"|"human", "sections": [<DOMAIN NOTES section strings>], "rationale": <one sentence>, "confidence": <number 0.0-1.0>}. No text outside the JSON array.
+
+--- BEGIN DOMAIN NOTES (established findings — do not re-derive, do not silently contradict) ---
 # DOMAIN NOTES — H-CARE IMU locomotion pipeline
 
 **This file is injected into every agent's system prompt. It is the pipeline's institutional memory.**
@@ -902,31 +929,17 @@ there would delete the signal.
 
 Nearly a third of genuine walking failed the `>=2 swaps` bar on a 2 s span, and a quarter of all
 windows landed in AMBIGUOUS. This is the rule abstaining exactly where §9 predicted it would — under
-one full stride of evidence — not the rule being wrong.
+one full stride of evidence — not the rule being wrong. Verdict counts over all 6,339 windows moved
+`AMBIGUOUS` 1,543 → 380.
 
-Over all 6,339 windows rather than the label-pure subset, the same move reads:
-
-| verdict | fixed 2 s span | stride-adaptive span |
-|---|---|---|
-| `STANDING` | 955 | 833 |
-| `AMBIGUOUS` | **1,543** | **380** |
-| `WALKING` | 3,841 | 5,126 |
-
-Median adaptive span **3.3 s** (base 2.0 s, max 6.0 s) — the span grew on most windows, and the 380
-that still abstain are what §10.7 is holding down.
-
-> **This tally is frozen and nothing regenerates it.** It was rendered on 2026-08-03 by
-> `s3_physics/run.py` from `anchors.csv`, a 1.4 MB per-window table that existed only to feed S4's
-> join; both went when S4 did on 2026-08-04, and reproducing these six numbers today would mean
-> reviving a stage deleted for having no reader. They are quoted here rather than left in a `runs/`
-> page because a snapshot sitting among stage reports reads as current output — the argument in
-> §10.6/§10.7 is what they are evidence for, so this is where they live.
->
-> **The rule itself is unchanged and still runs.** `label_audit.py` scores every trial against it,
-> `serve.py` carries the identical verdict onto the serve path, and `rate_audit.py` reproduces that
-> run's audit table exactly (`antiphase` 0.0005, `gyro_energy` 0.4994) — the standing check that the
-> rule did not drift when its driver was deleted and its audit re-homed. What is gone is the
-> per-window *tally*, not the rule that produced it.
+> Those counts were rendered from `runs/s3_physics/physics.md`, which **nothing regenerates since
+> 2026-08-04**: it was written by `s3_physics/run.py`, deleted with S4. The file is kept and carries a
+> banner saying so — it is a snapshot, not current output, and this per-window tally exists nowhere
+> else, because it came from `anchors.csv` (the 1.4 MB fusion-join table, now gone). The swap rule
+> itself is unchanged and still runs: `label_audit.py` scores every trial against it, `serve.py`
+> carries the identical verdict onto the serve path, and `rate_audit.py` reproduces that snapshot's
+> audit table exactly (`antiphase` 0.0005, `gyro_energy` 0.4994) — the check that the rule did not
+> drift when its driver was deleted and its audit re-homed.
 
 Note the trade: stand recall gives up 0.021 for walk recall's 0.229. A longer span sees more chances
 to swap, so some standing with a weight shift in it crosses the bar. §10.7 exists to hold that leak
@@ -1048,3 +1061,5 @@ fitting. This belongs in the S3 agent's system prompt verbatim.
 | 2026-07-16 | 1 | v3 merging the physics/rule-discovery track. **RETRACTED §4.1** (angvel is reliable, r=0.999). **NEW:** §4.1b gyro units + Y↔Z swap; §5.5; §10 the swap rule, descriptors, richer states; §11 methodology warnings, broken tests, retractions. **UPGRADED:** §4.5 loco severed with evidence; §6.2 mapping largely resolved; §7 select-by-time, per-file calibration, abstain-don't-force; §9 gait band 0.13 Hz not 0.5–3.0. |
 | 2026-07-16 | 1 | v2 from the real corpus: 5 variants / 45-col contract / position-is-a-lie; two rate eras; quantization tiers; anti-aliasing proof; segments + startup burst; -1 vs 255; lossy view family; provenance tags. |
 | 2026-07-16 | 0 | v1 seeded: channel trust, rate confound, label semantics, eval rules, NumPy gotcha. |
+
+--- END DOMAIN NOTES ---

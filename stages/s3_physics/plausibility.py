@@ -1,69 +1,6 @@
-"""File-level sanity bounds: is this file's OUTPUT defensible as a whole?
-
-    python -m stages.s3_physics.plausibility --calibrate    # the corpus numbers below
-    python -m stages.s3_physics.plausibility --control      # the synthetic-fault controls
-
-`label_all.py` refuses a file for INPUT reasons — an unmapped hardware revision, a measured
-permutation contradicting the axis about to be read, a gyro that is not natively deg/s, a
-missing trust record. Once a file passes those gates **nothing checks the output.** A
-recording whose channels are miswired passes every input gate, produces confident labels,
-and is wrong end to end with no artifact saying so.
-
-**File level, not window level, and that distinction is the entire justification.** A
-per-window physics gate on the classifier is what the deleted S4 fusion stage was, and it
-is measured not to work: S2 reads `ileg_swaps` / `ileg_minhalf` / `ileg_minquarter` off the
-same 1 Hz-filtered interleg angle the swap rule reads, so physics contradicts only ~12% of
-S2's high-confidence errors and **none** at p >= 0.95 (`anchors.py`, `caveats.md` §1.1c).
-That argument is about which WINDOW is right. It says nothing about "this recording commits
-to nothing" or "the physics and the model describe different recordings" — statements about
-the file, which correspond to diagnosable faults rather than hard windows.
-
-## What actually catches faults [measured, 2026-08-04]
-
-Three synthetic channel faults injected into rev13 t1 (a 99%-walk recording that scores
-clean), each run through the real champion and the real serve path:
-
-    fault                       model walk   physics walk   committed   caught by
-    (unmodified)                    0.9935         0.9919      0.9981   - plausible -
-    R := L   duplicated leg         0.0000         0.0000      0.0064   commitment_collapse
-    R := const  dead sensor         0.0000         0.9894      0.0066   commitment_collapse
-                                                                        + physics_loud
-    L <-> R  swapped legs           0.9935         0.9919      0.9981   NOTHING
-
-**`commitment_collapse` is the workhorse**, and that was not the expected answer. Both
-destructive faults are caught because the model stops committing — 0.0064 and 0.0066 of
-rows, against a corpus minimum of **0.1487** over the 78 real raw files in
-`labeled_raw/label_summary.csv`. The bound sits at 0.02: ~7x below anything real, ~3x above
-both faults.
-
-**The swapped-leg fault is invisible, and that is arithmetic rather than an oversight.**
-Swapping the legs negates `L - R`, and `swap_count` thresholds at +/-delta symmetrically,
-so a negated interleg signal yields the identical swap count. Neither the swap rule nor
-this module can see it, and no bound here should be read as covering it. `caveats.md` §3.4
-keeps that blindness listed; it is not fixed here.
-
-## What the corpus says about the physics bounds [measured, 2026-08-04, 43 trials]
-
-Per-trial physics walk fraction against the ANNOTATED walk fraction — model-free on both
-sides, so this calibration owes nothing to the classifier:
-
-    trials with >5% annotated walk (n=40)   min 0.4174   p05 0.5355   median 0.8315
-    trials with <5% annotated walk (n=1)    rev13 t4, physics 0.9429
-    corr(annotated, physics) = 0.6264
-
-**`physics_silent` and `physics_loud` have never fired on real data**, and the honest
-reading of rev13 t4 says why they are unlikely to. That trial looks like the perfect
-`physics_loud` case — 0.00 annotated walk against 0.9429 physics walk — but at serve time
-the bound compares physics against the MODEL, and the model calls it 0.9916 walk. Model and
-physics AGREE; the annotation is the outlier. A serve-path check has no annotation to
-compare against, so it cannot catch that trial, and `label_audit` is what does. The two
-stages divide the work rather than overlapping: **`label_audit` distrusts the labels,
-`plausibility` distrusts the file.**
-
-So these two bounds are guardrails justified by margin and by one synthetic control, not by
-a catch on real data. Stated plainly rather than left for a reader to assume otherwise
-(§11.1): a bound that has never rejected anything is not evidence that everything passed.
-"""
+# file-level sanity bounds: is this file's OUTPUT defensible as a whole?
+#   python -m stages.s3_physics.plausibility [--calibrate|--control]
+# label_all refuses a file for INPUT reasons; this judges the output after the fact
 
 from __future__ import annotations
 
@@ -82,38 +19,35 @@ from stages.s3_physics.serve import STANDING, WALKING, row_verdict, segment_verd
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------------------
-# The bounds. Each is a JUDGEMENT sited outside a measured range, not a threshold tuned
-# against a score — there is no score to tune against, because the faults being caught are
-# absent from the corpus by construction: a recording with miswired channels never reached
-# the annotation stage. Where a number has a measurement behind it, the measurement is
-# named; where it is a stated line on a fraction, it says so.
+# the bounds; each is a JUDGEMENT sited outside a measured range, not a tuned threshold
+# there is nothing to tune against: the faults caught are absent from the corpus
 # ---------------------------------------------------------------------------
 
-# The model commits to less than this share of the file. Corpus minimum is 0.1487 over 78
-# real raw files; both synthetic destructive faults land at ~0.0065. This is the bound with
-# actual demonstrated catching power.
+# The model commits to less than this share of the file; corpus minimum is 0.1487 over 78
+# real raw files; both synthetic destructive faults land at ~0.0065; this is the bound with
+# actual demonstrated catching power
 COMMITMENT_MIN = 0.02
 
-# Physics finds leg alternation in at most this share of the file. Every corpus trial
+# Physics finds leg alternation in at most this share of the file; every corpus trial
 # containing annotated walking sits at or above 0.4174, so this is ~20x clear of the
-# observed floor. Set it higher and it starts firing on genuinely sedentary recordings,
-# which are normal data and not a fault.
+# observed floor; set it higher and it starts firing on genuinely sedentary recordings,
+# which are normal data and not a fault
 PHYSICS_SILENT_MAX = 0.02
 
-# ...while the model commits at least this much of the file to walking. Both halves are
+# ...while the model commits at least this much of the file to walking; both halves are
 # required: physics finding no alternation is unremarkable on its own (someone stood still),
-# and only the contradiction with a committed model is diagnostic.
+# and only the contradiction with a committed model is diagnostic
 MODEL_WALK_MIN = 0.20
 
-# The mirror. "Over half the file alternates" — the only non-arbitrary line available on a
-# fraction. The dead-sensor control lands at 0.9894.
+# The mirror; "Over half the file alternates"- the only non-arbitrary line available on a
+# fraction; the dead-sensor control lands at 0.9894
 PHYSICS_LOUD_MIN = 0.50
 
-# ...while the model commits almost none of it to walking. Not zero: a model calling 4% of
-# a walking recording `walk` is as broken as one calling none of it.
+# ...while the model commits almost none of it to walking; not zero: a model calling 4% of
+# a walking recording `walk` is as broken as one calling none of it
 MODEL_WALK_MAX = 0.05
 
-# Below this many covered rows the fractions above are too noisy to act on. 30 s at 100 Hz.
+# Below this many covered rows the fractions above are too noisy to act on; 30 s at 100 Hz
 MIN_ROWS = 3000
 
 BOUNDS = {
@@ -143,13 +77,8 @@ BOUNDS = {
 }
 
 
+# the file-level quantities the bounds read, from `label.explain`'s output frame
 def file_stats(scored: pd.DataFrame) -> dict:
-    """The file-level quantities the bounds read, from `label.explain`'s output frame.
-
-    Everything is taken over COVERED rows. An uncovered row has neither a probability nor a
-    physics verdict, so including it would move every fraction toward zero at a rate set by
-    how gappy the recording is — a statement about coverage, not about agreement.
-    """
     covered = scored["n_windows"].to_numpy(int) > 0
     n = int(covered.sum())
     if not n:
@@ -166,9 +95,9 @@ def file_stats(scored: pd.DataFrame) -> dict:
         "n_committed": int(committed.sum()),
         "committed_frac": round(float(committed.mean()), 4),
         # Over COMMITTED rows: the question is what the model actually asserts about this
-        # file, and an abstention asserts nothing. Scoring abstentions as "not walk" would
+        # file, and an abstention asserts nothing; scoring abstentions as "not walk" would
         # make a high-threshold run look like a model contradicting the physics when it has
-        # merely declined to answer.
+        # merely declined to answer
         "model_walk_frac": round(float((state[committed] == "walk").mean()), 4)
         if committed.any() else float("nan"),
         "physics_walk_frac": round(float((phys == WALKING).mean()), 4),
@@ -177,28 +106,16 @@ def file_stats(scored: pd.DataFrame) -> dict:
     }
 
 
+# every bound this file trips
 def check(scored: pd.DataFrame) -> list[dict]:
-    """Every bound this file trips. Returns [] for a plausible file.
-
-    **It reports; it never refuses.** `label_all` already has a refusal path for inputs it
-    cannot defend, and a file tripping a bound here is not undefendable — it is suspicious,
-    and the operator needs the labels plus the doubt, not an empty output. Same call
-    `label.py` makes row by row: state the verdict, name the doubt.
-
-    The physics bounds are NOT suppressed when commitment has collapsed, even though
-    `model_walk_frac` then rests on very few rows. Both findings are real and they say
-    different things, so both are reported and the base size travels in the detail — the
-    dead-sensor control trips both, and a reader shown only one of them would misdiagnose
-    it. Suppressing a true finding to keep the output tidy is how a check earns distrust.
-    """
     s = file_stats(scored)
     out = []
 
     # `rest_untrusted` is evaluated for every file, INCLUDING one too short for the
-    # fraction bounds. It is not a statistic and has no sample size to be too small: the
-    # recording either contained a rest span or it did not. Suppressing it with the
+    # fraction bounds; it is not a statistic and has no sample size to be too small: the
+    # recording either contained a rest span or it did not; suppressing it with the
     # fraction bounds would lose the fact on exactly the short files where a fallback zero
-    # does the most damage — 300 rows carry no second chance to find rest.
+    # does the most damage- 300 rows carry no second chance to find rest
     if not s.get("rest_trusted", True):
         out.append(_finding("rest_untrusted", "soft", s,
                             "interleg zero is a whole-recording median"))
@@ -235,20 +152,8 @@ def _finding(code: str, severity: str, stats: dict, detail: str) -> dict:
             "remedy": remedy, "stats": stats}
 
 
+# the `label_report.md` section
 def summarize(findings_by_file: dict[str, list[dict]], n_files: int = 0) -> list[str]:
-    """The `label_report.md` section. One block per bound, worst first, or a line saying clean.
-
-    `n_files` is the number of files SWEPT, passed in rather than inferred from the dict:
-    the dict holds only files with findings, so counting it would report "no file tripped a
-    bound across 0 files" on a clean run — a sentence that reads like nothing was checked.
-
-    **Grouped by bound, not by file.** A bound means the same thing on every file it fires
-    on, so its explanation and its remedy are printed once and the affected recordings are
-    listed underneath. Per-file rows repeating one sentence verbatim bury the only part that
-    varies — which CSVs — and make a bound that fired twice look twice as complicated as one
-    that fired once. What is genuinely per-file, the measured numbers in `detail`, stays on
-    the file's own line.
-    """
     flat = [(f, x) for f, xs in findings_by_file.items() for x in xs]
     hard = [(f, x) for f, x in flat if x["severity"] == "implausible"]
     soft = [(f, x) for f, x in flat if x["severity"] == "soft"]
@@ -266,18 +171,14 @@ def summarize(findings_by_file: dict[str, list[dict]], n_files: int = 0) -> list
     else:
         lines += [f"**{len({f for f, _ in hard})} file(s) tripped a hard bound.**", ""]
         # The measured numbers differ per file, so they ride on each file's line; the bound
-        # and its remedy do not, so they are stated once above and below the list.
+        # and its remedy do not, so they are stated once above and below the list
         for code, group in _by_code(hard).items():
             lines += [f"### {code} — {len(group)} file(s)", "", BOUNDS[code][0], ""]
             lines += [f"- `{f}` — {x['detail']}" for f, x in group]
             lines += ["", f"**Remedy:** {BOUNDS[code][1]}", ""]
-    # Named, not merely counted. A soft bound is the one an operator can still act on — by
-    # re-recording the file so it begins at rest — and a bare count sends them to
-    # `plausibility.jsonl` to find out which files it meant. Grouped by code rather than
-    # hardcoding `rest_untrusted`, so a second soft bound cannot be silently swallowed by a
-    # sentence naming the first. Counted over DISTINCT files, since one file can trip
-    # several codes and `len(soft)` counts findings. No `detail` on these lines: a soft
-    # bound's detail restates its `what` rather than measuring anything.
+    # named, not merely counted: a soft bound is one an operator can still act on
+    # grouped by code so a second soft bound cannot be swallowed by a sentence naming the first
+    # counted over DISTINCT files, since one file can trip several codes
     for code, group in _by_code(soft).items():
         files = list(dict.fromkeys(f for f, _ in group))
         lines += [f"### {code} — {len(files)} file(s)", "", BOUNDS[code][0], ""]
@@ -286,8 +187,8 @@ def summarize(findings_by_file: dict[str, list[dict]], n_files: int = 0) -> list
     return lines
 
 
+# {bound code: the (file, finding) pairs that tripped it}, in first-seen order
 def _by_code(flagged: list[tuple[str, dict]]) -> dict[str, list[tuple[str, dict]]]:
-    """{bound code: the (file, finding) pairs that tripped it}, in first-seen order."""
     out: dict[str, list[tuple[str, dict]]] = {}
     for f, x in flagged:
         out.setdefault(x["code"], []).append((f, x))
@@ -295,19 +196,11 @@ def _by_code(flagged: list[tuple[str, dict]]) -> dict[str, list[tuple[str, dict]
 
 
 # ---------------------------------------------------------------------------
-# Calibration and controls: the numbers in this module's docstring, regenerated on demand.
+# Calibration and controls: the numbers in this module's docstring, regenerated on demand
 # ---------------------------------------------------------------------------
 
+# per-trial physics walk fraction against the ANNOTATED walk fraction
 def corpus_calibration(spec: WindowSpec | None = None) -> pd.DataFrame:
-    """Per-trial physics walk fraction against the ANNOTATED walk fraction.
-
-    Model-free on both sides on purpose. Calibrating against model output would make "does
-    the physics agree with the model" a question whose reference answer came from the
-    model — the circularity `label_audit` refuses for the same reason.
-
-    Loads with `excluded=set()`: the most informative trial is the excluded one, and a
-    calibration that cannot see its own best evidence measures nothing.
-    """
     spec = spec or WindowSpec(stride_s=0.25)
     rows = []
     for t in load_dataset(excluded=set()):
@@ -348,10 +241,10 @@ def corpus_calibration(spec: WindowSpec | None = None) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("annotated_walk_frac").reset_index(drop=True)
 
 
-# The synthetic faults. Injected rather than found, because a corpus of recordings that
-# were annotated by hand contains no miswired files by construction — someone would have
-# noticed before annotating. `None` is the unmodified control: if it ever trips a bound,
-# the bound is wrong, not the file.
+# The synthetic faults; injected rather than found, because a corpus of recordings that
+# were annotated by hand contains no miswired files by construction- someone would have
+# noticed before annotating; `None` is the unmodified control: if it ever trips a bound,
+# the bound is wrong, not the file
 CONTROLS = {
     "unmodified": None,
     "duplicated_leg": lambda f, L, R: f.__setitem__(R, f[L].to_numpy()),
@@ -365,12 +258,8 @@ def _swap(f: pd.DataFrame, L: str, R: str) -> None:
     f[L], f[R] = b, a
 
 
+# inject each synthetic fault into one clean recording; report what each bound says
 def run_controls(rev: str = "rev13", trial: int = 1) -> pd.DataFrame:
-    """Inject each synthetic fault into one clean recording; report what each bound says.
-
-    Imported lazily: this is the one path in S3 that loads the champion, and a module the
-    serve path imports must not pull scikit-learn in at import time.
-    """
     from stages.s2_ml.label import DEFAULT_MODEL_DIR, explain, load_champion, score_frame
 
     model, meta = load_champion(DEFAULT_MODEL_DIR)
@@ -398,7 +287,8 @@ def run_controls(rev: str = "rev13", trial: int = 1) -> pd.DataFrame:
 
 def main() -> None:
     use_replacement_encoding()
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap = argparse.ArgumentParser(
+        description="File-level sanity bounds on a labelled file.")
     ap.add_argument("--calibrate", action="store_true",
                     help="recompute the corpus numbers the bounds are sited against")
     ap.add_argument("--control", action="store_true",

@@ -1,15 +1,8 @@
-"""Hold the vectorized feature path to its scalar references.
-
-    python -m stages.s2_ml.verify_features
-
-`features.swap_counts` computes for every window at once what `rest.swap_count` computes
-for one, via a prefix sum. That rewrite is where a silent error would hide: it is exact on
-most windows and off by one on the rest, which no accuracy number would ever reveal as a
-bug rather than as noise. DOMAIN_NOTES §11.1 is a list of tests that were themselves
-broken, so this one compares against the reference implementation on random inputs
-including the degenerate cases (flat signal, all-committed signal, window shorter than the
-hysteresis) rather than against a remembered expectation.
-"""
+# hold the vectorized feature path to its scalar references
+#   python -m stages.s2_ml.verify_features
+# swap_counts is a prefix-sum rewrite of rest.swap_count- exact on most windows and off
+# by one on the rest, which no accuracy number would ever surface as a bug
+# compares against the reference on random input, degenerate cases included
 
 from __future__ import annotations
 
@@ -19,8 +12,8 @@ from stages.s2_ml.features import WindowSpec, _min_over_parts, swap_counts
 from stages.s2_ml.rest import swap_count
 
 
+# swap_counts vs rest.swap_count over random signals and random windows
 def check_swaps(n_signals: int = 400, seed: int = 0) -> int:
-    """swap_counts vs rest.swap_count over random signals and random windows."""
     rng = np.random.default_rng(seed)
     bad = checked = 0
     for _ in range(n_signals):
@@ -45,8 +38,8 @@ def check_swaps(n_signals: int = 400, seed: int = 0) -> int:
     return bad
 
 
+# _min_over_parts vs an explicit loop, plus its ordering property
 def check_min_over_parts(seed: int = 0) -> int:
-    """_min_over_parts vs an explicit loop, and its ordering property."""
     rng = np.random.default_rng(seed)
     D = rng.normal(0, 10, (200, 200))
     bad = 0
@@ -60,8 +53,8 @@ def check_min_over_parts(seed: int = 0) -> int:
     return bad
 
 
+# WindowSpec converts seconds to samples without drift
 def check_spec() -> int:
-    """WindowSpec converts seconds to samples without drift."""
     s = WindowSpec(window_s=2.0, stride_s=0.25, fs_hz=100.0)
     bad = int(s.n != 200) + int(s.step != 25)
     print(f"[verify] WindowSpec: {bad} mismatches")

@@ -29,7 +29,7 @@ from anything under `runs/`.
 > Anything in the archive naming S4, `oof.py`, `anchors.csv`, `fused.csv` or `fusion.md`,
 > and every figure of the form *95.9% / 0.9805* or *65.1% / 0.9972*, describes a stage that
 > no longer exists. **Do not carry it into the new README.** The live pair is row-level:
-> **coverage 84.46% at 0.9904, worst subject `rev5` 0.9517**, from
+> **coverage 84.66% at 0.9901, worst subject `rev5` 0.9525**, from
 > `runs/s2_ml/roweval_loro.json`, argued in `OPERATING_POINTS.md`.
 >
 > One deliberate exception to "left as found": the `rev2_view` → `lpf_view` rename
@@ -68,8 +68,8 @@ documents stop doing their job.
 **1. Every number is a pair, or it carries its provenance.**
 Coverage without accuracy is gameable to 1.000. Accuracy without coverage is meaningless.
 The same applies more generally: a figure with no denominator, no population, and no
-artifact behind it is decoration. Write `coverage 84.46% at accuracy 0.9904, worst
-subject 0.9517 (runs/s2_ml/roweval_loro.json)`, never `~84% accurate`.
+artifact behind it is decoration. Write `coverage 84.66% at accuracy 0.9901, worst
+subject 0.9525 (runs/s2_ml/roweval_loro.json)`, never `~84% accurate`.
 
 **2. Name the artifact beside the number, and say it goes stale.**
 Any live figure in prose must name the file it was copied from and state that re-running
@@ -130,6 +130,25 @@ section called "Status" that argues about methodology is a caveat wearing a stat
 
 ## §2 — What `README.md` must contain
 
+> ### ⚠ Before you write a line: re-arm the staleness check
+>
+> **Add `"README.md"` back to `PROSE_CLAIMS["S2 row-level"]` in `stages/breakdown.py`, in
+> the same commit as the rewrite.**
+>
+> It was removed on **2026-08-04**. While the file was listed and missing, `breakdown`
+> raised a gap flag every run — the designed behaviour, and correct — but once the deletion
+> was deliberate that flag was a standing entry in §A that nobody was going to act on, and
+> those teach a reader to skim the section that exists to be read. Removing it was the
+> documented remedy (`breakdown._flag_stale_prose` names it), **not a decision that the
+> README never needed checking.**
+>
+> The consequence of forgetting: a rewritten README quotes the headline pair, the champion
+> or the threshold moves, and nothing anywhere says so. That is **§4 defect 1 rebuilt from
+> scratch** — the defect this whole file exists downstream of, in the one document most
+> likely to be read by someone who will not check the artifact.
+>
+> One line, and it is the difference between a check deferred and a check deleted.
+
 Order matters: a first-time reader goes top to bottom and a returning one uses the headings
 as an index. Sections, in order:
 
@@ -154,10 +173,10 @@ as an index. Sections, in order:
 - **The `Label` / `guess` column semantics must be preserved exactly** — §5.3 below. They are
   the deliverable's contract and are not derivable from any artifact.
 - **The judged-on section must name `runs/s2_ml/roweval_loro.md` and say the numbers go
-  stale.** `stages/breakdown.py::PROSE_CLAIMS` mechanically checks that README quotes the
-  live **row-level** pair; if you write a number there, `python -m stages.breakdown` flags
-  it the moment the champion or the threshold moves. It is already flagging README's
-  absence today.
+  stale.** `stages/breakdown.py::PROSE_CLAIMS` mechanically checks that a listed document
+  quotes the live **row-level** pair; if you write a number there, `python -m
+  stages.breakdown` flags it the moment the champion or the threshold moves — **but only
+  once this file is back on that list. See the callout at the top of this section.**
 - **`python -m stages.breakdown` belongs under Running it** as the last step of every run.
 
 ---

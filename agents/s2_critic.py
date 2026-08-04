@@ -1,5 +1,4 @@
-# S2 critic (read-only): review a proposed challenger before it runs, catching repeats via the
-# ledger. does not decide promotion; experiment.decide() does that on the metric afterwards.
+# S2 critic: review a proposed challenger before it runs, catching repeats via the ledger
 
 from __future__ import annotations
 
@@ -61,7 +60,6 @@ S2_CRITIC_AGENT = AgentSpec(
     allowed_tools=["Read", "Grep"],
     model=MODEL_SMART,
     max_turns=10,
-    # same footprint as the experimenter it reviews; base.py injects the whole DOMAIN_NOTES
 )
 
 
@@ -92,8 +90,8 @@ def parse_review(final_text: str) -> dict | None:
     return extract_json_object(final_text)
 
 
-# persist the review; an unparseable review becomes a revise, never an approve. `name` lets a
-# post-revision critique write to a distinct file so the first is not overwritten.
+# persist the review; an unparseable review becomes a revise, never an approve; `name` lets a
+# post-revision critique write to a distinct file so the first is not overwritten
 def write_review(out_dir: Path, review: dict | None, final_text: str,
                  name: str = REVIEW_FILENAME) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)

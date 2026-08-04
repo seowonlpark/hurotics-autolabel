@@ -1,53 +1,6 @@
-"""S3 anchor features: a model-free physics view of one window.
-
-The centrepiece is the SWAP RULE (§10): zero fitted parameters, and it never sees a
-label. Both properties are real; what they are worth depends on who is asking.
-
-Three consumers today, and they get different amounts of value out of it:
-
-  - `label_audit.py` — points the rule at the ANNOTATIONS. This is the strong use: the
-    rule is genuinely independent of the labels, so a disagreement is evidence about them.
-  - `plausibility.py` — points it at a whole FILE, against the model. Weaker per window
-    (see the retraction below) but the file-level statement survives it.
-  - `serve.py` -> `label.py`'s physics floor/ceiling — points it at individual windows,
-    against the model. This is the weak use, it ships OFF, and `roweval` measures it.
-
-**It is NOT independent of S2, and the claim that it was is retracted [measured,
-2026-08-03].** This docstring used to say the rule "reads a different quantity" than the
-classifier. That stopped being true when S2 absorbed `ileg_swaps`, `ileg_minhalf` and
-`ileg_minquarter` — both now read the same 1 Hz-filtered interleg angle, so agreement is
-partly an echo, and the two are wrong together on exactly the windows where that signal
-is ambiguous. Measured consequence: physics contradicts only ~12% of S2's high-confidence
-errors, and at p>=0.95 it catches none of them. Removing the interleg block from S2 to
-restore the separation was tried and does not help (caveats.md §1.1c) — the correlation is
-in the signal, not the feature list.
-
-What survives is narrower and still worth having: a disagreement is evidence about the
-window, and `physics_contradicts` marks a set that is a genuine coin flip (0.5051 over 196
-label-pure windows). That is a flag, not a second opinion.
-
-> Walking is the legs alternating. Not how far they swing — *whether they swap*.
-> Count how many times `L_ang - R_ang` commits past `+1°` and then past `-1°`.
-> 0 swaps -> STANDING. >=2 -> WALKING. Exactly 1 -> AMBIGUOUS.
-
-`1` is genuinely ambiguous, not a fudge: one leg passing the other happens both when you
-take a step and when you shift your weight. The rule ABSTAINS there rather than guessing,
-which is the behaviour this repo wants (§7, "abstain rather than force").
-
-Two corrections to the naive rule, both measured, both carried from prior work:
-
-  - **Recentre on the per-file rest zero** (§10.4). A per-subject mounting offset can
-    hold `L-R` above `-delta` through real gait and silently suppress every swap.
-  - **Size the span to the stride** (§10.6/10.7). A fixed 2 s window under-calls slow
-    gait — the rule's known weakness, a 0.22 Hz stride yields ~0.9 swaps per 2 s and
-    abstains. Sizing the span to ~2 detected strides moved walk recall 0.7092 -> 0.9384
-    and AMBIGUOUS 24.0% -> 5.3%, for 0.021 of stand recall (§10.5, measured on the 5,984
-    label-pure development windows).
-
-What is deliberately NOT here (this repo labels stand/walk and nothing else): no
-discriminator registry, no stairs rule, no new-class seam. Those live in the sibling
-experimental repo. See `caveats.md`.
-"""
+# S3 anchor features: a model-free physics view of one window
+# the swap rule has zero fitted parameters and never sees a label
+# it is no longer independent of S2, which reads the same interleg signal
 
 from __future__ import annotations
 
@@ -56,41 +9,35 @@ import pandas as pd
 
 from stages.s1_clean.config import CANONICAL_HZ
 from stages.s2_ml.dataset import FEATURES, TIME_COL, Trial
-# `_corr` and `rest_reference` are shared with S2 deliberately.
-#
-# `_corr`: a second copy drifted from it once already in a sibling repo, and that repo's
-# grow gate calls `_corr` without importing it at all — a latent NameError on the slow
-# gait path. It is vectorized over rows now, so scalar callers go through `_corr1`.
-#
-# `rest_reference`: S2's interleg features are centred on it, and if S3 measured its own
-# rest zero the two stages would disagree about where "rest" is on the same recording —
-# the swap count would then be taken about a different origin than the `ileg_*` features
-# the model reads. One definition, both consumers.
+# _corr and rest_reference are shared with S2 deliberately
+# a second copy of _corr drifted once already, in a sibling repo
+# if S3 measured its own rest zero the two stages would disagree about where rest is,
+# and the swap count would be taken about a different origin than the model's features
 from stages.s2_ml.features import GAIT_BAND_HZ, WindowSpec, _corr, rest_reference
 from stages.s2_ml.rest import SWAP_DELTA_DEG, swap_count
 
-# Stride-adaptive analysis span (§10.6). Standing keeps the base window; only motion
-# grows one. Capped so a span can never swallow a whole bout and average two states.
+# Stride-adaptive analysis span; standing keeps the base window; only motion
+# grows one; capped so a span can never swallow a whole bout and average two states
 MAX_SWAP_WINDOW_S = 6.0
 ADAPTIVE_PERIODICITY_FLOOR = 0.35  # autocorr peak height to accept a cell as periodic
 
-# Span-grow fallback (§10.7). When the base verdict is NOT walking, re-count over the
-# full max span and accept WALKING only if the span GENUINELY alternates. All three
+# Span-grow fallback; when the base verdict is NOT walking, re-count over the
+# full max span and accept WALKING only if the span GENUINELY alternates; all three
 # gates must pass, because a slow walker and a person shifting their weight twice look
-# identical to a bare swap count over a long span.
+# identical to a bare swap count over a long span
 GROW_MIN_PTP_DEG = 8.0     # both halves must swing this far: a real stride, not jitter
 GROW_MIN_ANTIPHASE = 0.5   # -corr(L,R): alternation, not two isolated weight shifts
 
-# The four anchors PLAN.md requires a rate-invariance verdict for (§10.8). The swap rule
-# and the §10.1 descriptors ride alongside but are not candidate anchors.
+# The four anchors PLAN.md requires a rate-invariance verdict for; the swap rule
+# and the descriptors ride alongside but are not candidate anchors
 ANCHOR_NAMES = ("periodicity", "antiphase", "grav_stab", "gyro_energy")
 
-# Swap-rule verdict bands (§10).
+# Swap-rule verdict bands
 STANDING, AMBIGUOUS, WALKING = "STANDING", "AMBIGUOUS", "WALKING"
 
 
+# 0 -> STANDING, 1 -> AMBIGUOUS, >=2 -> WALKING; no fitted parameter anywhere
 def swap_verdict(count: int) -> str:
-    """0 -> STANDING, 1 -> AMBIGUOUS, >=2 -> WALKING. No fitted parameter anywhere."""
     if count == 0:
         return STANDING
     if count == 1:
@@ -98,29 +45,16 @@ def swap_verdict(count: int) -> str:
     return WALKING
 
 
+# pearson r for a single pair, through S2's vectorized `_corr`
 def _corr1(a: np.ndarray, b: np.ndarray) -> float:
-    """Pearson r for a single pair, through S2's vectorized `_corr`.
-
-    A reshape rather than a reimplementation: the point is that S2 and S3 cannot compute
-    correlation differently, including the shared convention that a constant series
-    yields 0.0 instead of NaN.
-    """
     if a.size < 2:
         return 0.0
     return float(_corr(a[None, :], b[None, :])[0])
 
 
+# stride period in samples: the first autocorrelation local max AFTER the acf dips below zero
 def stride_period(x: np.ndarray, fs: float,
                   floor: float = ADAPTIVE_PERIODICITY_FLOOR) -> int | None:
-    """Stride period in samples: the first autocorrelation local max AFTER the acf dips
-    below zero.
-
-    Skipping the lag-0 shoulder is essential rather than tidy — on slow gait a plain
-    argmax grabs the decay shoulder and returns a period of a few samples, which then
-    sizes the adaptive span far too short and re-creates the problem it exists to fix.
-
-    None when no full cycle resolves in-span, or the peak is too weak to be gait.
-    """
     x = x - x.mean()
     n = x.size
     if n < 8 or x.std() == 0:
@@ -139,15 +73,8 @@ def stride_period(x: np.ndarray, fs: float,
     return start + k if ac[start + k] >= floor else None
 
 
+# rhythm STRENGTH, amplitude-independent: tallest normalized-autocorrelation peak at a non-zero
 def _periodicity(x: np.ndarray, fs: float) -> float:
-    """Rhythm STRENGTH, amplitude-independent: tallest normalized-autocorrelation peak at
-    a non-zero lag whose period is a plausible stride (>=2 cycles in-window).
-
-    Within-window only. Read it as "steady rhythm here", never "this subject has a
-    rhythm" — §11.2 records a whole invented category ("walking with no rhythm") that
-    came from reading a per-window periodicity dip as a property of the walker. The dip
-    was a cadence CHANGE, in both trials, at the same protocol event.
-    """
     x = x - x.mean()
     n = x.size
     if n < 8 or x.std() == 0:
@@ -161,14 +88,8 @@ def _periodicity(x: np.ndarray, fs: float) -> float:
     return float(np.clip(ac[lo:hi + 1].max(), 0.0, 1.0))
 
 
+# does the full max span GENUINELY alternate?
 def _grows_to_walking(d: np.ndarray, l: np.ndarray, r: np.ndarray, a: int, b: int) -> bool:
-    """Does the full max span GENUINELY alternate? (§10.7 grow gate.)
-
-    Three independent gates, because the failure this guards against is specific: over a
-    6 s span, a person who shifts their weight twice produces two crossings exactly like
-    a slow walker. Amplitude (both halves swing) and antiphase (the legs oppose) are what
-    separate them; the swap count alone cannot.
-    """
     seg = d[a:b]
     if seg.size < 8:
         return False
@@ -180,13 +101,8 @@ def _grows_to_walking(d: np.ndarray, l: np.ndarray, r: np.ndarray, a: int, b: in
     return swap_count(seg, SWAP_DELTA_DEG) >= 2
 
 
+# stride-sized span for one cell as (a, b, half)
 def _adaptive_span(d: np.ndarray, c: int, spec: WindowSpec) -> tuple[int, int, int]:
-    """Stride-sized span for one cell as (a, b, half). Clipped to [base window, max span].
-
-    Single-sourced so the swap count and the adaptive periodicity read the SAME span —
-    two spans would make the verdict and its own supporting evidence describe different
-    stretches of time.
-    """
     base_half = spec.n // 2
     max_half = int(round(MAX_SWAP_WINDOW_S * spec.fs_hz / 2))
     boot = d[max(0, c - max_half):min(d.size, c + max_half)]
@@ -195,27 +111,14 @@ def _adaptive_span(d: np.ndarray, c: int, spec: WindowSpec) -> tuple[int, int, i
     return max(0, c - half), min(d.size, c + half), half
 
 
+# (verdict, span_seconds, swaps, a, b) for one cell- the swap RULE and nothing else
 def adaptive_verdict(d: np.ndarray, l: np.ndarray, r: np.ndarray, c: int,
                      spec: WindowSpec) -> tuple[str, float, int, int, int]:
-    """(verdict, span_seconds, swaps, a, b) for one cell — the swap RULE and nothing else.
-
-    Split out of `_adaptive_cell` so the serve path (`s3_physics/serve.py`) can ask for a
-    verdict without paying for the periodicity autocorrelation it does not use. The split
-    is a factoring, not a second implementation, and that matters more here than the
-    speed: a physics gate on the serve path that computed its verdict differently from the
-    physics reported on the corpus would be two rules wearing one name — the precise skew
-    that made the deleted S4 stage indefensible.
-
-    `swaps` is counted over the span that PRODUCED the verdict — the adaptive span
-    normally, the grown span when the §10.7 fallback fires. `a`/`b` are that span's bounds,
-    returned so a caller needing per-span evidence does not recompute `_adaptive_span`
-    (whose `stride_period` autocorrelation is the expensive part of the whole rule).
-    """
     a, b, half = _adaptive_span(d, c, spec)
     swaps = swap_count(d[a:b], SWAP_DELTA_DEG)
     verdict = swap_verdict(swaps)
     span_s = 2 * half / spec.fs_hz
-    if verdict != WALKING:  # §10.7 grow fallback
+    if verdict != WALKING:  # grow fallback
         max_half = int(round(MAX_SWAP_WINDOW_S * spec.fs_hz / 2))
         ga, gb = max(0, c - max_half), min(d.size, c + max_half)
         if _grows_to_walking(d, l, r, ga, gb):
@@ -224,32 +127,17 @@ def adaptive_verdict(d: np.ndarray, l: np.ndarray, r: np.ndarray, c: int,
     return verdict, span_s, int(swaps), a, b
 
 
+# (verdict, span_seconds, periodicity, swaps) for one cell over its stride-sized span
 def _adaptive_cell(d: np.ndarray, l: np.ndarray, r: np.ndarray, c: int,
                    spec: WindowSpec) -> tuple[str, float, float, int]:
-    """(verdict, span_seconds, periodicity, swaps) for one cell over its stride-sized span.
-
-    The fixed-window `swap_count` from `window_anchors` describes a different stretch of
-    time, and a reader shown only that one sees `WALKING` next to `swap_count 0` and
-    concludes the rule was violated. Both counts are real; neither alone is the verdict's
-    evidence.
-
-    Periodicity is read over `[a, b)` — the span that produced the verdict — because a
-    verdict and its own supporting evidence describing different stretches of time is the
-    §10.6 failure this function exists to avoid.
-    """
     verdict, span_s, swaps, a, b = adaptive_verdict(d, l, r, c, spec)
     periodicity = 0.5 * (_periodicity(l[a:b], spec.fs_hz) + _periodicity(r[a:b], spec.fs_hz))
     return verdict, span_s, periodicity, swaps
 
 
+# every physics anchor + descriptor for one fixed window
 def window_anchors(win: pd.DataFrame, fs: float = CANONICAL_HZ,
                    interleg_center: float = 0.0) -> dict[str, float | int | str]:
-    """Every physics anchor + descriptor for one fixed window.
-
-    `interleg_center` is subtracted before the swap count ONLY. For the descriptors the
-    offset *is* the posture (§10.1: `interleg_offset` separates feet-together from split
-    stance at +17°/-22°), so removing it there would delete the signal.
-    """
     l_ang = win[FEATURES[0]].to_numpy(float)   # L_ang_LPF
     r_ang = win[FEATURES[1]].to_numpy(float)   # R_ang_LPF
     l_vel = win[FEATURES[2]].to_numpy(float)   # L_angvel_LPF
@@ -258,29 +146,29 @@ def window_anchors(win: pd.DataFrame, fs: float = CANONICAL_HZ,
 
     swaps = swap_count(d - interleg_center, SWAP_DELTA_DEG)
 
-    # Validated descriptors (§10.1), on raw d.
+    # Validated descriptors, on raw d
     half = d.size // 2
     ileg_minhalf = (min(float(np.ptp(d[:half])), float(np.ptp(d[half:])))
                     if half >= 1 else 0.0)
-    # Full-window swing, ALONGSIDE the min-half version rather than replacing it. The two
+    # Full-window swing, ALONGSIDE the min-half version rather than replacing it; the two
     # answer different questions and confusing them cost a wrong conclusion [2026-08-03]:
     # `ileg_minhalf` asks "did BOTH halves swing", which is the right question for the
-    # §10.7 grow gate and the wrong one for "how far did the legs separate". It collapses
-    # when the motion sits in one half of the window — precisely what a start/stop ramp
-    # looks like, so reading it as amplitude under-reads the ramps hardest.
+    # grow gate and the wrong one for "how far did the legs separate"; it collapses
+    # when the motion sits in one half of the window- precisely what a start/stop ramp
+    # looks like, so reading it as amplitude under-reads the ramps hardest
     ileg_ptp = float(np.ptp(d))
     interleg_offset = float(np.median(d))
 
-    # The four audited anchors (§10.8).
-    # antiphase: legs oppose when walking. NECESSARY, not sufficient (§6.2).
+    # The four audited anchors
+    # antiphase: legs oppose when walking; NECESSARY, not sufficient
     antiphase = -_corr1(l_ang, r_ang)
-    # grav_stab: steadiness of tilt. -> 1 standing, -> 0 walking.
+    # grav_stab: steadiness of tilt; -> 1 standing, -> 0 walking
     grav_stab = 1.0 / (1.0 + 0.5 * (float(l_ang.std()) + float(r_ang.std())))
     periodicity = 0.5 * (_periodicity(l_ang, fs) + _periodicity(r_ang, fs))
-    # gyro_energy: TOTAL rotational energy. Scales with sample count, so it is a claim
-    # about the sampling grid, not about the body — defined the way that FAILS the rate
-    # audit, deliberately. It is the audit's negative control: an audit that has never
-    # rejected anything is not evidence that the others passed (§11.1).
+    # gyro_energy: TOTAL rotational energy; scales with sample count, so it is a claim
+    # about the sampling grid, not about the body- defined the way that FAILS the rate
+    # audit, deliberately; it is the audit's negative control: an audit that has never
+    # rejected anything is not evidence that the others passed
     gyro_energy = float(np.sum(l_vel ** 2) + np.sum(r_vel ** 2))
 
     return {
@@ -297,27 +185,14 @@ def window_anchors(win: pd.DataFrame, fs: float = CANONICAL_HZ,
     }
 
 
+# per-window anchors for one trial, on the same window grid S2 features use
 def trial_anchors(trial: Trial, spec: WindowSpec | None = None) -> pd.DataFrame:
-    """Per-window anchors for one trial, on the same window grid S2 features use.
-
-    The grid is `range(0, len(seg) - spec.n + 1, spec.step)` per segment — identical to
-    the `sliding_window_view(...)[::step]` walk in `features.windows_of_trial`, and
-    segments shorter than one window are skipped there too. So
-    `(rev, trial, segment, t_start_ms)` joins the two stages exactly, and `label_audit`
-    asserts it with `validate="one_to_one"` rather than trusting this comment — as does
-    `label.score_frame`, which compares the two grids' window starts element for element
-    before spreading either onto rows.
-
-    The adaptive verdict is computed per segment (it needs ~2 strides of context either
-    side, which a single window does not contain) and read back positionally within the
-    same walk, so the two cannot fall out of step.
-    """
     spec = spec or WindowSpec()
     frame = trial.frame.reset_index(drop=True)
     if frame.empty:
         return pd.DataFrame()
 
-    # S2's rest zero, not a second opinion about where rest is (see the import note).
+    # S2's rest zero, not a second opinion about where rest is (see the import note)
     _zeros, center, rest_trusted = rest_reference(frame, spec.fs_hz)
 
     rows = []

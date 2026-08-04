@@ -1,12 +1,5 @@
-"""Segment at gaps, then put every segment on the canonical 100 Hz grid.
-
-Two rules this module exists to enforce:
-
-1. Never resample across a gap. Gaps land anywhere, unpredictably, so a file is a
-   bag of continuous segments and the segment is the unit of analysis.
-2. Never downsample without anti-aliasing. Taking every 5th sample of a 500 Hz
-   signal folds >50 Hz content into the gait band.
-"""
+# segment at gaps, then onto the canonical 100 Hz grid
+# never resample across a gap; never downsample without anti-aliasing
 
 from __future__ import annotations
 
@@ -28,10 +21,9 @@ from stages.s1_clean.config import (
 )
 
 
+# one continuous run of samples between gaps
 @dataclass
 class Segment:
-    """One continuous run of samples between gaps."""
-
     index: int
     start_row: int
     end_row: int  # exclusive
@@ -49,8 +41,8 @@ class Segment:
         return asdict(self)
 
 
+# split at dt > GAP_FACTOR * median(dt); [start, end) row pairs
 def segment_at_gaps(t: np.ndarray) -> list[tuple[int, int]]:
-    """Split at dt > GAP_FACTOR * median(dt). Returns [start, end) row pairs."""
     if t.size < 2:
         return [(0, int(t.size))]
     dt = np.diff(t)
@@ -59,29 +51,17 @@ def segment_at_gaps(t: np.ndarray) -> list[tuple[int, int]]:
     return [(int(bounds[i]), int(bounds[i + 1])) for i in range(bounds.size - 1)]
 
 
+# nan on a degenerate time base rather than dividing by zero; caller drops it
 def measure_hz(t: np.ndarray) -> float:
-    """Rate of one segment, from median dt. Segments are gap-free by construction.
-
-    Returns nan for a degenerate time base (median dt <= 0: duplicated or backward
-    timestamps) rather than dividing by zero — the caller drops such a segment.
-    """
     if t.size < 2:
         return float("nan")
     med = float(np.median(np.diff(t)))
     return 1000.0 / med if med > 0 else float("nan")
 
 
+# snap to a nominal rate, None if it fits nowhere; not named *_family: that
+# word is the header family here, and it made the drop reason below misread
 def nominal_rate(hz: float) -> float | None:
-    """Snap a measured rate to its nominal acquisition rate, or None if it fits nowhere.
-
-    99.3789 / 99.688 / 99.961 / 100.0 all snap to 100.0: same device, different
-    timestamp quantization.
-
-    Named `rate_family` until 2026-08-04. "Family" already means something else in this
-    pipeline — the header family (raw_device / lpf_view) that census.family_of resolves
-    and the serve path dispatches on. A rate is not that, and the shared word made the
-    drop reason below read like a schema rejection.
-    """
     if not np.isfinite(hz):
         return None
     for nominal in (CANONICAL_HZ, 2 * CANONICAL_HZ, 5 * CANONICAL_HZ):
@@ -90,8 +70,8 @@ def nominal_rate(hz: float) -> float | None:
     return None
 
 
+# linear for continuous channels, nearest for categorical
 def _interp_to_grid(t: np.ndarray, df: pd.DataFrame, grid: np.ndarray) -> pd.DataFrame:
-    """Linear for continuous channels, nearest for categorical ones."""
     out = {}
     for col in df.columns:
         role = ROLE_BY_NAME.get(col)
@@ -105,17 +85,14 @@ def _interp_to_grid(t: np.ndarray, df: pd.DataFrame, grid: np.ndarray) -> pd.Dat
     return pd.DataFrame(out)
 
 
+# one gap-free segment onto the grid; records its own method
 def resample_segment(
     t: np.ndarray, df: pd.DataFrame, seg: Segment
 ) -> tuple[pd.DataFrame | None, Segment]:
-    """Put one gap-free segment on the canonical grid. Records its own method."""
     nominal = nominal_rate(seg.source_hz)
 
     if nominal is None:
-        # Wording is a cross-artifact contract: stages/breakdown.py buckets dropped
-        # segments on this string, and the segments.jsonl already in runs/ carries the
-        # older "fits no known family" phrasing. breakdown matches both — if you reword
-        # this again, add the new marker there rather than replacing the old one.
+        # breakdown.py buckets on this string; reword => ADD a marker there, don't swap
         seg.usable, seg.reason = False, (
             f"rate {seg.source_hz:.3f} Hz matches no known acquisition rate"
         )
@@ -130,8 +107,7 @@ def resample_segment(
     factor = int(round(nominal / CANONICAL_HZ))
 
     if factor > 1:
-        # Uniform grid at source rate first (decimate assumes uniform spacing),
-        # then FIR-decimate: low-pass below the new Nyquist, then downsample.
+        # uniform first- decimate assumes even spacing
         src_grid = np.arange(t[0], t[-1], 1000.0 / nominal)
         uniform = _interp_to_grid(t, df, src_grid)
         cols = {}
@@ -146,7 +122,7 @@ def resample_segment(
         out.insert(0, "Time", src_grid[::factor][:n])
         seg.method = f"decimate_{factor}x_{DECIMATE_FILTER}"
     else:
-        # Same rate family: correct timestamp quantization onto the exact grid.
+        # same rate: just correct the quantization
         grid = np.arange(t[0], t[-1], CANONICAL_DT_MS)
         out = _interp_to_grid(t, df, grid)
         out.insert(0, "Time", grid)
@@ -157,9 +133,8 @@ def resample_segment(
     return out, seg
 
 
+# unusable segments drop from the output but survive in the segment table
 def resample_file(df: pd.DataFrame, time_col: str) -> tuple[pd.DataFrame, list[Segment]]:
-    """Segment at gaps, resample each run, stack. Unusable segments are dropped
-    from the output but always survive in the segment table."""
     t_all = df[time_col].to_numpy(dtype=float)
     data = df.drop(columns=[time_col])
 

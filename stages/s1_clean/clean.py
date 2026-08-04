@@ -1,23 +1,8 @@
-"""S1 clean: resample every raw file onto the canonical grid.
-
-    python -m stages.s1_clean.clean
-
-Outputs, per source file:
-    data/clean/<session>/<name>.channel_trust.json  resolved gyro unit + axis permutation
-
-The canonical-grid frame itself is built, measured and dropped. It was written beside the
-trust record as parquet until 2026-08-04 and nothing ever read it back: the serve path
-derives its features from the RAW file at the raw rate, deliberately, so that it reproduces
-training bit-for-bit (`transform.raw_to_features`). 689 MB of binary that only S1 could
-produce and no one could open is not evidence. `data/raw` is source-of-truth; re-run this
-stage to rebuild anything anyone actually wants.
-
-And for the run:
-    segments.jsonl     every segment: rows, duration, source rate, method, usable
-    observations.jsonl per-file channel-trust facts (the exception agent's input)
-    quarantine.jsonl   ledger of whole-file rejects (the raw file stays put)
-    clean_report.md    what happened to the corpus
-"""
+# S1 clean: resample every raw file onto the canonical grid
+#   python -m stages.s1_clean.clean
+# only channel_trust.json persists- the grid frame is built, measured and dropped
+# nothing read the parquet back and serve derives features from RAW anyway
+# run artifacts: segments / observations / quarantine .jsonl + clean_report.md
 
 from __future__ import annotations
 
@@ -47,14 +32,8 @@ CLEAN_DIR = REPO_ROOT / "data" / "clean"
 S1_CLEAN_OUT_DIR = REPO_ROOT / "runs" / "s1_clean"
 
 
+# a ledger entry, not a copy- the raw file never moves; always needs_human
 def quarantine_record(path: Path, reason: str, evidence: dict) -> dict:
-    """Build a ledger entry for a whole-file reject. The raw file is never touched.
-
-    Raw is source-of-truth and stays where it is; the quarantine is a ledger
-    (quarantine.jsonl), not a copy of the data. The category slug is the reason's
-    leading phrase, so like failures fold together. needs_human is always set: a
-    whole-file reject is exactly the "AI can't proceed" case.
-    """
     category = re.sub(r"[^a-z0-9]+", "_", reason.split(":")[0].lower()).strip("_")[:40]
     return {
         "file": str(path.relative_to(REPO_ROOT)),
@@ -66,13 +45,8 @@ def quarantine_record(path: Path, reason: str, evidence: dict) -> dict:
     }
 
 
+# say WHERE the clock breaks, not just that it does- csv_line is the line a human opens
 def time_base_evidence(t: np.ndarray, max_examples: int = 5) -> dict:
-    """Say WHERE the clock breaks, not just that it does.
-
-    `csv_line` is the line a human opens: the header is line 1, so the first data row is 2.
-    A ledger entry reading only "degenerate time base" makes the reader re-derive by hand
-    the exact thing this stage already computed in order to reject the file.
-    """
     if t.size < 2:
         return {"n_rows": int(t.size),
                 "detail": "fewer than 2 samples: there is no interval to measure"}
@@ -97,19 +71,16 @@ def time_base_evidence(t: np.ndarray, max_examples: int = 5) -> dict:
     }
 
 
+# (kept, missing); missing is a fact about the variant, not an error
 def select_columns(present: list[str]) -> tuple[list[str], list[str]]:
-    """Measured channels + documented exceptions + labels if present.
-
-    Returns (kept, missing). Missing is a fact about this variant, not an error.
-    """
     wanted = list(KEEP_MEASURED) + list(KEEP_EXCEPTIONS) + list(KEEP_IF_PRESENT)
     kept = [c for c in wanted if c in present]
     missing = [c for c in KEEP_MEASURED if c not in present]
     return kept, missing
 
 
+# one ledger entry as report lines: reason, then where to look in the source CSV
 def quarantine_lines(q: dict) -> list[str]:
-    """One ledger entry as report lines: the reason, then where to look in the source CSV."""
     out = [f"- `{q['file']}`: {q['reason']} (needs_human)"]
     tb = q.get("evidence", {}).get("time_base")
     if not tb:
@@ -130,23 +101,18 @@ def quarantine_lines(q: dict) -> list[str]:
     return out
 
 
+# (trust record path, segments, error, trust, evidence); evidence is for the ledger
 def clean_one(path: Path
               ) -> tuple[Path | None, list[dict], str | None, dict | None, dict]:
-    """(trust record path, segments, error, trust, evidence). Evidence is for the ledger."""
     res = resolve(read_header(path))
     if "Time" not in res.index_by_name:
         return None, [], "no Time column", None, {}
 
-    # index_col=False is load-bearing. A trailing comma makes every data row one field wider
-    # than the header, and pandas answers that by silently promoting the first data column to
-    # the INDEX — which shifts every remaining column left by one while leaving the count
-    # intact, so the positional rename below lands canonical names on the wrong channels and
-    # raises nothing. One 2026-05 file was quarantined for a "degenerate time base" that was
-    # really `L_Deg_X` being read as `Time`; its actual clock is a clean 500 Hz (§1.3).
+    # index_col=False is load-bearing: a trailing comma otherwise shifts every column left by
+    # one with the count intact, so the rename below lands names on the wrong channels
     df = pd.read_csv(path, encoding="utf-8-sig", index_col=False)
     df = df.loc[:, [c for c in df.columns if not c.startswith("Unnamed")]]
-    # Positional renaming is only safe once the positions are known to line up. Assert it
-    # rather than let `df.columns = ...` raise a bare length error out of the runner.
+    # assert the positions line up rather than let the rename raise a bare length error
     if len(df.columns) != len(res.index_by_name):
         return (None, [],
                 f"column count mismatch: {len(df.columns)} data columns vs "
@@ -161,10 +127,10 @@ def clean_one(path: Path
         return None, [], f"missing measured channels: {missing}", None, {}
     df = df[kept]
 
-    # Time base must define a forward cadence. A batch of 2026-05 files logs
-    # duplicated and backward-running timestamps (median dt <= 0) — non-monotonic
-    # time that np.interp would silently corrupt. Reject the whole file rather than
-    # resample a broken clock; it lands in the quarantine ledger for a human.
+    # Time base must define a forward cadence; a batch of 2026-05 files logs
+    # duplicated and backward-running timestamps (median dt <= 0)- non-monotonic
+    # time that np.interp would silently corrupt; reject the whole file rather than
+    # resample a broken clock; it lands in the quarantine ledger for a human
     t = df["Time"].to_numpy(float)
     if t.size < 2 or float(np.median(np.diff(t))) <= 0.0:
         return (None, [],
@@ -177,13 +143,13 @@ def clean_one(path: Path
         return None, rows, "no usable segments", None, {}
 
     # Gyro is now on the canonical grid (uniform dt, gap-free segments): resolve its
-    # unit + sagittal axis from the data and normalize every gyro channel to deg/s.
+    # unit + sagittal axis from the data and normalize every gyro channel to deg/s
     out, trust = detect_and_normalize(out)
 
     # The trust record is the whole persisted product: `transform.load_trust` reads it back
-    # by this exact path, and treats its absence as "never cleaned" rather than as a default.
+    # by this exact path, and treats its absence as "never cleaned" rather than as a default
     # Built as one name, not via with_suffix: `transform.trust_path` spells it exactly this
-    # way, and a stem containing a dot must not resolve to two different files.
+    # way, and a stem containing a dot must not resolve to two different files
     dest = (CLEAN_DIR / session_of(path)["session_dir"] /
             f"{path.stem}.channel_trust.json")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -238,7 +204,7 @@ def main() -> None:
         for q in quarantined:
             fh.write(json.dumps(q, ensure_ascii=False) + "\n")
 
-    # The gate: every raw file is accounted for exactly once. Assert it, don't hope.
+    # The gate: every raw file is accounted for exactly once; assert it, don't hope
     accounted = written + len(quarantined)
     assert accounted == len(paths), f"partition broken: {accounted} accounted != {len(paths)} raw files"
 
@@ -248,7 +214,7 @@ def main() -> None:
     for r in usable:
         methods[r["method"]] = methods.get(r["method"], 0) + 1
 
-    # Gyro trust rollup across the written files.
+    # Gyro trust rollup across the written files
     norm_sides = [(o["path"], s) for o in observations for s, r in o["channel_trust"]["sides"].items()
                   if r["scale_to_degps"] != 1.0]
     abstained = [(o["path"], s) for o in observations for s in o["channel_trust"]["abstained"]]

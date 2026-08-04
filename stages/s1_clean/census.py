@@ -30,12 +30,7 @@ def read_header(path: Path) -> list[str]:
         row.pop()
     return row
 
-# Which of the two products this header is. Load-bearing at serve time, not a report
-# field: stages/s2_ml/label.py dispatches on it and transform.py refuses on it. The two
-# families share only `Time`, so a wrong answer here resolves columns that do not exist.
-#
-# Unrelated to `nominal_rate` in resample.py, which snaps a MEASURED RATE to its nominal
-# value. Same English word, different question. Keep them apart when reading.
+# load-bearing at serve time- label.py dispatches on it, transform.py refuses on it
 def family_of(names: list[str]) -> str:
     for family, marker in FAMILY_MARKERS.items():
         if marker in names:
@@ -58,21 +53,10 @@ def fingerprint(raw_columns: list[str]) -> str:
     return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:8]
 
 
+# what one header is; only index_by_name/label_columns have code consumers;
+# roles_present + unknown_names are the hole detector for ROLE_BY_NAME
 @dataclass
 class Resolution:
-    """What one header is.
-
-    Only `index_by_name` (and `label_columns`, one name) is read by code: clean.py
-    resolves columns through it, manifest.py picks the label census from it. The rest
-    is measured for the manifest ledger and read by humans.
-
-    `roles_present` / `unknown_names` are kept deliberately, despite no code consumer:
-    they are the hole detector for ROLE_BY_NAME. A column a new firmware revision adds
-    appears in `unknown_names` and nowhere else in the pipeline. `loco` (the outdated
-    rule-based algorithm output) lands there too — it has no ROLE_BY_NAME entry, so it
-    needs no separate field to stay visible.
-    """
-
     variant_id: str
     family: str
     n_cols: int
@@ -122,8 +106,3 @@ def build_registry(paths: list[Path], repo_root: Path) -> dict[str, Variant]:
             )
         registry[vid].files.append(str(p.relative_to(repo_root)))
     return registry
-
-# `stable_prefix` (longest column prefix common to every variant in a family) was removed
-# 2026-08-04 along with variants.json, its only output. It described a contract nothing
-# enforced: clean.py checks columns against config.KEEP_MEASURED and reports what is
-# missing, which is the actual contract. Recomputable from `build_registry` if ever wanted.

@@ -1,19 +1,6 @@
-"""S1 census + manifest.
-
-    python -m stages.s1_clean.run
-
-Outputs:
-    manifest.jsonl  one row per file: session, variant, measured rate, gaps, labels
-    census.md       the human-readable summary
-
-Both are read by humans, not by code. The stage's load-bearing product is what
-stages/s1_clean/census.py exports as functions — `fingerprint` (the variant_id the
-serve path gates on) and `family_of` (the raw_device / lpf_view dispatch) — which
-downstream imports directly rather than reading back from an artifact.
-
-variants.json was dropped 2026-08-04: nothing read it, and the per-variant table it
-duplicated is in census.md.
-"""
+# S1 census + manifest;  python -m stages.s1_clean.run
+# writes manifest.jsonl + census.md, both for humans; the load-bearing product is
+# census.py's fingerprint/family_of, which downstream imports directly
 
 from __future__ import annotations
 
@@ -58,7 +45,7 @@ def write_census_md(registry, rows, out: Path) -> None:
 
     lines += [""]
 
-    # Names that move between variants WITHIN a family — the column-47 hazard.
+    # names that move between variants within a family- the column-47 hazard
     for fam in families:
         positions: dict[str, set] = {}
         for v in registry.values():

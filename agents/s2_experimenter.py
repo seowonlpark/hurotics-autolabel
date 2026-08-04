@@ -1,5 +1,4 @@
-# S2 experimenter (read-only): propose one challenger as a declarative spec from the champion report
-# + ledger. never writes code or trains; experiment.py runs the spec and the metric gate decides.
+# S2 experimenter: propose one challenger as a declarative spec from the champion report + ledger
 
 from __future__ import annotations
 
@@ -56,8 +55,6 @@ S2_EXPERIMENTER_AGENT = AgentSpec(
     allowed_tools=["Read", "Grep"],
     model=MODEL_SMART,
     max_turns=15,
-    # the sibling repo curated DOMAIN_NOTES to sections 4,5,6,7,9,10,11 for this agent. base.py
-    # here injects the whole file, as it does for s1_exception -- one channel, one behaviour
 )
 
 
@@ -86,7 +83,7 @@ def build_prompt(report_md: str, ledger_rows: list[dict], champion: dict | None,
 
 
 # revision request appended to the prompt when the critic returned 'revise': the held-back spec and
-# the changes asked for, so the experimenter fixes THAT spec rather than starting over.
+# the changes asked for, so the experimenter fixes THAT spec rather than starting over
 def revision_block(prev_proposal: dict, critic_reasons: list[str]) -> str:
     return (
         "\nREVISION REQUESTED - the critic did NOT reject your idea. It wants this same "
@@ -104,8 +101,8 @@ def parse_proposal(final_text: str) -> dict | None:
     return extract_json_object(final_text)
 
 
-# persist the proposal (or raw text when it did not parse). `name` lets a revision attempt write to a
-# distinct file so no earlier attempt is overwritten.
+# persist the proposal; `name` lets a revision attempt write to a
+# distinct file so no earlier attempt is overwritten
 def write_proposal(out_dir: Path, proposal: dict | None, final_text: str,
                    name: str = PROPOSAL_FILENAME) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)

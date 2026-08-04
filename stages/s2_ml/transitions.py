@@ -1,43 +1,5 @@
-"""How long is a transition, how many are there, and does the pipeline time them right?
-
-`near_transition` is the single biggest abstention driver in the deliverable — 69,600 rows
-at the shipped threshold, dominating 50 of the 78 swept corpus files, and the reason with
-the weakest suppressed guess (0.6090) of any in `OPERATING_POINTS.md`. Nothing measured the
-thing it fires on. `needtowrite.md` §5.4 gap 5 is that hole, and this closes it.
-
-**Three questions, and the third is the one that can embarrass the pipeline.**
-
-  *How many* — transitions between annotated `stand` and `walk` runs, by direction.
-  *How long* — the annotator's own `-1` interval at each one. That is the honest answer to
-    "how long is a transition": ground truth does not step instantaneously, it goes
-    stand -> "I looked and cannot call it" -> walk, and the width of that middle run is a
-    measurement of the boundary rather than a model of it.
-  *Is the timing right* — the offset between each annotated boundary and the nearest state
-    change the model actually predicted, plus whether `near_transition` fired there at all.
-
-**The counting trap, stated because this repo already fell into it.** Run-length-encoding an
-ALREADY-FILTERED label sequence turns one boundary into many: dropping the `-1` rows first
-means every short unknown stretch inside a walk run closes and reopens it. Everything here
-encodes the raw `truth` column with the unknowns still in it, and `-1` is read as the
-transition's WIDTH rather than removed. `n_rejected` says exactly how many candidate
-boundaries were dropped and why, so a number that shrinks is legible instead of alarming.
-
-**This does not reconcile with the counts in `needtowrite.md` §5.4, and that is open.**
-That note reports 185 candidates narrowed to 27 timeable, 14 of them on time. This module
-measures 308 candidates, 267 timeable, over the leave-one-rev-out frame. Neither figure is
-derivable from the other and the older pair predates the deleted S4 window grid, so no
-attempt is made here to explain it away — the numbers below are what this definition, run
-over this corpus, produces. Settle the discrepancy before either pair is quoted anywhere.
-
-**It measures the serve path's own predictions**, not a reimplementation: `roweval` hands
-this the frame it scored with the real `label.py`, so a transition is timed against the
-guesses a caller receives. It is a library rather than a CLI for that reason — a second
-leave-one-rev-out pass would let a refit drift between the coverage curve and this table
-and show up as a timing effect.
-
-**It publishes no policy and no accuracy pair.** It is a diagnostic: it says what the
-biggest bucket of doubt in the deliverable is made of, and nothing downstream reads it.
-"""
+# how long is a transition, how many are there, does the pipeline time them right
+# near_transition is the biggest abstention driver and nothing measured what it fires on
 
 from __future__ import annotations
 
@@ -52,28 +14,28 @@ from stages.s2_ml.features import WindowSpec
 
 CLASS_NAME = {STAND: "stand", WALK: "walk"}
 
-# A boundary is TIMEABLE when both sides hold at least one full window of their own class.
+# A boundary is TIMEABLE when both sides hold at least one full window of their own class
 # Not a tuning knob: below it the model has no pure window on one side, so it cannot place
-# a change there, and scoring its timing would be measuring the window length. Transitions
-# that fail this are counted and reported, never silently dropped.
+# a change there, and scoring its timing would be measuring the window length; transitions
+# that fail this are counted and reported, never silently dropped
 MIN_FLANK_WINDOWS = 1.0
 
 # ...and when the boundary is at least one window from either end of the segment, for the
-# same reason in the other direction: a predicted change needs room on both sides to exist.
+# same reason in the other direction: a predicted change needs room on both sides to exist
 EDGE_MARGIN_WINDOWS = 1.0
 
-# The tolerances the offset is reported against. HALF a window is the tight one because
-# that is exactly the radius `label.explain` marks `near_transition` over — a boundary timed
-# better than this is one the flag covers — and a FULL window is the loose one, the point
-# past which no window contains both the boundary and the row being judged.
+# The tolerances the offset is reported against; HALF a window is the tight one because
+# that is exactly the radius `label.explain` marks `near_transition` over- a boundary timed
+# better than this is one the flag covers- and a FULL window is the loose one, the point
+# past which no window contains both the boundary and the row being judged
 TIGHT_TOL_WINDOWS = 0.5
 LOOSE_TOL_WINDOWS = 1.0
 
 NEAR_TRANSITION = "near_transition"
 
 
+# run-length encode: [(value, start, stop_exclusive), ...]; NaN-free input only
 def _runs(a: np.ndarray) -> list[tuple]:
-    """Run-length encode: [(value, start, stop_exclusive), ...]. NaN-free input only."""
     n = len(a)
     if n == 0:
         return []
@@ -83,16 +45,8 @@ def _runs(a: np.ndarray) -> list[tuple]:
     return [(a[s], int(s), int(e)) for s, e in zip(starts, stops)]
 
 
+# instants where the model's committed-or-not guess flips class, in ms
 def _predicted_changes(t_ms: np.ndarray, guess: np.ndarray) -> np.ndarray:
-    """Instants where the model's committed-or-not guess flips class, in ms.
-
-    The guess, not the label: `label.explain` nulls `label` only where nothing covered the
-    row, never for being unsure, so this is the model's opinion about where the boundary is
-    regardless of whether it committed to either side. Timing an abstention's placement
-    against a threshold it did not clear would just re-measure the threshold.
-
-    Uncovered rows are skipped rather than filled, so a gap never manufactures a change.
-    """
     cov = np.isfinite(guess)
     idx = np.flatnonzero(cov)
     if idx.size < 2:
@@ -102,17 +56,12 @@ def _predicted_changes(t_ms: np.ndarray, guess: np.ndarray) -> np.ndarray:
     if ch.size == 0:
         return np.empty(0)
     # Midpoint of the two rows that straddle the flip: the change happened between them and
-    # attributing it to either would bias every offset by half a sample.
+    # attributing it to either would bias every offset by half a sample
     return (t_ms[idx[ch]] + t_ms[idx[ch + 1]]) / 2.0
 
 
+# every annotated stand<->walk boundary, with its width and the model's timing
 def find_transitions(df: pd.DataFrame, spec: WindowSpec) -> tuple[pd.DataFrame, dict]:
-    """Every annotated stand<->walk boundary, with its width and the model's timing.
-
-    Returns (one row per boundary, rejection counts). Segments are the unit: a boundary
-    cannot span a gap, because the two sides were not measured continuously and nothing
-    about the interval between them is observed.
-    """
     min_flank_ms = MIN_FLANK_WINDOWS * spec.window_s * 1000.0
     edge_ms = EDGE_MARGIN_WINDOWS * spec.window_s * 1000.0
 
@@ -134,11 +83,6 @@ def find_transitions(df: pd.DataFrame, spec: WindowSpec) -> tuple[pd.DataFrame, 
         for i, (v0, s0, e0) in enumerate(runs):
             if v0 not in (STAND, WALK):
                 continue
-            # At most ONE unknown run may sit between the two states, and its width is the
-            # transition. Two or more non-trained runs in a row is not a boundary this can
-            # read — some other annotation is interleaved — so it is skipped rather than
-            # guessed at, and skipping is invisible here by design: it never became a
-            # candidate, so it is not a rejection either.
             j = i + 1
             if j < len(runs) and runs[j][0] == HUMAN_UNKNOWN:
                 j += 1
@@ -160,9 +104,9 @@ def find_transitions(df: pd.DataFrame, spec: WindowSpec) -> tuple[pd.DataFrame, 
                 rejected["near_segment_edge"] += 1
                 continue
 
-            # Nearest predicted change. `None` means the model never changed class anywhere
-            # in this segment — a miss, and a different failure from a badly timed hit, so
-            # it is never folded into the offset distribution as a large number.
+            # Nearest predicted change; `None` means the model never changed class anywhere
+            # in this segment- a miss, and a different failure from a badly timed hit, so
+            # it is never folded into the offset distribution as a large number
             offset_s = None
             if preds.size:
                 offset_s = float((preds[np.argmin(np.abs(preds - t_truth))] - t_truth) / 1000.0)
@@ -172,8 +116,8 @@ def find_transitions(df: pd.DataFrame, spec: WindowSpec) -> tuple[pd.DataFrame, 
                 "rev": rev, "trial": int(trial), "segment": int(seg),
                 "direction": f"{CLASS_NAME[v0]}->{CLASS_NAME[v1]}",
                 "t_truth_s": round(t_truth / 1000.0, 3),
-                # The annotator's own unknown interval. 0.0 means the two runs are adjacent:
-                # the boundary was called to the sample, with no admitted doubt.
+                # The annotator's own unknown interval; 0.0 means the two runs are adjacent:
+                # the boundary was called to the sample, with no admitted doubt
                 "width_s": round((t_after - t_before) / 1000.0, 3),
                 "flank_before_s": round(flank_before / 1000.0, 3),
                 "flank_after_s": round(flank_after / 1000.0, 3),
@@ -184,20 +128,9 @@ def find_transitions(df: pd.DataFrame, spec: WindowSpec) -> tuple[pd.DataFrame, 
     return pd.DataFrame(rows), rejected
 
 
+# do the `near_transition` rows sit near an annotated transition?
 def near_transition_regions(df: pd.DataFrame, trans: pd.DataFrame,
                             spec: WindowSpec) -> dict:
-    """Do the `near_transition` rows sit near an annotated transition?
-
-    The converse question to `find_transitions`, and the one that decides whether the
-    biggest abstention bucket in the deliverable is earning its rows. A contiguous stretch
-    of flagged rows is one event however many rows it spans, so this counts REGIONS: 77,025
-    rows is meaningless as a count of anything the flag claims to have found.
-
-    Matched against EVERY annotated boundary, including the ones `find_transitions`
-    rejected as untimeable. A flag beside a boundary too short to time is still correctly
-    placed, and holding it to the timeable subset would manufacture false alarms out of the
-    rejection rule.
-    """
     tol_ms = LOOSE_TOL_WINDOWS * spec.window_s * 1000.0
     by_seg: dict[tuple, np.ndarray] = {}
     if len(trans):
@@ -217,8 +150,8 @@ def near_transition_regions(df: pd.DataFrame, trans: pd.DataFrame,
             if not v:
                 continue
             n_regions += 1
-            # The region's own span, widened by the tolerance. A long flagged stretch
-            # should not need the boundary at its centre — it only needs to contain one.
+            # The region's own span, widened by the tolerance; a long flagged stretch
+            # should not need the boundary at its centre- it only needs to contain one
             if not truths.size or not (
                     (truths >= t[s] - tol_ms) & (truths <= t[e - 1] + tol_ms)).any():
                 n_unmatched += 1
@@ -232,9 +165,9 @@ def near_transition_regions(df: pd.DataFrame, trans: pd.DataFrame,
     }
 
 
+# aggregate the per-boundary table; every share carries its denominator
 def summarize(trans: pd.DataFrame, rejected: dict, regions: dict,
               spec: WindowSpec) -> dict:
-    """Aggregate the per-boundary table. Every share carries its denominator."""
     tight = TIGHT_TOL_WINDOWS * spec.window_s
     loose = LOOSE_TOL_WINDOWS * spec.window_s
     n = len(trans)
@@ -276,16 +209,16 @@ def summarize(trans: pd.DataFrame, rejected: dict, regions: dict,
             "n_within_loose": int((np.abs(off) <= loose).sum()),
             "frac_within_loose": float((np.abs(off) <= loose).mean()),
             # Sign convention stated once, here and in the report: positive means the model
-            # changed class LATE. Direction matters because a systematic lag is a filter
-            # artifact with a fix, where symmetric scatter is just resolution.
+            # changed class LATE; direction matters because a systematic lag is a filter
+            # artifact with a fix, where symmetric scatter is just resolution
             "n_late": int((off > 0).sum()),
             "n_early": int((off < 0).sum()),
         }
     return out
 
 
+# the same numbers per subject: a pooled median hides one badly-timed subject
 def per_rev(trans: pd.DataFrame, spec: WindowSpec) -> list[dict]:
-    """The same numbers per subject: a pooled median hides one badly-timed subject."""
     if not len(trans):
         return []
     tight = TIGHT_TOL_WINDOWS * spec.window_s
@@ -411,8 +344,8 @@ def render(tag: str, s: dict, by_rev: list[dict], trans: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+# measure, write `<stem>.md` + `<stem>.json`, return the summary for the caller
 def run(df: pd.DataFrame, spec: WindowSpec, out_dir: Path, stem: str, tag: str) -> dict:
-    """Measure, write `<stem>.md` + `<stem>.json`, return the summary for the caller."""
     trans, rejected = find_transitions(df, spec)
     regions = near_transition_regions(df, trans, spec)
     s = summarize(trans, rejected, regions, spec)

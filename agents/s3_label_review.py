@@ -1,32 +1,4 @@
-"""S3 label review agent: judge what the physics-vs-annotation audit found.
-
-`label_audit.py` MEASURES two trial-level failures against the swap rule and nominates
-individual windows. It stops there on purpose — "a nomination is *not* a verdict" — and
-until now nothing picked the queue up: a flagged trial meant a person opening
-`inspect_window` twelve times by hand, and the flags went unadjudicated.
-
-This is that consumer. It never recomputes and never opens a raw signal; it reads the
-audit's own numbers plus DOMAIN_NOTES and assigns each flagged trial a CAUSE from a closed
-vocabulary. (Non-negotiable: code does the work, agents judge it.)
-
-**Why this queue and not the deleted S4 one.** The S4 review agent judged windows a
-corpus-level join of S2's out-of-fold predictions to S3's anchors could not call — a policy
-no customer CSV ever went through, which is why it went with the stage. This queue is the
-audit's, and the audit points the swap rule at the ANNOTATIONS rather than at the
-classifier. That is S3's strong claim: the rule has no trained parameter and never sees a
-label, so when it contradicts one that is evidence about the label. Nothing here publishes
-a coverage or an accuracy, so it cannot become a second proof competing with `roweval`.
-
-**It nominates; a person enacts.** `dataset.EXCLUDED_TRIALS` is edited by hand, with the
-evidence written next to it. Every cause that implies bad data is forced to `action=human`
-by `collapse` regardless of what the model said — an agent may nominate a label change,
-never make one.
-
-**The agent cannot see the trace.** `inspect_window` draws the raw interleg signal and that
-is the thing that settles a window; this agent has the numbers only. `needs_trace` is
-therefore a first-class verdict rather than a failure, and the value on offer is triage: 8
-flagged trials ordered by what a person should open first, not 8 trials adjudicated.
-"""
+# S3 label review: judge what label_audit flagged, recompute nothing
 
 from __future__ import annotations
 
@@ -41,10 +13,7 @@ REVIEW_FILENAME = "label_review.jsonl"
 AUDIT_JSON = "label_audit.json"
 AUDIT_WINDOWS = "label_audit_windows.jsonl"
 
-# The closed vocabulary. Two of these name a defect in the DATA, one names a defect in the
-# ANNOTATION POLICY, one names a defect in the DETECTOR, and one admits the evidence does
-# not reach. Keeping them apart is the whole job — `disagree_frac` and `band_walk_frac` both
-# read as "physics disagrees with the label" and have opposite remedies.
+# closed vocabulary
 CAUSES = {
     "swapped_channel": (
         "the contradiction is uniform across the recording: a channel is swapped or "
@@ -120,11 +89,7 @@ SYSTEM_PROMPT = (
     "No text outside the JSON array."
 )
 
-# Sonnet, where `s1_exception` runs on haiku. That agent sorts exceptions into buckets
-# against a note that either covers them or does not; this one has to read a distribution —
-# a fraction against a span against a corpus rate — and the failure mode it exists to
-# prevent is recommending exclusion for a trial that is merely annotated differently. The
-# queue is single-digit, so the smarter model costs cents.
+# sonnet not haiku: reads a distribution, not a lookup; queue is single-digit
 S3_LABEL_REVIEW_AGENT = AgentSpec(
     name="s3_label_review",
     system_prompt=SYSTEM_PROMPT,
@@ -138,13 +103,8 @@ def _handled(value: bool, why: str) -> dict:
     return {"value": value, "why": why}
 
 
+# flagged and excluded look identical here; EXCLUDED_TRIALS is the authority
 def _handled_broken(rev: str, trial: int) -> dict:
-    """Is this trial actually kept out of training, or only reported as broken?
-
-    `label_audit` loads the raw corpus (`excluded=set()`) so a quarantined trial still
-    appears in its report — which means "flagged" and "excluded" look identical here and
-    are not. `EXCLUDED_TRIALS` is the authority.
-    """
     if (rev, trial) in EXCLUDED_TRIALS:
         return _handled(True,
                         "already in dataset.EXCLUDED_TRIALS, so load_dataset drops it from "
@@ -156,8 +116,8 @@ def _handled_broken(rev: str, trial: int) -> dict:
                     "person editing that set by hand changes that")
 
 
+# nothing consumes band_flag, and the band policy it argues about ships OFF
 def _handled_divergent(rev: str, trial: int) -> dict:
-    """Nothing consumes `band_flag`. The band policy it argues about ships OFF."""
     if (rev, trial) in EXCLUDED_TRIALS:
         return _handled(True,
                         "the trial is in dataset.EXCLUDED_TRIALS for an unrelated reason, "
@@ -170,14 +130,9 @@ def _handled_divergent(rev: str, trial: int) -> dict:
                     "scored against, and nothing anywhere subtracts it")
 
 
+# separates swapped_channel (wrong everywhere) from misaligned_label_track
+# (wrong in a stretch); disagree_frac says how much, never where
 def _spread(rec: dict) -> float | None:
-    """Share of the trial's scored span that its contradicting windows cover.
-
-    The evidence that separates `swapped_channel` from `misaligned_label_track`, and the
-    reason `label_audit` now records the two spans: `disagree_frac` says how much of the
-    trial contradicts, never where, and the nomination list is capped at 12 and spread 5 s
-    apart so it looks the same either way.
-    """
     span = (rec.get("t_last_s") or 0) - (rec.get("t_first_s") or 0)
     bad = (rec.get("contradict_t_last_s") or 0) - (rec.get("contradict_t_first_s") or 0)
     if not span or span <= 0:
@@ -185,14 +140,8 @@ def _spread(rec: dict) -> float | None:
     return round(min(bad / span, 1.0), 4)
 
 
+# audit artifacts -> review queue
 def build_queue(audit_dir: Path) -> tuple[list[dict], dict]:
-    """Turn the audit's artifacts into a review queue.
-
-    Both detectors queue, and they queue as DIFFERENT item types carrying different
-    evidence, because merging them is exactly the mistake to be avoided: one means the data
-    is broken and one means it is annotated to a minority convention, and the second must
-    never inherit the first's remedy.
-    """
     audit = json.loads((audit_dir / AUDIT_JSON).read_text(encoding="utf-8"))
     trials = audit["trials"]
 
@@ -226,10 +175,6 @@ def build_queue(audit_dir: Path) -> tuple[list[dict], dict]:
                                              r.get("contradict_t_last_s")],
                     "contradiction_spread": _spread(r),
                 },
-                # The nominated windows themselves, so the agent judges the same windows a
-                # person would open rather than a summary of them. Capped and 5 s-spread by
-                # `label_audit.nominate`; `n_nominations_dropped` says how many were not
-                # shown, because a cap that hides its own truncation reads as "all of them".
                 "nominated_windows": windows,
                 "n_nominations_dropped": audit.get("n_nominations_dropped", 0),
                 "handled": _handled_broken(rev, trial),
@@ -249,10 +194,6 @@ def build_queue(audit_dir: Path) -> tuple[list[dict], dict]:
                         round(r["band_walk_frac"] - audit["band_corpus_walk_frac"], 4)
                         if r.get("band_walk_frac") is not None else None),
                     "binomial_p": r.get("band_p"),
-                    # Carried so the agent can see this trial is NOT outrightly
-                    # contradicting. A divergent trial with a low disagree_frac is the
-                    # textbook case for `divergent_convention`; one with a high disagree_frac
-                    # is a different animal and should read as such.
                     "disagree_frac": r["disagree_frac"],
                     "rest_trusted": r["rest_trusted"],
                 },
@@ -285,19 +226,14 @@ def build_prompt(queue: list[dict], summary: dict) -> str:
     )
 
 
+# thin alias over base.extract_json_array- one tolerant parse for every agent
 def parse_review(final_text: str) -> list[dict] | None:
-    """Extract the JSON array from the agent's final text; tolerant of fences/prose.
-
-    Thin alias over `base.extract_json_array`, same as `s1_exception.parse_review` — one
-    tolerant parse for every agent, so a fix reaches all of them.
-    """
     return extract_json_array(final_text)
 
 
 _REVIEW_KEYS = ("cause", "action", "sections", "rationale", "confidence")
 
-# What each cause means for the pipeline. The agent names the cause; this table decides
-# what the pipeline calls it and whether a person is required.
+# agent names the cause; this table decides what the pipeline calls it
 _DISPOSITION = {
     "swapped_channel": "mislabel_candidate",
     "misaligned_label_track": "mislabel_candidate",
@@ -307,51 +243,14 @@ _DISPOSITION = {
     "needs_trace": "needs_human",
 }
 
-# Causes whose remedy touches the ground truth. Forced to `human` whatever the agent said:
-# every one of them resolves by editing `EXCLUDED_TRIALS` or re-annotating a trial, and an
-# agent may nominate either and enact neither.
+# agent may nominate a label change, never make one
 _GROUND_TRUTH_CAUSES = frozenset(
     {"swapped_channel", "misaligned_label_track", "label_suspect"})
 
 
+# combine two
 def collapse(cause: str | None, action: str | None,
              handled: bool = False) -> tuple[str, str]:
-    """Collapse the agent's two judgements into (disposition, action).
-
-    The only place the pipeline decides how cause and action combine, so two runs cannot
-    disposition the same trial differently — the same contract `s1_exception.collapse`
-    holds for its queue.
-
-        cause                   handled     action        disposition
-        swapped_channel         false    -> human      -> mislabel_candidate
-        misaligned_label_track  false    -> human      -> mislabel_candidate
-        label_suspect           false    -> human      -> mislabel_candidate
-        (the same three)        true        (kept)     -> mislabel_candidate
-        divergent_convention    any         (kept)     -> annotation_policy
-        physics_wrong           any         (kept)     -> physics_limitation
-        needs_trace             any      -> human      -> needs_human
-
-    A cause whose remedy touches the ground truth is forced to `human` because every one of
-    them resolves by editing `EXCLUDED_TRIALS` or re-annotating, and an agent may nominate
-    either and enact neither.
-
-    **`handled` releases that force, and only that.** The disposition still says
-    `mislabel_candidate` — the finding does not evaporate because the trial is already
-    quarantined — but a trial `EXCLUDED_TRIALS` already drops needs nobody, and forcing it
-    to `human` files a permanent action item against work that is done. That is how a
-    review queue fills with items nobody can close, and a queue like that gets ignored
-    wholesale, which costs more than the one item. (Found the first time this agent ran:
-    it judged rev13 t4 `swapped_channel` and said in its own rationale that
-    `EXCLUDED_TRIALS` already covers it, and this function overrode it.)
-
-    `divergent_convention` keeps the agent's own `action` rather than being forced, and
-    that asymmetry is deliberate. The audit's standing instruction for these trials is **do
-    not exclude** — they are a measurement of how much residual error is annotation policy
-    rather than model failure. Forcing them to `human` would put them in the same queue as
-    broken data and invite exactly the exclusion the second detector exists to argue
-    against. A person may still be wanted (re-annotate, or accept and report the ceiling),
-    so the agent is allowed to ask for one; it is not made to.
-    """
     if cause in _GROUND_TRUTH_CAUSES:
         if not handled:
             return _DISPOSITION[cause], "human"
@@ -360,26 +259,13 @@ def collapse(cause: str | None, action: str | None,
         return "needs_human", "human"
     if cause in _DISPOSITION and action in ("none", "human"):
         return _DISPOSITION[cause], action
-    # Unrecognized pair: judge nothing, escalate. Same conservatism as a parse failure.
+    # unrecognized pair: judge nothing, escalate; same conservatism as a parse failure
     return "needs_human", "human"
 
 
+# final
 def write_review(out_dir: Path, queue: list[dict], decisions: list[dict] | None,
                  final_text: str) -> Path:
-    """One review row per queue item, agent verdict merged in.
-
-    `disposition` is DERIVED by `collapse`, never taken from the model — the taxonomy is
-    the pipeline's, not a thing each run re-decides. An item with no parseable verdict is
-    conservatively `needs_human`, so a parse failure never silently drops a flagged trial.
-
-    **The agent's own `action` is kept beside the derived one** as `action_agent`. The
-    first version of this function wrote the collapsed value over the top of it, which
-    made the row a dead end: `collapse` could no longer be re-derived from the ledger,
-    and a change to the rule could not be replayed against a run that had already been
-    paid for. It cost exactly that — the rule was fixed an hour after the first run and
-    the ledger could not be rebuilt, because the input to the function had been replaced
-    by its output. Anything derived is written next to its input here, never onto it.
-    """
     out_dir.mkdir(parents=True, exist_ok=True)
     by_ref = {d.get("ref"): d for d in decisions} if decisions else {}
     out = out_dir / REVIEW_FILENAME
@@ -401,7 +287,5 @@ def write_review(out_dir: Path, queue: list[dict], decisions: list[dict] | None,
                     bool(item["handled"]["value"]))
             fh.write(json.dumps({**item, "review": review},
                                 ensure_ascii=False, default=float) + "\n")
-    # Always, not only on failure. It is the only record of what the model actually said,
-    # and a run that parsed cleanly is exactly the one whose verdicts get quoted later.
     (out_dir / "label_review_raw.txt").write_text(final_text, encoding="utf-8")
     return out

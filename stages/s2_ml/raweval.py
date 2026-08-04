@@ -1,39 +1,7 @@
-"""End-to-end accuracy of the RAW DEVICE path, scored against human labels.
-
-    python -m stages.s2_ml.raweval
-
-`roweval.py` is the accuracy number this repo quotes, and it is measured on the `lpf_view`
-family — the annotated export MATLAB produced. `verify_serve.py` then shows the raw device
-route agrees with that export row for row, but deliberately drops `Label` before comparing,
-so it proves *equivalence* and never touches *correctness*. The accuracy of the route a
-caller actually uses has therefore only ever been available transitively: raw equals
-lpf_view (verify_serve), lpf_view is 0.9904 (roweval), so raw is 0.9904. That chain is
-sound and it is still a chain. This module measures the endpoint directly — a raw device
-CSV in, `label_csv` out, joined against the human annotation of the same recording.
-
-**What makes it honest, and what it costs.**
-
-  1. *The lockbox stays sealed.* `rev8` has four paired recordings and they are refused
-     here, in code (`_drop_lockbox`), not by remembering to pass a flag. §7 spends the
-     lockbox once and it is spent; a "direct" number that quietly re-read it would be worth
-     less than the transitive one it replaced.
-  2. *No subject is scored by a model that saw it.* Pairs are grouped by rev and each rev
-     is labelled by a champion refit without it, exactly as `roweval` does — reference
-     statistics included, since those enter the abstention reasons. The shipped
-     `champion.joblib` is fit on every training rev, so pointing it at rev7's raw file
-     would report memorization.
-
-The cost of (1) and (2) together is scope: 14 pairs across **three** subjects, all of them
-development subjects. This number belongs next to roweval's 0.9904, measured on the same
-population under the same discipline, and NOT next to rev8's 0.9308. It answers "does the
-raw route deliver what the lpf_view route was measured to deliver", not "how does the
-pipeline do on a new person" — the lockbox already answered that one, less flatteringly.
-
-Unlike `roweval`, this fits at the champion's declared feature count (38, per
-`champion_spec.json`) rather than at every column `build_windows` emits (42). The two are
-inside the noise band by measurement, but the number this file reports is meant to be the
-shipped artifact's, so it uses the shipped artifact's spec.
-"""
+# end-to-end accuracy of the RAW DEVICE path, scored against human labels
+#   python -m stages.s2_ml.raweval
+# the lockbox is refused in code, and no subject is scored by a model that saw it
+# read this next to roweval's number, not next to the lockbox one
 
 from __future__ import annotations
 
@@ -72,15 +40,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CLASS_NAME = {STAND: "stand", WALK: "walk"}
 
 
+# paired recordings, minus every sealed rev
 def _drop_lockbox(pairs: list, lockbox: tuple[str, ...] = DEFAULT_LOCKBOX_REVS) -> list:
-    """Paired recordings, minus every sealed rev.
-
-    A filter rather than a flag. `verify_serve` may include rev8 because it structurally
-    cannot read a label; this module exists to read labels, so the same pair set is not
-    safe here and the difference has to live in code. Returns the kept pairs and prints
-    what it refused, because a silent exclusion looks identical to a corpus that never had
-    those files.
-    """
     kept, refused = [], []
     for pair in pairs:
         (refused if rev_of(pair[0]) in lockbox else kept).append(pair)
@@ -90,14 +51,8 @@ def _drop_lockbox(pairs: list, lockbox: tuple[str, ...] = DEFAULT_LOCKBOX_REVS) 
     return kept
 
 
+# minus the trials whose ANNOTATIONS are quarantined
 def _drop_quarantined(pairs: list) -> list:
-    """Minus the trials whose ANNOTATIONS are quarantined.
-
-    `find_pairs` passes `excluded=set()` on purpose — it asks whether four columns can be
-    rebuilt from raw, which no label quarantine bears on. Here the label IS the measuring
-    stick, so a trial excluded for having wrong labels would be scoring the model against
-    an error this repo has already documented and rejected.
-    """
     kept = [p for p in pairs
             if (rev_of(p[0]), trial_of(p[0])) not in EXCLUDED_TRIALS]
     if (n := len(pairs) - len(kept)):
@@ -105,16 +60,9 @@ def _drop_quarantined(pairs: list) -> list:
     return kept
 
 
+# A model directory `label_csv` can be pointed at, holding the champion refit WITHOUT `rev`
 def fold_model_dir(train_df: pd.DataFrame, feats: list[str], rev: str,
                    base_meta: dict, root: Path):
-    """A model directory `label_csv` can be pointed at, holding the champion refit
-    WITHOUT `rev`.
-
-    Written to disk rather than passed in memory because the point of this module is to
-    call the caller's entry point. `label_csv` loads a champion from a directory; handing
-    it a directory is how it gets used, and a variant that accepts a live model would be a
-    second serve path measured in place of the first.
-    """
     import joblib
 
     model, ref = fit_on(train_df, feats, rev)
@@ -128,15 +76,8 @@ def fold_model_dir(train_df: pd.DataFrame, feats: list[str], rev: str,
     return d
 
 
+# the human label for every row of a raw-path output, or -2 where none aligns
 def truth_for(out: pd.DataFrame, ann_path: Path, fs_hz: float) -> np.ndarray:
-    """The human label for every row of a raw-path output, or -2 where none aligns.
-
-    Joined on TIME rather than by position. The pair criterion already requires equal row
-    counts and a shared start, so position would almost always work — but "almost always"
-    is how an off-by-one in one recording becomes a quiet 3% accuracy loss attributed to
-    the model. A row further than half a sample from any annotated sample is reported as
-    unmatched instead of being given its neighbour's label.
-    """
     ann = _read_raw(ann_path)
     t_ann = ann[TIME_COL].to_numpy(float)
     y_ann = ann[LABEL_COL].to_numpy(float)
@@ -150,9 +91,9 @@ def truth_for(out: pd.DataFrame, ann_path: Path, fs_hz: float) -> np.ndarray:
     return np.where(ok, ya[near], -2.0)
 
 
+# label one raw device CSV through the shipping entry point, truth joined back on
 def score_pair(ann_path: Path, raw_path: Path, model_dir: Path, variant: str,
                threshold: float, fs_hz: float) -> pd.DataFrame:
-    """Label one raw device CSV through the shipping entry point, truth joined back on."""
     out, prov = label_csv(raw_path, model_dir, threshold)
     truth = truth_for(out, ann_path, fs_hz)
     guess = pd.to_numeric(out["label"], errors="coerce").to_numpy(float)
@@ -169,21 +110,13 @@ def score_pair(ann_path: Path, raw_path: Path, model_dir: Path, variant: str,
     })
 
 
+# rows a claim about accuracy may be made from: a human label in the trained vocabulary
 def _scorable(df: pd.DataFrame) -> pd.DataFrame:
-    """Rows a claim about accuracy may be made from: a human label in the trained
-    vocabulary. Drops `-1` (annotator marked it unknown, §5.2) and `-2` (no annotated
-    sample within half a grid step)."""
     return df[df["truth"].isin(TRAIN_CLASSES)]
 
 
+# coverage and selective accuracy over the whole paired set, and per subject
 def summarize(df: pd.DataFrame) -> dict:
-    """Coverage and selective accuracy over the whole paired set, and per subject.
-
-    Committed is read off `ambiguous`, the flag the caller receives — not off a confidence
-    comparison. The band, the physics policy and the uncovered rule all move that flag
-    without moving the confidence, so recomputing the threshold here would report a
-    coverage `label.py` does not deliver.
-    """
     v = _scorable(df)
     committed = ~v["ambiguous"].to_numpy(bool) & np.isfinite(v["guess"].to_numpy(float))
     correct = v["guess"].to_numpy(float) == v["truth"].to_numpy(float)
@@ -252,7 +185,7 @@ def render(res: dict, threshold: float, pairs: list, transitive: dict | None) ->
         "",
         "**The lockbox is not in this table.** `rev8`'s four pairs are refused in code (§7), "
         "so every subject here is a development subject. Read this against `roweval_loro`'s "
-        "0.9904, not against rev8's 0.9308.",
+        "0.9901, not against rev8's 0.9308.",
         "",
         "| | |",
         "|---|---|",
@@ -318,14 +251,8 @@ def render(res: dict, threshold: float, pairs: list, transitive: dict | None) ->
     return "\n".join(lines) + "\n"
 
 
+# `roweval`'s own measurement, restricted to the revs this module could pair
 def transitive_baseline(trials, train_df, feats, base_meta, revs, threshold) -> dict:
-    """`roweval`'s own measurement, restricted to the revs this module could pair.
-
-    Without it the headline has nothing to be compared against: the paired subset is three
-    subjects and roweval's published 0.9904 is seven, so quoting them side by side would
-    attribute a population difference to the route. Recomputed here rather than read from
-    `roweval_loro.json`, which reports only the pooled seven-subject curve.
-    """
     from stages.s2_ml.roweval import score_trials
 
     parts = []

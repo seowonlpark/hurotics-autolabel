@@ -1,12 +1,12 @@
-# error taxonomy: a faithful port of the incumbent's bucketing (thresholds/precedence copied exactly),
-# so our classifier is scored by the SAME yardstick. precedence: correct > omission/swallowed/edge_omission
-# > flicker > late > early > steady_confusion. feed it dense per-row predictions, not window labels.
+# error taxonomy: a faithful port of the incumbent's bucketing (thresholds/precedence copied
+# so our classifier is scored by the SAME yardstick as the incumbent
+# > flicker > late > early > steady_confusion; feed it dense per-row predictions, not window labels
 
 from __future__ import annotations
 
 import numpy as np
 
-# copied verbatim from diagnose.py -- do not tune, they define comparability
+# copied verbatim from diagnose.py- do not tune, they define comparability
 FLICKER_MAX_MS = 200.0 # pred run shorter than this, flanked by equal others => flicker
 LAG_MAX_MS = 1000.0 # beyond this, a lag is not detection jitter
 SUSTAINED_FRACTION = 0.5 # early/late over >= this fraction of the segment AND past
@@ -58,7 +58,7 @@ def _flanks(arr: np.ndarray, s: int, e: int, n: int):
 
 
 # claim helper: assign label to still-unclassified rows in [s, e); this is the precedence
-# mechanism -- earlier buckets claim first, so nothing is ever overwritten
+# mechanism- earlier buckets claim first, so nothing is ever overwritten
 def _claim(bucket: np.ndarray, s: int, e: int, label: str) -> None:
     region = bucket[s:e]
     region[region == UNCLASSIFIED] = label
@@ -157,7 +157,7 @@ def row_buckets(gt: np.ndarray, pred: np.ndarray, t: np.ndarray,
     if results is None:
         results = transition_timing(gt, pred, t)
 
-    # (2) omission -- including the leading segment, which has no gt transition of its own
+    # (2) omission- including the leading segment, which has no gt transition of its own
     first_end = results[0].gt_idx if results else n
     if not np.any(pred[0:first_end] == gt[0]):
         _claim(bucket, 0, first_end, "edge_omission")
@@ -179,7 +179,7 @@ def row_buckets(gt: np.ndarray, pred: np.ndarray, t: np.ndarray,
         _claim(bucket, r.gt_idx, r.late_end_idx, "late")
         _claim(bucket, r.early_start_idx, r.gt_idx, "early")
 
-    # (6) steady_confusion absorbs the rest -- no catch-all bucket needed
+    # (6) steady_confusion absorbs the rest- no catch-all bucket needed
     bucket[bucket == UNCLASSIFIED] = "steady_confusion"
     return bucket
 

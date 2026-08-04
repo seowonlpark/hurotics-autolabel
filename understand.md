@@ -988,7 +988,7 @@ Stated here so this document cannot be read as a defence.
    defect. Nine alternatives were measured at matched coverage; the one that looked best
    **inverted** when the perturbation it was attributed to got three times stronger.
 4. **Seven revs is a small basis** for a threshold, a probability floor and tier boundaries.
-5. **Confident accuracy — 0.9904 on the shipped row path — is a lower bound on model
+5. **Confident accuracy — 0.9901 on the shipped row path — is a lower bound on model
    quality and an upper bound on label quality, and the two cannot be separated by
    measuring harder.** `label_audit.py` measures the second half directly and model-free:
    **8 of 41 trials annotate the ambiguity band unlike the corpus**, one at 0.32 walk
