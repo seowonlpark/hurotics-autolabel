@@ -1,12 +1,4 @@
-"""S1 census + manifest.
-
-    python -m stages.s1_clean.run --raw data/raw --out runs/<run>/s1_clean
-
-Outputs:
-    variants.json   every distinct header, which files use it, the stable prefix
-    manifest.jsonl  one row per file: session, variant, measured rate, gaps, labels
-    census.md       the human-readable summary
-"""
+# S1 census + manifest (python -m stages.s1_clean.run); fingerprint/family_of is the real product
 
 from __future__ import annotations
 
@@ -14,17 +6,22 @@ import argparse
 import json
 from pathlib import Path
 
-from stages.s1_clean.census import build_registry, stable_prefix
+from freshness import stamp_inputs
+from stages.s1_clean.census import build_registry
 from stages.s1_clean.manifest import profile_file
+from stages.report import add_report_flag
+
+from runslayout import REGEN
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+S1_CENSUS_OUT_DIR = REGEN / "s1_census"
 
 
 def find_csvs(raw_dir: Path) -> list[Path]:
     return sorted(raw_dir.rglob("*.csv"))
 
 
-def write_census_md(registry, prefixes, rows, out: Path) -> None:
+def write_census_md(registry, rows, out: Path) -> None:
     families = sorted({v.family for v in registry.values()})
     lines = [
         "# S1 Schema Census",
@@ -48,11 +45,9 @@ def write_census_md(registry, prefixes, rows, out: Path) -> None:
         shown = ", ".join(sess[:4]) + (f" +{len(sess) - 4}" if len(sess) > 4 else "")
         lines.append(f"| `{v.variant_id}` | {v.family} | {v.n_cols} | {len(v.files)} | {shown} |")
 
-    lines += ["", "## Stable prefix per family (the real contract)", ""]
-    for fam, pref in prefixes.items():
-        lines += [f"### {fam} — {len(pref)} columns", "", "```", ", ".join(pref), "```", ""]
+    lines += [""]
 
-    # Names that move between variants WITHIN a family — the column-47 hazard.
+    # names that move between variants within a family- the column-47 hazard
     for fam in families:
         positions: dict[str, set] = {}
         for v in registry.values():
@@ -72,7 +67,8 @@ def write_census_md(registry, prefixes, rows, out: Path) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--raw", default="data/raw")
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", type=Path, default=S1_CENSUS_OUT_DIR)
+    add_report_flag(ap)
     args = ap.parse_args()
 
     raw_dir = (REPO_ROOT / args.raw).resolve()
@@ -86,25 +82,10 @@ def main() -> None:
 
     registry = build_registry(paths, REPO_ROOT)
     families = sorted({v.family for v in registry.values()})
-    prefixes = {f: stable_prefix(registry, f) for f in families}
     print(f"[s1] {len(registry)} header variants across {len(families)} families")
-    for f, pref in prefixes.items():
+    for f in families:
         n = sum(len(v.files) for v in registry.values() if v.family == f)
-        print(f"[s1]   {f}: {n} files, stable prefix {len(pref)} columns")
-
-    (out_dir / "variants.json").write_text(
-        json.dumps(
-            {
-                "n_files": len(paths),
-                "n_variants": len(registry),
-                "families": families,
-                "stable_prefix_by_family": prefixes,
-                "variants": [v.to_dict() for v in registry.values()],
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+        print(f"[s1]   {f}: {n} files")
 
     rows = []
     with (out_dir / "manifest.jsonl").open("w", encoding="utf-8") as fh:
@@ -114,7 +95,13 @@ def main() -> None:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             print(f"[s1] {i}/{len(paths)} {row['path']}")
 
-    write_census_md(registry, prefixes, rows, out_dir / "census.md")
+    if args.report:
+        write_census_md(registry, rows, out_dir / "census.md")
+
+    # Empty by declaration, not by omission: the only upstream is the `data/raw` tree, which
+    # is thousands of files rather than an artifact to hash. Stamping says this was checked
+    # and has nothing to declare, which is what keeps it out of breakdown's unchecked list.
+    stamp_inputs(out_dir, {}, stage="s1_census")
 
     errs = [r for r in rows if "read_error" in r]
     print(f"[s1] done. {len(rows)} rows, {len(errs)} read errors -> {out_dir}")

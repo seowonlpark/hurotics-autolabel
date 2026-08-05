@@ -1,10 +1,4 @@
-"""Per-file measurement. Numbers only, no verdicts.
-
-Rate is MEASURED from the Time column, never read from a filename. Two rate
-estimates are reported because they legitimately disagree (median-dt vs span/n):
-a file with jitter and gaps has no single true rate, and hiding that behind one
-number is how a rate confound goes unnoticed.
-"""
+# per-file measurement, numbers only; two rate estimates because they legitimately disagree
 
 from __future__ import annotations
 
@@ -27,8 +21,8 @@ from stages.s1_clean.config import (
 _SESSION = re.compile(SESSION_DIR_PATTERN)
 
 
+# from the directory- the only metadata worth trusting
 def session_of(path: Path) -> dict:
-    """Session identity comes from the directory, the only metadata we trust."""
     m = _SESSION.match(path.parent.name)
     if not m:
         return {"session_date": None, "session_run": None, "session_dir": path.parent.name}
@@ -39,8 +33,8 @@ def session_of(path: Path) -> dict:
     }
 
 
+# rate, jitter and gaps from the Time column
 def measure_time(t: np.ndarray) -> dict:
-    """Rate, jitter and gaps from the Time column."""
     if t.size < 2:
         return {"error": "fewer than 2 rows"}
 
@@ -75,8 +69,8 @@ def measure_time(t: np.ndarray) -> dict:
     }
 
 
+# label census: codes, counts, segment structure; no judgement
 def measure_labels(series: pd.Series) -> dict:
-    """Label census: codes, counts, segment structure. No judgement."""
     vals = series.to_numpy()
     counts = {int(k): int(v) for k, v in series.value_counts().items()}
     changes = np.flatnonzero(vals[1:] != vals[:-1]) + 1
@@ -92,8 +86,8 @@ def measure_labels(series: pd.Series) -> dict:
     }
 
 
+# one manifest row; never raises on bad data, records the failure instead
 def profile_file(path: Path, repo_root: Path) -> dict:
-    """One manifest row. Never raises on bad data — records the failure instead."""
     row: dict = {
         "path": str(path.relative_to(repo_root)),
         "filename": path.name,
@@ -115,12 +109,12 @@ def profile_file(path: Path, repo_root: Path) -> dict:
             "roles_present": {k: sorted(v) for k, v in sorted(res.roles_present.items())},
             "unknown_names": res.unknown_names,
             "label_columns": res.label_columns,
-            "legacy_algo_columns": res.legacy_algo_columns,
         }
     )
 
     try:
-        df = pd.read_csv(path, encoding="utf-8-sig")
+        # index_col=False: a trailing comma otherwise shifts every column left by one
+        df = pd.read_csv(path, encoding="utf-8-sig", index_col=False)
         df = df.loc[:, [c for c in df.columns if not c.startswith("Unnamed")]]
     except Exception as exc:
         row["read_error"] = f"body: {exc}"

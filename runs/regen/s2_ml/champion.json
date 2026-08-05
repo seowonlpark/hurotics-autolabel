@@ -1,0 +1,60 @@
+{
+  "ts": "2026-08-04T03:16:59.239528+00:00",
+  "git_sha": "b00fba0",
+  "spec": {
+    "name": "extratrees400_drop_moments38",
+    "rationale": "ExtraTrees over 38 features, non-overlapping 2 s windows at the canonical 100 Hz. Chosen against RandomForest on identical features, folds and params over 5 seeds: equal precision at threshold 0.85 while committing to 87.6% of windows against 81.9% (see the train.py docstring). The four dropped angular-velocity higher moments are removed for parsimony, NOT for a gain: measured at 42 vs 38 features, LORO macro-F1 0.9193 -> 0.9196 and coverage at 0.85 0.8780 -> 0.8800, both inside the +/-0.0003 five-seed noise band. Kurtosis and peak-ratio are noise-sensitive by construction and sat at the bottom of the importance table (0.0047-0.0055, ranks 39-42 of 42); four features that buy nothing measurable are four fewer things to explain and to keep trustworthy across a new subject.",
+    "drop_features": [
+      "L_angvel_kurt",
+      "R_angvel_kurt",
+      "L_angvel_peakratio",
+      "R_angvel_peakratio"
+    ],
+    "window_s": 2.0,
+    "stride_s": 2.0,
+    "model_params": {},
+    "channels": []
+  },
+  "macro_f1": 0.9195582010216896,
+  "accuracy": 0.9623997326203209,
+  "balanced_accuracy": 0.9013454753911756,
+  "per_rev_macro_f1": {
+    "rev13": 0.9664296885293797,
+    "rev2": 0.8927229969508315,
+    "rev3": 0.9686843884559269,
+    "rev4": 0.9540051679586563,
+    "rev5": 0.855328798185941,
+    "rev6": 0.9146707806039343,
+    "rev7": 0.9111276455026456
+  },
+  "n_features": 38,
+  "taxonomy": {
+    "row_accuracy": 0.9514,
+    "dominant": "steady_confusion",
+    "fractions": {
+      "omission": 0.0,
+      "swallowed": 0.004,
+      "edge_omission": 0.027,
+      "flicker": 0.011,
+      "late": 0.048,
+      "early": 0.06,
+      "steady_confusion": 0.85
+    }
+  },
+  "corpus": {
+    "n_windows": 5984,
+    "classes": [
+      0,
+      10
+    ],
+    "revs": [
+      "rev13",
+      "rev2",
+      "rev3",
+      "rev4",
+      "rev5",
+      "rev6",
+      "rev7"
+    ]
+  }
+}

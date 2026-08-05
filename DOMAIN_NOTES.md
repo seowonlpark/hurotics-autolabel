@@ -8,24 +8,25 @@ Rules for this file:
 - If you are an agent reading this: these facts are established. Do not re-derive them, do not
   contradict them silently. If your evidence contradicts an entry, say so explicitly and flag
   `needs_human` rather than acting on it.
-- **[measured]** = derived from the real corpus, reproducible by rerunning S1.
+- **[measured]** = derived from the real corpus, reproducible by rerunning the named stage.
   **[reported]** = came from a human, not independently verified.
   **[decided]** = a design choice, not a fact.
   **[open]** = known unknown.
+- **No live counts here.** Tallies (file counts, quarantined, usable minutes, rate mix) regenerate
+  every run under `runs/`; this file records findings. Named-file example stats are the exception.
 
 ---
 
 ## 0. The corpus
 
-**[measured]** `data/raw/` holds one family (`raw_device`) of device logs across many dated session
-folders (2025-10 onward). **This file records findings, not tallies** — live counts (files, folders,
-clean vs quarantined, usable minutes, rate mix) regenerate every run in `runs/*/clean_report.md` and
-`census.md`; read those for current numbers. A 2026-05 export batch is quarantined for a degenerate
-time base (§2.6).
+**[measured]** `data/raw/` holds one family (`raw_device`) of device logs across dated session
+folders (2025-10 onward). Live counts are in `runs/*/clean_report.md`; the per-variant breakdown is
+in `census.md`, which exists only where `stages.s1_clean.run` was pointed. (`variants.json` was
+dropped 2026-08-04 — nothing read it.)
 
 Session date comes from the folder name. **Subject is filename field 2** (§5.5) — the
-cross-validation group key, *not* session. One subject (`69`) dominates the corpus; the others
-appear in only one or two sessions each.
+cross-validation group key, *not* session. One subject (`69`) dominates; the others appear in only
+one or two sessions each.
 
 Labeled data lives in `data/labeled/`, never `data/raw/`. A `Label` column appearing under
 `data/raw/` is a contamination event, not a variant: quarantine and flag it.
@@ -38,8 +39,9 @@ Labeled data lives in `data/labeled/`, never `data/raw/`. A `Label` column appea
 
 The corpus carries several distinct header shapes (differing column widths), all one `raw_device`
 family. They **differ only in the tail**; the head is near-stable and the variants track firmware
-eras. The current variant list — IDs, column widths, per-variant file counts, eras — regenerates
-each run in `census.md` / `variants.json`; that is the source of truth, not a table here.
+eras. The current variant list — IDs, widths, per-variant counts, eras — regenerates each run in
+`census.md`; that is the source of truth, not a table here. The machine-readable `variants.json`
+that used to sit beside it was dropped 2026-08-04 (`stages/s1_clean/run.py`): nothing read it.
 
 ### 1.2 The contract is 45 columns **[measured]**
 
@@ -58,10 +60,10 @@ The `NN_` prefix is a per-file position, not a stable identifier:
 `df.iloc[:, 47]` therefore blends a step counter into a locomotion state, on the majority of files,
 and never raises. The column that *looks* positionally stable (`loco`) is precisely the trap.
 
-Note both are **outdated columns anyway**: `loco` is the legacy rule-based algorithm's output (the
-thing this project replaces — severed, §4.5) and `Step` is a firmware-computed counter. Neither is a
-trusted signal; both are dropped from the canonical measured set. The finding here is about the
-*positional-indexing danger*, not about the columns' value.
+Both are outdated columns anyway: `loco` is the legacy rule-based algorithm's output (the thing this
+project replaces — severed, §4.5) and `Step` is a firmware-computed counter. Neither is trusted;
+both are dropped from the canonical measured set. The finding is about the *positional-indexing
+danger*, not about the columns' value.
 
 **Policy:** strip the prefix, match on the name. Column presence is per-file; absence is recorded
 as a fact, not an error.
@@ -77,15 +79,15 @@ as a fact, not an error.
 | rate | ~100 Hz | 500 Hz |
 | schema | `fb5ea2c2` / `0fda484e` / `4bfd6ab2` | `e5f2660f` / `86069795` |
 
-Rate, schema and date change together. Resampling removes the *rate* difference; it does not
-remove the era. A model can still learn "era" as a shortcut. Group by **subject** (§5.5) for
-cross-validation to defend subject leakage — but note era is a *separate* confound: subject `69`
-spans both eras, so subject grouping does not neutralize era-specific firmware artifacts.
+Rate, schema and date change together. Resampling removes the *rate* difference; it does not remove
+the era, and a model can still learn "era" as a shortcut. Group by **subject** (§5.5) for
+cross-validation to defend subject leakage — but era is a *separate* confound: subject `69` spans
+both eras, so subject grouping does not neutralize era-specific firmware artifacts.
 
 ### 2.2 The "odd" rates are timestamp quantization, not different rates **[measured]**
 
-Measured rates cluster at 100.0 Hz and 500.0 Hz, plus a few "odd" values just below 100 Hz
-(99.3789, 99.688, 99.961). Those odd ones are exact quantization tiers, not different devices:
+Measured rates cluster at 100.0 Hz and 500.0 Hz, plus a few "odd" values just below 100 Hz. Those
+are exact quantization tiers, not different devices:
 
 | measured | dt (ms) | = |
 |---|---|---|
@@ -105,9 +107,9 @@ anchor, but the mechanism differs from what was assumed. Not yet confirmed again
 
 ### 2.4 Canonical grid is 100 Hz **[decided]**
 
-Incoming golden data is 100 Hz **[reported]**, so 100 Hz is canonical: most files already sit
-there, the 500 Hz era is decimated down, and off-grid rates are grid-corrected. Nothing is
-upsampled; no bandwidth is invented. (The per-method segment counts each run are in `clean_report.md`.)
+Incoming golden data is 100 Hz **[reported]**, so 100 Hz is canonical: most files already sit there,
+the 500 Hz era is decimated down, and off-grid rates are grid-corrected. Nothing is upsampled; no
+bandwidth is invented.
 
 ### 2.5 Never downsample without anti-aliasing **[measured]**
 
@@ -123,27 +125,30 @@ naive [::5]  : 1.5Hz=1.000  20Hz(alias)=0.500   <- fake 20 Hz at full amplitude
 The alias lands at |120−100| = 20 Hz, at full strength, indistinguishable from real signal.
 Use `scipy.signal.decimate(x, 5, ftype='fir')`.
 
-### 2.6 A 2026-05 batch has a corrupted `Time` column — quarantined **[measured]**
-A few files from two 2026-05 sessions (subject `70` on 2026-05-15, some subject-`100` files on
-2026-05-19) have a **destroyed `Time` column**: it collapses to a small, non-monotonic range
-(median `dt` = 0, a large fraction of `dt` negative). No forward cadence exists, and `np.interp`
-would silently corrupt the resample.
+### 2.6 A 2026-05 file had a corrupted `Time` column — re-exported, ledger now empty **[measured; cleared 2026-08-04]**
 
-**It is a per-file `Time` corruption, not a bad variant and not clock jitter.** Healthy sibling
-files of the *same* variant (`e5f2660f`) and era carry a clean monotonic 500 Hz clock — so the
-acquisition is fine; only these files' timestamps were overwritten. The *data* channels look
-intact and in row order (row-to-row continuity matches a healthy file). There is **no recoverable
-surrogate clock** in the file (the large monotone counter some carry is a normal column, present in
-the healthy files too).
+**On the current corpus this is zero files** — `quarantine.jsonl` is empty, and the file this entry
+named (`20260515/00095_70_…`, subject `70`) now reads a clean monotonic 500 Hz clock, 104,785 rows.
+**The decision below worked: re-export was called the only honest fix, and it was done.** Kept
+because the failure mode is unchanged — **expect it to recur on the next export.** (Clearing the
+quarantine did not make that file servable: it is `e5f2660f`, so it now abstains on the unmapped
+axis instead — §6.2, §6.3.)
+
+**The failure:** the `Time` column was destroyed — collapsed to a small, non-monotonic range (median
+`dt` = 0, a large fraction negative). No forward cadence exists, and `np.interp` would silently
+corrupt the resample.
+
+**It is a per-file `Time` corruption, not a bad variant and not clock jitter.** Healthy sibling files
+of the *same* variant (`e5f2660f`) and era carry a clean monotonic 500 Hz clock, so the acquisition
+is fine; only this file's timestamps were overwritten. The *data* channels look intact and in row
+order. There is **no recoverable surrogate clock** (the large monotone counter some files carry is a
+normal column, present in healthy files too).
 
 **Decision (2026-07-20, Lu): do NOT reconstruct a synthetic clock.** A uniform-rate clock would
-*fabricate* unmeasured time, which the pipeline refuses to do. These files stay quarantined as
-`needs_human` (re-export from the source is the only honest fix). The non-corrupted files proceed
-downstream normally — `data/clean/` only ever holds files that passed, so later stages never see
-the corrupted ones.
-
-S1 catches this up front (`clean_one` guards `median(dt) > 0`; `measure_hz` returns `nan` rather
-than dividing by zero) and routes it to the `quarantine.jsonl` ledger with reason
+*fabricate* unmeasured time, which the pipeline refuses to do. Such files stay quarantined as
+`needs_human`. Non-corrupted files proceed normally — `data/clean/` only ever holds files that
+passed. S1 catches this up front (`clean_one` guards `median(dt) > 0`; `measure_hz` returns `nan`
+rather than dividing by zero) and routes it to the `quarantine.jsonl` ledger with reason
 `degenerate time base`. The raw file is left in place, never moved.
 
 ---
@@ -152,21 +157,20 @@ than dividing by zero) and routes it to the `quarantine.jsonl` ledger with reaso
 
 ### 3.1 The segment is the unit of analysis, not the file **[measured]**
 
-A file is a bag of continuous runs; the **segment**, not the file, is the unit of analysis (usable
-segment count and minutes are in `clean_report.md`). Windows must never straddle a gap; resampling
-across one invents data that was never measured.
+A file is a bag of continuous runs; the **segment**, not the file, is the unit of analysis. Windows
+must never straddle a gap; resampling across one invents data that was never measured.
 
 ### 3.2 There is a ~10-sample startup burst **[measured]**
 
 Many files open with a segment of **exactly 10 rows**, then a gap, then the real trial. The 500 Hz
-era shows two tiny leading segments (2–8 rows each). Mechanical, not random.
-`MIN_SEGMENT_S = 1.0` trims it as a side effect of a size filter — the right outcome for an
-incidental reason. **The floor was a sample count until 2026-08-03 [measured]:**
-`MIN_SEGMENT_SAMPLES = 100`, documented as "1 s at canonical rate", which it was only in the
-~100 Hz era — at 500 Hz it meant 0.2 s. One labeled segment (`rev6_trial_3`, 238 rows at
-500 Hz = 0.48 s) passed as *usable* into `data/clean` and into the report's usable minutes
-while being too short to yield a single 2 s window. A threshold in samples is a threshold that
-changes meaning with the rate era (§2.1); it is now a duration.
+era shows two tiny leading segments (2–8 rows each). Mechanical, not random. `MIN_SEGMENT_S = 1.0`
+trims it as a side effect of a size filter — the right outcome for an incidental reason.
+
+**The floor was a sample count until 2026-08-03 [measured]:** `MIN_SEGMENT_SAMPLES = 100`, documented
+as "1 s at canonical rate", which it was only in the ~100 Hz era — at 500 Hz it meant 0.2 s. One
+labeled segment (`rev6_trial_3`, 238 rows at 500 Hz = 0.48 s) passed as *usable* into `data/clean`
+and into the report's usable minutes while being too short to yield a single 2 s window. A threshold
+in samples is a threshold that changes meaning with the rate era (§2.1); it is now a duration.
 
 ### 3.3 Gap position is otherwise unpredictable **[reported + measured]**
 
@@ -181,7 +185,7 @@ conservatively, never interpolate across, flag the pattern.
 
 ### 4.1 Angular velocity is RELIABLE — it is the derivative **[measured]**
 
-`angvel_LPF` **is** `d(angle)/dt`: r = **0.999**, slope **0.98**. Use it directly. There is no need
+`angvel_LPF` **is** `d(angle)/dt`: r = **0.999**, slope **0.98**. Use it directly; there is no need
 to re-derive velocity from the angle channels.
 
 **RETRACTED (2026-07-16):** an earlier entry claimed `L/R_angvel_LPF` "ring at ±40–80 deg/s during
@@ -194,138 +198,133 @@ That measured walking and called it rest. The channel was never noisy; the measu
 Statistics over a whole file say nothing about a state that occupies 5% of it. See §11 item 1:
 *density needs mass.*
 
-### 4.1b Gyro units are inconsistent WITHIN a single file **[measured — confirmed across the clean corpus]**
+### 4.1b Gyro units and axes are inconsistent WITHIN a single file **[measured — confirmed across the clean corpus]**
 
-- **`B_Gyro_*` is rad/s. `L_Gyro_*` / `R_Gyro_*` is deg/s.** Same naming convention, same file.
-  Any feature mixing trunk and thigh gyro without conversion is off by **57.3×**. The clean-layer
-  trust check reproduces this from the sagittal regression slope: **0.98** on L/R (deg/s) vs
-  **0.017** (≈1/57.3) on B (rad/s).
-- **Axis: the Deg↔Gyro name crossing is DEVICE-WIDE, not a trunk defect
-  [measured, 2026-07-20 — corrects an earlier trunk-only framing].** `d(Deg_Y)/dt` tracks `Gyro_Z`
-  on **every** side, not just B. Over the clean corpus, `argmax|r|` of `corr(d(Deg_Y)/dt, Gyro_axis)`
-  on files confident enough to answer (|r| ≥ 0.9):
+**Units.** `B_Gyro_*` is rad/s; `L_Gyro_*` / `R_Gyro_*` is deg/s. Same naming convention, same file.
+Any feature mixing trunk and thigh gyro without conversion is off by **57.3×**. The clean-layer trust
+check reproduces this from the sagittal regression slope: **0.98** on L/R (deg/s) vs **0.017**
+(≈1/57.3) on B (rad/s).
 
-  | side | files that answer | axis picked | median \|r\| vs `Gyro_Y` | vs `Gyro_Z` |
-  |---|---|---|---|---|
-  | L | 62 | **Z, unanimously** | 0.161 | **0.986** |
-  | R | 65 | **Z, unanimously** | 0.147 | **0.987** |
-  | B | 47 | Z ×45, Y ×2 | 0.316 | **0.961** |
+**Axis: the Deg↔Gyro name crossing is DEVICE-WIDE, not a trunk defect [measured, 2026-07-20].**
+`d(Deg_Y)/dt` tracks `Gyro_Z` on **every** side, not just B. Over the clean corpus, `argmax|r|` of
+`corr(d(Deg_Y)/dt, Gyro_axis)` on files confident enough to answer (|r| ≥ 0.9):
 
-  So there is no "the legs are fine, the trunk is swapped." **`L_Gyro_Y` is no more sagittal than
-  `B_Gyro_Y` is** — the column *name* and the physical axis disagree on all three sides identically.
-  Treat this as a naming convention of the device, not a bug in one IMU.
+| side | files that answer | axis picked | median \|r\| vs `Gyro_Y` | vs `Gyro_Z` |
+|---|---|---|---|---|
+| L | 62 | **Z, unanimously** | 0.161 | **0.986** |
+| R | 65 | **Z, unanimously** | 0.147 | **0.987** |
+| B | 47 | Z ×45, Y ×2 | 0.316 | **0.961** |
 
-  **Consequence for anyone reading the parquet: `*_Gyro_Y` is NOT the sagittal rate.** The channel
-  that matches `*_Deg_Y` (and hence `*_ang_LPF`) is `*_Gyro_Z`. Resolve it from the file's
-  `channel_trust.json` (`sides.<side>.gyro_axis_by_deg_axis`), never from the column name.
+There is no "the legs are fine, the trunk is swapped": **`L_Gyro_Y` is no more sagittal than
+`B_Gyro_Y` is.** The column *name* and the physical axis disagree on all three sides identically — a
+naming convention of the device, not a bug in one IMU.
 
-  **[decided] vs [measured] — read the tag.** The sentence above is an *instruction to readers*,
-  not a description of what the code does. Enforced since 2026-07-20 on exactly one path:
-  `transform.py:check_axis_trust` refuses a file whose measured permutation conflicts on the axis
-  it is about to read. **Nothing else consults the record.** Before that date this path resolved
-  axes from the documented map alone — S1 measured the answer and no consumer read it. When
-  judging whether an anomaly is *handled*, verify a consumer exists; a note saying a record is
-  "recorded" or "must be consulted" is not evidence that anything consults it.
+**Consequence for anyone reading the parquet: `*_Gyro_Y` is NOT the sagittal rate.** The channel that
+matches `*_Deg_Y` (and hence `*_ang_LPF`) is `*_Gyro_Z`. Resolve it from the file's
+`channel_trust.json` (`sides.<side>.gyro_axis_by_deg_axis`), never from the column name.
 
-  Still **not universal**, which is why it is detected and not tabled: two files
-  (`00001_69_…1_14_10_4_0`, `00038_69_…1_15_11_28`) map `B_Deg_Y → B_Gyro_Y` at |r| ≈ 0.96–0.99 (one
-  sign-flipped). A blanket Y↔Z swap would corrupt exactly those — and, per the table above, would
-  have to be applied to L and R too, which the earlier trunk-only framing would have missed.
+**[decided] vs [measured] — read the tag.** That sentence is an *instruction to readers*, not a
+description of what the code does. Enforced since 2026-07-20 on exactly one path:
+`transform.py:check_axis_trust` refuses a file whose measured permutation conflicts on the axis it is
+about to read. **Nothing else consults the record** — before that date this path resolved axes from
+the documented map alone, so S1 measured the answer and no consumer read it. When judging whether an
+anomaly is *handled*, verify a consumer exists; a note saying a record is "recorded" or "must be
+consulted" is not evidence that anything consults it.
 
-- **It is a full PERMUTATION, and it is variant-invariant [measured, 2026-07-20].** Extending the
-  regression to every Deg axis (not just `Deg_Y`) gives the same map on every variant that answers:
+Still **not universal**, which is why it is detected and not tabled: two files
+(`00001_69_…1_14_10_4_0`, `00038_69_…1_15_11_28`) map `B_Deg_Y → B_Gyro_Y` at |r| ≈ 0.96–0.99 (one
+sign-flipped). A blanket Y↔Z swap would corrupt exactly those — and per the table above would have to
+be applied to L and R too, which the earlier trunk-only framing would have missed.
 
-  | | `Deg_X` → | `Deg_Y` → | `Deg_Z` → |
-  |---|---|---|---|
-  | `fb5ea2c2` | X ×68 | Z ×102 | Y ×70 |
-  | `0fda484e` | X ×15 | Z ×20 | Y ×10 |
-  | `4bfd6ab2` | X ×4 | Z ×5 | Y ×3 |
+**It is a full PERMUTATION, and it is variant-invariant [measured, 2026-07-20].** Extending the
+regression to every Deg axis gives the same map on every variant that answers:
 
-  **X→X, Y→Z, Z→Y**, identically, with no firmware-era dependence. `DOCUMENTED_GYRO_PERMUTATION`.
+| | `Deg_X` → | `Deg_Y` → | `Deg_Z` → |
+|---|---|---|---|
+| `fb5ea2c2` | X ×68 | Z ×102 | Y ×70 |
+| `0fda484e` | X ×15 | Z ×20 | Y ×10 |
+| `4bfd6ab2` | X ×4 | Z ×5 | Y ×3 |
 
-- **The permutation is NOT sagittality, and conflating them was a real bug [measured, 2026-07-20].**
-  This map says which gyro axis measures which angle axis — a correspondence *internal* to a file,
-  measurable because `Deg` is the reference. It does **not** say which axis is the sagittal plane;
-  that is a hardware-revision fact with no in-file signature (§6.2 measured every signal-only rule
-  for it at below chance) and lives in `SAGITTAL_AXIS_BY_VARIANT`.
+**X→X, Y→Z, Z→Y**, identically, with no firmware-era dependence. `DOCUMENTED_GYRO_PERMUTATION`.
 
-  `channel_trust.json` used to publish a field called **`sagittal_gyro_axis`**, which actually held
-  *"the gyro axis matching `Deg_Y`"*. On `fb5ea2c2` — **the majority variant** — sagittal is `Deg_X`,
-  so the field read `Z` and was wrong. Never a data-path bug (`transform.py` uses the variant
-  lookup and hard-fails on unknown variants), but the S1 exception agent triaged against it.
-  Replaced by `gyro_axis_by_deg_axis` + `conflicts_with_documented`. **§6.2's table and this
-  permutation never disagreed** — every entry there obeys X→X / Y→Z, so its gyro column is
-  derivable from its Deg column.
+**The permutation is NOT sagittality, and conflating them was a real bug [measured, 2026-07-20].**
+The map says which gyro axis measures which angle axis — a correspondence *internal* to a file,
+measurable because `Deg` is the reference. It does **not** say which axis is the sagittal plane; that
+is a hardware-revision fact with no in-file signature (§6.2 measured every signal-only rule for it at
+below chance) and lives in `SAGITTAL_AXIS_BY_VARIANT`. `channel_trust.json` used to publish a field
+called **`sagittal_gyro_axis`** which actually held *"the gyro axis matching `Deg_Y`"*. On `fb5ea2c2`
+— **the majority variant** — sagittal is `Deg_X`, so the field read `Z` and was wrong. Never a
+data-path bug (`transform.py` uses the variant lookup and hard-fails on unknown variants), but the S1
+exception agent triaged against it. Replaced by `gyro_axis_by_deg_axis` + `conflicts_with_documented`.
+**§6.2's table and this permutation never disagreed** — every entry there obeys X→X / Y→Z, so its
+gyro column is derivable from its Deg column.
 
-- **Apply the r-floor PER AXIS, not per side [measured, 2026-07-20 — 11.1 one level down].**
-  First cut of the permutation detector scored the side once and then reported all three axes:
-  **25 anomalies**, nearly all of the form `{X→X, Y→Z, Z→X}` — the two real axes right, `Deg_Z`
-  garbage. `Deg_Z` is the yaw-like axis that *drifts rather than oscillates* (§4.2), so
-  `d(Deg_Z)/dt` is often noise even mid-walk, and its argmax is meaningless. Flooring per axis, so a
-  silent axis abstains instead of dissenting, returns exactly the **2** hand-named anomalies above.
-  *Density needs mass applies to each axis separately, not to the file.*
-- `Deg_Y` needs **no sign normalization** — raw L vs R is already anti-phase in 84% of files.
+**Apply the r-floor PER AXIS, not per side [measured, 2026-07-20 — §11.1 one level down].** The first
+cut of the permutation detector scored the side once and then reported all three axes: **25
+anomalies**, nearly all of the form `{X→X, Y→Z, Z→X}` — the two real axes right, `Deg_Z` garbage.
+`Deg_Z` is the yaw-like axis that *drifts rather than oscillates* (§4.2), so `d(Deg_Z)/dt` is often
+noise even mid-walk and its argmax is meaningless. Flooring per axis, so a silent axis abstains
+instead of dissenting, returns exactly the **2** hand-named anomalies above. *Density needs mass
+applies to each axis separately, not to the file.*
 
-`Deg_Y` is the sagittal (flexion) channel. This is the channel the swap rule reads.
+`Deg_Y` needs **no sign normalization** — raw L vs R is already anti-phase in 84% of files. `Deg_Y`
+is the sagittal (flexion) channel; it is what the swap rule reads.
 
-**RESOLVED (2026-07-20):** unit normalization now lives in the clean layer
+**RESOLVED (2026-07-20):** unit normalization lives in the clean layer
 (`stages/s1_clean/channel_trust.py`). Every gyro channel is normalized to **deg/s**; the sagittal
 axis + unit are **detected per file** (regress `d(Deg_Y)/dt` against each gyro axis, slope → unit,
 argmax|r| → axis) and written to a per-file `channel_trust.json`. Static files, whose derivative
 carries no signal, **abstain** and fall back to the documented convention (r-floor 0.9), recording
-that they did (11.1, density needs mass). Axes are **recorded, not reordered** — no silent mutation.
-Every clean file's B-side is normalized rad/s→deg/s; static sides abstain; a couple of files show a
-confident `B_Deg_Y→B_Gyro_Y` axis anomaly (named above). Per-run rollups live in `clean_report.md`
-and the per-file `channel_trust.json`.
+that they did (§11.1). Axes are **recorded, not reordered** — no silent mutation.
 
 **Verified on the clean output [measured, 2026-07-20]:** re-regressing `Gyro_Z` on `d(Deg_Y)/dt`
-*after* cleaning gives a median slope of **0.987 / 0.984 / 0.986** for L / R / B. The 57.3× is gone —
-B reads deg/s in the parquet like everything else. Note what this check does and does not cover: it
-confirms the **unit** fix landed, and it re-confirms the axis crossing (it had to be run against
-`Gyro_Z`, not `Gyro_Y`, to produce a slope near 1 at all).
+*after* cleaning gives a median slope of **0.987 / 0.984 / 0.986** for L / R / B. The 57.3× is gone.
+Note the scope: it confirms the **unit** fix landed, and it re-confirms the axis crossing — it had to
+be run against `Gyro_Z`, not `Gyro_Y`, to produce a slope near 1 at all.
 
 ### 4.2 Yaw is drift-contaminated — but per-file, not wholesale **[measured]**
+
 Original **[reported]**: in treadmill data yaw correlated with session time at r ≈ −0.95, measuring
 elapsed time not orientation.
 
 Measured on the raw corpus (clean-layer drift test, `|corr(Deg, Time)|` duration-weighted over
 segments ≥ 5 s): **`Deg_Z` is the yaw-like axis** on every side — median |r| ≈ 0.33 vs the sagittal
-`Deg_Y` at ≈ 0.08. But the strong drift signature is **file-specific, not universal**: only a
-minority of files cross |r| ≥ 0.9, and always on `*_Deg_Z` (the flagged channels each run are in
-`clean_report.md` / `channel_trust.json`). So yaw is **flagged per
-channel per file** in `channel_trust.json` (`drift` section), **not dropped wholesale**. It is a
-feature-time exclusion signal; the raw superset is kept.
+`Deg_Y` at ≈ 0.08. But the strong drift signature is **file-specific, not universal**: only a minority
+of files cross |r| ≥ 0.9, and always on `*_Deg_Z`. So yaw is **flagged per channel per file** in
+`channel_trust.json` (`drift` section), **not dropped wholesale**. It is a feature-time exclusion
+signal; the raw superset is kept.
 
-**Any yaw-derived feature must consult the per-file drift flag — [decided], and currently
-UNENFORCED [measured, 2026-07-20].** No code reads `drift_contaminated`. The flag is inert rather
-than honoured, and it happens to cost nothing only because no feature reads `Deg_Z` at all: S2
-trains on the four rotational rev\* features, whose sources are the sagittal `Deg` axis and its
-gyro rate (§6.2). **The first yaw-derived feature must add the consumer** — writing one against
-this section and assuming the exclusion already happens would silently train on drift. Recorded
-here because the earlier wording read as a description of pipeline behaviour and the S1 exception
-agent triaged against it.
+**Any yaw-derived feature must consult the per-file drift flag — [decided], and currently UNENFORCED
+[measured, 2026-07-20].** No code reads `drift_contaminated`. The flag is inert rather than honoured,
+and it costs nothing only because no feature reads `Deg_Z` at all: S2 trains on the four rotational
+rev\* features, whose sources are the sagittal `Deg` axis and its gyro rate (§6.2). **The first
+yaw-derived feature must add the consumer** — writing one against this section and assuming the
+exclusion already happens would silently train on drift.
 
 ### 4.3 The trunk (B) IMU was dropped from rev2 for a real reason **[reported]**
+
 Belly/trunk placement was inconsistent between subjects, and may have been treadmill-mounted in some
 trials. The raw family still carries `B_Deg_*` / `B_Gyro_*` / `B_Acc_*`; treat trunk channels as
 suspect until placement consistency is established per session.
 
-**This flag is about PLACEMENT only.** It is not an axis-labeling flag and it is not a unit flag:
-the Deg↔Gyro name crossing is device-wide (§4.1b), and the rad/s units are fixed in the clean layer.
-The two `B_Deg_Y→B_Gyro_Y` files are an axis anomaly, tracked in §4.1b, not evidence of bad trunk
-placement. Keep the two risks separate — conflating them makes the trunk look doubly untrustworthy
-and lets the L/R axis crossing hide.
+**This flag is about PLACEMENT only.** Not an axis-labeling flag and not a unit flag: the Deg↔Gyro
+name crossing is device-wide (§4.1b) and the rad/s units are fixed in the clean layer. The two
+`B_Deg_Y→B_Gyro_Y` files are an axis anomaly (§4.1b), not evidence of bad trunk placement. Keep the
+two risks separate — conflating them makes the trunk look doubly untrustworthy and lets the L/R axis
+crossing hide.
 
 ### 4.4 `Time` is metadata, not a feature **[decided]**
+
 Used for dt / rate / segmentation only. Never fed to a model.
 
 ### 4.5 `loco` is severed and stays severed **[measured]**
+
 Its "standing" class contains a decile **as periodic at the gait frequency as median walking**. A
 label that fails inspection cannot validate anything. (It is also an outdated algorithm's output
 **[reported]**, but that is the weaker reason — the strong one is that it is demonstrably wrong.)
 
-Not ground truth, not a feature. Must be dropped **by name** — in `0fda484e` files, dropping index
-47 would delete the step counter instead.
+Not ground truth, not a feature. Must be dropped **by name** — in `0fda484e` files, dropping index 47
+would delete the step counter instead.
 
 ### 4.6 `Deg` is a FUSED ESTIMATE, not a transducer reading **[decided, 2026-07-20]**
 
@@ -333,7 +332,6 @@ The measured-vs-computed line in §9 is real but its label is too coarse. An IMU
 transducers — a rate gyro and an accelerometer. **Angle is not among them.** `L/R/B_Deg_*` is the
 sensor's onboard fusion output (gyro integration corrected by the gravity vector, Kalman or
 complementary). It is *computed*; it just happens on the sensor die instead of in app-layer firmware.
-
 The honest partition is three-way, not two-way:
 
 | tier | channels | trust |
@@ -344,16 +342,15 @@ The honest partition is three-way, not two-way:
 
 **This does not change what S1 keeps.** The drop rule targets the third tier, and that is still
 correct — tier 3 is what churns column position between variants and bakes in the era confound (§9).
-`Deg` stays.
+`Deg` stays. What it changes is how `Deg` may be described. Do not call it ground-truth measurement:
 
-**What it changes is how `Deg` may be described.** Do not call it ground-truth measurement:
 - It is the reason **§4.2 yaw drift exists at all.** Drift is what dead-reckoned fusion does with no
   magnetometer to correct heading. §4.2 reports drift as an empirical oddity; this is its mechanism,
   and it predicts the finding: `Deg_Z` (heading, unobservable from gravity) drifts, while `Deg_Y`
   (pitch, continuously corrected by the gravity vector) does not.
 - It means `Gyro` is the *more primitive* channel, not the derived one. §4.1's `Gyro == d(Deg)/dt`
   is true, but the causality runs the other way: `Deg` was integrated **from** `Gyro`. That is why
-  the correlation is so tight (r = 0.999) — it is near-tautological, not independent corroboration.
+  the correlation is so tight (r = 0.999) — near-tautological, not independent corroboration.
 - Its fusion parameters are a device property. Two revisions may fuse differently even where every
   column name matches.
 
@@ -367,44 +364,48 @@ correct — tier 3 is what churns column position between variants and bakes in 
 - **`-1` = human unknown.** Data is fine; a trained human looked and could not call it.
 
 ### 5.2 `-1` is training-poison and evaluation-gold **[decided]**
-It is a hand-drawn map of where confidence *should* be low — the exact signal the current
-rule-based algorithm lacks. Exclude from training targets (ambiguous label = noisy target); retain
-and report separately in evaluation as the natural test set for a confidence signal.
 
-**Exclusion is per ROW, not per window — so a little `-1` still reaches training
-[measured, 2026-08-03, ACCEPTED].** `features.label_window` drops `-1` rows and then votes over
-what survives, so window purity is computed on the remainder. A window can therefore be
-"label-pure" on a small minority of its rows: at the 2 s default, **92 of 4,812** trainable
-windows contain `-1`, **20** are more than half `-1`, and the worst is **93.5%** `-1` — a
-confident `walk` target resting on ~13 of 200 rows. **Decision (Lu, 2026-08-03): leave it.**
-1.9% of targets, and a Random Forest tolerates that much label noise; gating on
-`unknown_frac` would trade measured windows for a threshold nobody has evidence for. Recorded
-because it is a *silent* asymmetry, not because it is currently harmful: `unknown_frac` is
-carried on every window, so if per-rev macro-F1 ever splits along it, this is the first place
-to look. Revisit if the window length grows — a 4 s window swallows more of each `-1` stretch.
+It is a hand-drawn map of where confidence *should* be low — the exact signal the current rule-based
+algorithm lacks. Exclude from training targets (ambiguous label = noisy target); retain and report
+separately in evaluation as the natural test set for a confidence signal.
+
+**Exclusion is per ROW, not per window — so a little `-1` still reaches training [measured,
+2026-08-03, ACCEPTED].** `features.label_windows` drops `-1` rows and then votes over what survives,
+so window purity is computed on the remainder. A window can therefore be "label-pure" on a small
+minority of its rows: at the 2 s default, **94 of 5,984** trainable windows contain `-1`, **22** are
+more than half `-1`, and the worst is **93.5%** `-1` — a confident `walk` target resting on ~13 of
+200 rows. **Decision (Lu, 2026-08-03): leave it.** 1.6% of targets, and a Random Forest tolerates
+that much label noise; gating on `unknown_frac` would trade measured windows for a threshold nobody
+has evidence for. Recorded because it is a *silent* asymmetry, not because it is currently harmful:
+`unknown_frac` is carried on every window, so if per-rev macro-F1 ever splits along it, this is the
+first place to look. Revisit if the window length grows — a 4 s window swallows more of each `-1`
+stretch.
 
 ### 5.3 rev2 label encoding **[measured]**
+
 `annotated_loco_rev2_trial_1.csv`: `int64`, no nulls, three codes — `10` (93.7%), `0` (5.6%),
-`-1` (0.8%), 12 segments. `-1` appears at most but not all transitions, consistent with its
-meaning: absence means the labeler *could* tell.
+`-1` (0.8%), 12 segments. `-1` appears at most but not all transitions, consistent with its meaning:
+absence means the labeler *could* tell.
 
 ### 5.4 Class imbalance makes accuracy meaningless **[measured]**
+
 93.7% walking. A "predict 10 always" model scores 93.7%. Macro-F1 is the headline metric.
 
 ### 5.5 Subject = filename field 2, and it is KNOWN for every file **[measured + confirmed with Lu, 2026-07-20]**
-**Corrected — this reverses the earlier entry.** An earlier version claimed filename field 2 "tracks
-the date block (device / firmware / protocol), not a subject," and concluded subject was
-unrecoverable (a `needs_human`). **Both are wrong.**
+
+**Corrected — this reverses an earlier entry** that claimed field 2 "tracks the date block (device /
+firmware / protocol), not a subject" and concluded subject was unrecoverable (a `needs_human`). Both
+were wrong.
 
 Field 2 is the **subject tag** (Lu, corroborated by the data): its value is constant within every
 session-day folder, and one value (`69`) recurs across **many folders spanning many months**. A
 date/firmware/protocol block cannot span that long; a person tested repeatedly can.
 
-One subject (`69`) dominates the corpus; the others appear in only one or two sessions each, and at
-least one subject has only a degenerate-time-base file (§2.6) so it contributes no usable data. The
-`sub1` / `sub2` markers once on `20260114` were **trial batches of subject 69, not two people**
-(Lu) — since removed from the filenames; they were trial indices, never wearer ids. (Per-subject
-file counts, if needed, come from parsing field 2 across `data/raw/`.)
+One subject (`69`) dominates the corpus; the others appear in only one or two sessions each, and
+subject `70` contributes a single file, which is servable by nothing today — it was the §2.6
+quarantine until the re-export, and is now an unmapped `e5f2660f` (§6.2). Two different reasons, same
+nothing. The `sub1` / `sub2` markers once on `20260114` were **trial batches of subject 69, not two
+people** (Lu) — since removed from the filenames; they were trial indices, never wearer ids.
 
 **Consequences:**
 - Cross-validation groups by **field 2 (subject)**. This defends subject leakage fully; session-day
@@ -415,19 +416,21 @@ file counts, if needed, come from parsing field 2 across `data/raw/`.)
   identity. State that limit honestly; do not overclaim breadth.
 
 ### 5.6 Current corpus class coverage **[reported]**
+
 h-medi contains essentially only STANDING and WALKING. Rare-class separability (stairs, varied
 terrain) is **untestable** on current data. Any claim about rare-class performance is overclaiming.
 
 ### 5.7 The labeled family IS the training asset; features are rotational for a reason **[decided + reported, 2026-07-20]**
+
 The supervised task is **stand (`0`) vs walk (`10`)**, `-1` excluded from targets (§5.2). The **only**
-labeled data is the `data/labeled/rev*/csv/annotated_loco_rev*_trial_*.csv` set — the derived rev2
+labeled data is the `data/labeled/rev*/csv/annotated_loco_rev*_trial_*.csv` set — the `lpf_view`
 family (§6.1), whose four features are `L/R_ang_LPF` (low-pass sagittal angle) and `L/R_angvel_LPF`
 (low-pass angular velocity). The S1 clean corpus (raw IMU superset) carries **no labels**; the two
-never share a file. The open-source gait dataset config.py calls the "primary asset" is **not in the
-repo** — until it is, rev* is the training asset.
+never share a file. The open-source gait dataset `config.py` calls the "primary asset" is **not in
+the repo** — until it is, rev* is the training asset.
 
-**Why only those four (rotational) features — not the fuller raw set (Lu):** some trials are walked on
-a **treadmill**. Any channel encoding *linear translation* (net displacement / stride velocity /
+**Why only those four (rotational) features — not the fuller raw set (Lu):** some trials are walked
+on a **treadmill**. Any channel encoding *linear translation* (net displacement / stride velocity /
 stride length / total gait length) reads ~0 on a treadmill even while the person is plainly walking,
 so it actively misleads a classifier. **Joint angle + angular velocity are rotational** — the limb
 swings the same whether or not the ground moves underneath — so they are treadmill-robust. (Those
@@ -445,29 +448,43 @@ CSV → four rotational features → per-window loco state.
 
 ## 6. Products / families
 
-### 6.1 rev2 is a separate, lossy family **[measured]**
-`Time, L_ang_LPF, R_ang_LPF, L_angvel_LPF, R_angvel_LPF, Label` — 6 columns, sharing only `Time`
-with the raw device family. It discards the trunk IMU, **all accelerometers** (the gravity
-reference, hence all axis/calibration checks), load cells and GCP; and it keeps both
-angular-velocity channels — which are **reliable**, being `d(angle)/dt` (§4.1), not the "untrusted"
-they were once called.
+### 6.1 `lpf_view` is a separate, lossy family **[measured]**
 
-**Do not make rev2 the storage format.** Canonical storage is the name-resolved raw superset. A
+`Time, L_ang_LPF, R_ang_LPF, L_angvel_LPF, R_angvel_LPF, Label` — 6 columns, sharing only `Time`
+with the `raw_device` family.
+
+**It is a REPRESENTATION, not a product [renamed 2026-08-04].** This family was called `rev2_view` in
+`config.FAMILY_MARKERS` and "the rev2 view" throughout these notes, and that was wrong three times
+over: `data/labeled/` holds **eight** revisions on this shape (rev2, rev3, rev4, rev5, rev6, rev7,
+rev8, rev13), not one; the marker column `L_ang_LPF` names a filter, not a firmware; and the files
+`stages/s2_ml/label.py` writes from raw device logs land in this family too. **Measured: zero
+`lpf_view` files exist under `data/raw/` (91/91 `raw_device`) and zero `raw_device` files under
+`data/labeled/` (43/43 `lpf_view`)** — the split is clean, so the family marker is never load-bearing
+within a directory, only across the two paths that read them.
+
+It discards the trunk IMU, **all accelerometers** (the gravity reference, hence all axis/calibration
+checks), load cells and GCP; and it keeps both angular-velocity channels — which are **reliable**,
+being `d(angle)/dt` (§4.1), not the "untrusted" they were once called.
+
+**Do not make `lpf_view` the storage format.** Canonical storage is the name-resolved raw superset. A
 wide honest table can always be projected down; a narrow one can never be recovered.
 
-**The labeled rev\* set is MIXED-RATE across trials [measured, 2026-07-20].** Not one family rate:
-by median-dt, `rev13` is 100 Hz, `rev14` ~99.4 Hz, `rev2` `trial_1/2` are 500 Hz while `trial_3/4`
-are 200 Hz. (No contradiction with §7's "rev2 samples at 494 Hz" — that is the *span/n* estimate on
-one file; median-dt reads 500. The two legitimately disagree, which is exactly why `manifest.py`
-reports both.) Consequence: **never assume a rate for this family** — detect per trial and normalize.
+**The labeled rev\* set is MIXED-RATE across trials [measured, 2026-07-20].** By median-dt, `rev13`
+is 100 Hz, `rev14` ~99.4 Hz, `rev2` `trial_1/2` are 500 Hz while `trial_3/4` are 200 Hz. (No
+contradiction with §7's "rev2 samples at 494 Hz" — that is the *span/n* estimate on one file;
+median-dt reads 500. The two legitimately disagree, which is why `manifest.py` reports both.)
+Consequence: **never assume a rate for this family** — detect per trial and normalize.
 `stages/s2_ml/dataset.py` puts every trial on the 100 Hz grid via S1's `resample_file`, so windowing
 downstream sees one rate. Dropped in the process: only the §3.2 startup-burst fragments (~0.011% of
 rows), and they are counted, not silently discarded.
 
-### 6.2 The raw→rev2 mapping is RESOLVED EXACTLY **[measured, 2026-07-20 — supersedes the earlier approximation]**
-Established by reproducing the labeled columns from raw to **~1e-13 (float roundoff)** on **19 paired
+### 6.2 The raw→`lpf_view` mapping is RESOLVED EXACTLY **[measured, 2026-07-20]**
+
+Established by reproducing the labeled columns from raw to **~1e-13 (float roundoff)** on **18 paired
 recordings** — annotated trials and raw files with identical `Time` vectors and row counts, found by
 matching `t[0]`/`t[-1]`/`n`. Source: HUROTICS MATLAB LPF FILES (`LPF.m`, `timestamp.m`, `csv2mat.m`).
+(This entry said **19** until 2026-08-03; enumerating them yields 18, and the pairing is unambiguous
+— every annotated trial matches zero or one raw file, at `max|Δt| = 0`. See `caveats.md` §3.4.)
 
 **The transform.** First-order *causal* IIR (single pole), applied per channel:
 
@@ -488,34 +505,59 @@ features relative to labels.
 
 **The sagittal axis is a DEVICE property, not a signal property — resolve it by schema variant:**
 
-| variant | `*_ang_LPF` ← | `*_angvel_LPF` ← | revs | raw files |
-|---|---|---|---|---|
-| `fb5ea2c2` | `Deg_X` | `Gyro_X` | rev13, rev14 | 62 |
-| `0fda484e` | `Deg_Y` | `Gyro_Z` | rev7, rev8 | 11 |
-| `4bfd6ab2` | `Deg_Y` | `Gyro_Z` | rev4 | 5 |
+| variant | `*_ang_LPF` ← | `*_angvel_LPF` ← | revs | raw files | pairs behind it |
+|---|---|---|---|---|---|
+| `fb5ea2c2` | `Deg_Y` | `Gyro_Z` | rev13, rev14 | 62 | 7 (all rev13) |
+| `0fda484e` | `Deg_Y` | `Gyro_Z` | rev7, rev8 | 11 | 10 |
+| `4bfd6ab2` | `Deg_Y` | `Gyro_Z` | rev4 | 5 | 1 |
 
-**Every row of this table obeys the §4.1b permutation** (X→X, Y→Z, Z→Y): `fb5ea2c2` pairs `Deg_X`
-with `Gyro_X`, the others pair `Deg_Y` with `Gyro_Z`. So the **`*_angvel_LPF` column above is
-derivable from the `*_ang_LPF` column** and carries no independent information — the only per-variant
-fact here is *which Deg axis the exporter treated as sagittal*.
+**This table's `fb5ea2c2` row read `Deg_X`/`Gyro_X` until 2026-08-03, and it was wrong [corrected,
+measured].** Re-derived against all 18 pairs: every one reproduces to **≤7.3e-13** from `Deg_Y`,
+while `Deg_X` misses by 177–381 deg and `Deg_Z` by 99–460. The error rode in `transform.py`'s lookup,
+so it would have mis-served the majority variant — 62 of 91 raw files — had anything called that
+path; nothing did until the serve path was built. See `caveats.md` §5 for the per-variant error table
+and why it survived. **Re-derive this table with `python -m stages.s2_ml.verify_transform`; do not
+trust the prose around it, including this paragraph.**
 
-`fb5ea2c2` is therefore **not** an anomalous *permutation* — it is wired like every other variant.
-It is simply a revision whose sagittal plane is `Deg_X`. (An earlier version of this entry called it
-"the anomaly family" by pointing at `SAGITTAL_DEG_AXIS`/`DOCUMENTED_SAGITTAL_GYRO_AXIS`, constants
-that conflated the permutation with sagittality and have since been **deleted** — see §4.1b.) The
-genuine §4.1b anomalies are the two files whose *permutation* breaks, `B_Deg_Y → B_Gyro_Y`; one of
-them, `00001_69_…1_14_10_4_0.csv`, happens to be the raw file paired with `rev13_trial_1`, which is
-why S1 and the Phase-2 exception agent both flagged it. That coincidence is what made the two
-questions look like one.
-Coverage: **78 of 97 raw files (80%)**; unmapped are `e5f2660f` (mostly the §2.6 quarantine family)
-and `86069795`. Unknown variant ⇒ **abstain**, do not guess.
+**Every row obeys the §4.1b permutation** (X→X, Y→Z, Z→Y): all three pair `Deg_Y` with `Gyro_Z`. So
+the **`*_angvel_LPF` column is derivable from the `*_ang_LPF` column** and carries no independent
+information — the only per-variant fact here is *which Deg axis the exporter treated as sagittal*.
 
-**Signal-only axis detection DOES NOT WORK [measured — all rules scored below chance].** Over the 19
+What the corrected table no longer supports: **no measured variant differs.** Every hardware revision
+with a paired recording reads `Deg_Y`, which is also what §4.1/§4.2 say sagittal is on the raw side.
+The per-variant *structure* is kept anyway, because sagittality has no in-file signature and "three
+revisions agree" is not a licence to default a fourth — but the earlier framing of `fb5ea2c2` as a
+revision that wired its sagittal plane differently described something this corpus never contained.
+(The constants that conflated the permutation with sagittality, `SAGITTAL_DEG_AXIS` /
+`DOCUMENTED_SAGITTAL_GYRO_AXIS`, have since been **deleted** — see §4.1b.) The genuine §4.1b
+anomalies are the two files whose *permutation* breaks, `B_Deg_Y → B_Gyro_Y`; one of them,
+`00001_69_…1_14_10_4_0.csv`, is the raw file paired with `rev13_trial_1`, which is why S1 and the S1
+exception agent both flagged it. That coincidence is what made the two questions look like one — and
+it is on `B`, which the feature path never reads.
+
+**Coverage: 78 of 91 raw files (86%).** The 13 that abstain are **all unmapped-variant** — the 11
+`e5f2660f` files and the 2 `86069795` ones, exactly (`labeled_raw/abstentions.jsonl`: 13 rows, every
+`refusal` an `UnknownVariantError`, 2026-08-04). Unknown variant ⇒ **abstain**, do not guess —
+`stages/s2_ml/label.py` does exactly that, with a stated reason and no output.
+
+> **Corrected 2026-08-04.** This read *"12 are unmapped-variant and exactly 1 is the §2.6 quarantined
+> file — the two failures are near-disjoint"*, and the disjointness was wrong the day it was written:
+> the §2.6 file **is** an `e5f2660f` file, so the sets were nested. The 12/1 count came from
+> `verify_serve` (deleted with S4) and does not reproduce against the live artifact; which of the two
+> guards a doubly-failing file was billed to depended on which ran first, and that is not recoverable
+> now. **A reason breakdown is a fact about guard order, not a partition of the files** — do not read
+> one as the second unless the guards are known independent.
+
+**Signal-only axis detection DOES NOT WORK [measured — all rules scored below chance].** Over the
 ground-truth pairs: variant lookup **100%**, gait-band energy 16%, antiphase×amplitude 16%, raw
-amplitude 5% — against a 33% random baseline. Worse than chance is systematic, not noise: the
-highest-amplitude Deg axis is reliably *not* sagittal, because `Deg_Z`'s variance is dominated by yaw
-drift (§4.2). L/R antiphase is **necessary but not sufficient** — every projection of a planar leg
-swing is antiphase, so it cannot discriminate. Do not re-attempt these; extend the lookup instead.
+amplitude 5% — against a 33% random baseline. (The signal-rule scores are as originally measured over
+the set this entry then called 19. Variant lookup is **100% on 18/18 as of 2026-08-03**, but only
+after the `fb5ea2c2` correction above — on the table as published it was 11/18, itself worse than the
+33% baseline, and the sharpest available argument for re-running a check rather than citing it.)
+Worse than chance is systematic, not noise: the highest-amplitude Deg axis is reliably *not*
+sagittal, because `Deg_Z`'s variance is dominated by yaw drift (§4.2). L/R antiphase is **necessary
+but not sufficient** — every projection of a planar leg swing is antiphase, so it cannot discriminate.
+Do not re-attempt these; extend the lookup instead.
 
 **The labeled features ARE all genuinely sagittal [measured].** Independent of any raw file, every
 one of the 9 revs shows L/R antiphase during walking (median r −0.43 to −0.86), including the revs
@@ -534,71 +576,140 @@ training set is physically consistent, even though the *named* source axis diffe
   what §2.5 forbids. The annotated set was NOT produced with it active (paired row counts are
   identical), so labels are clean; but it will alias the next export that runs through it.
 
+### 6.3 Two open asks for HUROTICS: what a variant *is*, and one paired file for the two unmapped ones **[open, 2026-08-04]**
+
+A `variant_id` is **our construct, not a vendor identifier**: sha1 of the file's header after the
+positional `NN_` prefix is stripped, first 8 hex (`stages/s1_clean/census.py::fingerprint`). It is
+computed from the first CSV row and nothing else — no filename, no folder, no sidecar. We *read* it
+as "one exporter build", and §6.2's lookup is keyed on it at **one sagittal axis per key**. Nobody
+upstream has confirmed that reading.
+
+Measured from `runs/regen/s1_census/manifest.jsonl` (91 raw files; subject = filename field 2, §5.5):
+
+| variant | cols | files | subjects | sessions | axis mapped |
+|---|---|---|---|---|---|
+| `fb5ea2c2` | 67 | 62 | 69 | 20251230–20260128 | yes (7 pairs, all rev13) |
+| `0fda484e` | 67 | 11 | 63, 69 | 20251024–20251226 | yes (10 pairs) |
+| `e5f2660f` | 91 | 11 | 69, 100, 70 | 20260515–20260522 | **no** |
+| `4bfd6ab2` | 83 | 5 | 30, 86, 92 | 20251021–20260626 | yes (1 pair) |
+| `86069795` | 79 | 2 | 100 | 20260601 | **no** |
+
+**The header shape tracks neither subject nor time, which is why this is a question and not
+bookkeeping.** Subject `69` appears under three different variants, and `4bfd6ab2` spans the whole
+corpus (2025-10 to 2026-06) while every other variant sits in a contiguous block. So a variant is not
+a person, not a device, and not an era — it is a header, and what generated the header is unknown to
+us.
+
+**Ask 1 — what distinguishes these five headers?** Which exporter/firmware build wrote each, and does
+one variant correspond to exactly **one** hardware revision? Load-bearing rather than curiosity: the
+lookup stores a single axis per variant, so two revisions that happen to share a header would put two
+sagittal wirings behind one key and **nothing downstream would raise**. Ask about `fb5ea2c2` first —
+it is 62 of 91 files, §6.2 documents it as covering rev13 *and* rev14, and all 7 pairs behind its
+entry are rev13. The rev14 half of that claim rests on no measurement.
+
+**Ask 2 — one annotated `lpf_view` export plus its raw source, for `e5f2660f` and for `86069795`.**
+That is the entire cost of the 13 files that abstain today. **One pair per variant is what earns an
+entry in `SAGITTAL_DEG_AXIS_BY_VARIANT`, and it is the only thing that does** — reproducing the four
+`lpf_view` columns from a candidate axis is the measurement, and 11 `e5f2660f` + 2 `86069795` raw
+files already sit here unread. More *raw* data from these batches cannot answer it: signal-only axis
+detection scored **below chance** (§6.2), so the axis is not recoverable from inside a file at any
+volume. This is not a labelling backlog we can work through ourselves; the annotation is a means to
+the axis, not the deliverable.
+
+**Do not close either ask by defaulting the unmapped variants to `Deg_Y`** because all three measured
+variants read `Deg_Y`. That is the exact shape of the `fb5ea2c2` bug: a per-variant fact asserted
+from a plausible argument instead of a pair, unreachable by any downstream check, wrong for 68% of
+the corpus for months. Unknown variant abstains until a pair exists.
+
 ---
 
 ## 7. Evaluation
 
 - Headline metric: **macro-F1**.
-- Error taxonomy is a strictly precedence-ordered MECE partition. **Corrected against the
-  implementation [measured, 2026-07-20]** — `locoeval/diagnose.py` in
-  `seowonlpark/hurotics-locotool`, now ported verbatim to `stages/s2_ml/taxonomy.py`:
-
-      correct
-        > omission — a gt segment pred never reaches, split by what pred did instead:
-            · swallowed     — pred flanks it with the SAME label both sides (bout absorbed, no trace)
-            · omission      — pred flanks it with two DIFFERENT labels (transitioned, skipped the class)
-            · edge_omission — touches a recording boundary, so one flank does not exist
-          > flicker — a pred run shorter than 200 ms flanked by equal labels
-            > late  — pred still shows the old label after a gt transition
-              > early — pred already shows the new label before a gt transition
-                > steady_confusion — pred stays in another class for the WHOLE gt segment
-
-  The earlier line here was wrong twice: **there is no `remainder` bucket** (`steady_confusion`
-  absorbs whatever precedence leaves, so the partition closes without a catch-all), and
-  **`omission` splits three ways** — `swallowed` is the one worth watching, since a fully
-  absorbed bout leaves no trace at all. Thresholds: `FLICKER_MAX_MS=200`, `LAG_MAX_MS=1000`,
-  `SUSTAINED_FRACTION=0.5`, `MIN_EVENTS_FOR_STATISTIC=10`, `WEAK_CLASS_F1=0.5`.
-- **The taxonomy is ROW-level (~10 ms) and a windowed classifier cannot be scored by it
-  directly [decided].** A model predicting once per 2 s is piecewise-constant over that
-  span, so it *cannot emit* a run shorter than `FLICKER_MAX_MS` — flicker would read zero
-  by construction, not by merit, and lag would quantize to whole windows. Inference
-  therefore slides the window at a small stride (`stages/s2_ml/predict.py`, 100 ms default,
-  finer than the flicker threshold) and assigns each prediction to the rows around its
-  **centre** — leading-edge assignment would shift every predicted transition half a window
-  late and manufacture `late` rows. Training is unaffected; this is inference-side only.
-  Scoring at row level is also what makes our classifier directly comparable to the
-  incumbent algorithm under its own metrics.
-- The measure layer is **blind**: objective numbers only, no opinion. All judgment lives in diagnose.
-- Ground truth already locates transitions exactly. Do not implement cross-correlation lag search.
-- UNKNOWN is excluded consistently across per-trial and corpus-level metrics.
+- **Always select by time, never by index.** rev2 samples at **494 Hz, not 500** — jitter accumulates
+  to **4.2 s of drift by t=320 s**, so `int(t*fs)` points 4.2 seconds past the event. **AUDITED
+  (2026-07-20) [measured]:** `stages/s1_clean/resample.py` is time-safe — every grid is built from
+  real timestamps (`np.arange(t[0], t[-1], …)`) and every value interpolated against the measured
+  time vector, never reconstructed from a rate. A synthetic 494 Hz segment places a true-t=160000 ms
+  event at output **160000.0 ms (err 0.00)**, vs **+1943 ms** under the `int(t*fs)@500` bug.
+  `manifest.py` / `census.py` never invert rate to an index either.
 - Group by **subject (filename field 2)** for cross-validation (§5.5): subject is known for every
   file, so this defends subject leakage directly. Session-day grouping is subsumed — one subject per
-  day. Caveat: the subject pool is small and `69` dominates (see the census for the live count), so
-  cross-subject claims are bounded by how few distinct subjects exist, not by unknown identity.
+  day. Caveat: the subject pool is small and `69` dominates, so cross-subject claims are bounded by
+  how few distinct subjects exist, not by unknown identity.
 - **The labeled family (rev\*) groups by `rev`, not by field 2** — those filenames have no subject
   field. A `rev` is **one subject on one day** (identity + date unknown; trials within a rev share
-  both, Lu, 2026-07-20). So the group unit there is the rev, and a held-out rev is a genuine
-  "new subject/session" — the honest deployment bar for "classify loco state from an unseen CSV."
+  both, Lu, 2026-07-20). So the group unit there is the rev, and a held-out rev is a genuine "new
+  subject/session" — the honest deployment bar for "classify loco state from an unseen CSV."
 - **Lockbox holdout [decided].** Split the labeled set **before any training**, grouped by rev so no
   trial leaks: *train* (fit) / *validation* (the champion–challenger loop gates promotions here) /
   *lockbox* (1–2 whole revs, sealed, opened **exactly once** at the very end for the honest number).
   The loop must never see the lockbox, or the final macro-F1 is a number it optimized toward, not a
   generalization estimate. Candidate lockbox spans both regimes — a balanced rev (`rev8` ~70/27) plus
   a walk-heavy one (`rev13`).
-- **Always select by time, never by index.** rev2 samples at **494 Hz, not 500** — jitter
-  accumulates to **4.2 s of drift by t=320 s**, so `int(t*fs)` points 4.2 seconds past the event.
-  **AUDITED (2026-07-20) [measured]:** `stages/s1_clean/resample.py` is time-safe — every grid is
-  built from real timestamps (`np.arange(t[0], t[-1], …)`) and every value interpolated against the
-  measured time vector, never reconstructed from a rate. A synthetic 494 Hz segment places a
-  true-t=160000 ms event at output **160000.0 ms (err 0.00)**, vs **+1943 ms** under the
-  `int(t*fs)@500` bug. `manifest.py` / `census.py` never invert rate to an index either.
 - **Per-file calibration, never corpus-wide.** A fixed threshold scores `walk_rec = 0.000` on rev8
-  (it calls every walking window standing); per-file calibration scores 1.000/1.000 on the same
-  file. Do not fit constants to more data — more data yields a better *global* constant, and global
-  is the disease. rev8 wants 0.426 where rev2 wants 0.605; the answer is not needing one.
+  (it calls every walking window standing); per-file calibration scores 1.000/1.000 on the same file.
+  Do not fit constants to more data — more data yields a better *global* constant, and global is the
+  disease. rev8 wants 0.426 where rev2 wants 0.605; the answer is not needing one.
 - **Abstain rather than force.** Coverage of 73–98% is acceptable; abstained windows genuinely
   contain both states, mirroring the human `-1` label. Note the tension: the abstained windows are
   the transitions, which is where a controller most needs an answer.
+- The measure layer is **blind**: objective numbers only, no opinion. All judgment lives in diagnose.
+- Ground truth already locates transitions exactly. Do not implement cross-correlation lag search.
+- UNKNOWN is excluded consistently across per-trial and corpus-level metrics.
+
+**Error taxonomy** — a strictly precedence-ordered MECE partition. **Corrected against the
+implementation [measured, 2026-07-20]** — `locoeval/diagnose.py` in `seowonlpark/hurotics-locotool`.
+It was ported verbatim to `stages/s2_ml/taxonomy.py`. **This entry said that module was "no longer
+in this repo" and that "nothing here currently computes it"; both were retracted 2026-08-04**, when
+the champion/challenger loop came back and brought it with them. `stages/s2_ml/experiment.py` imports
+`bucket_errors` / `aggregate`, `run_experiment(taxonomy=True)` computes the partition over dense
+per-row predictions, and it lands in the per-experiment `taxonomy` block of
+`runs/keep/s2_ml/experiments.jsonl` and in `champion.json`. It is not inert documentation either:
+`experiment.decide()` uses the `steady_confusion` share as its error-type tiebreaker, so these
+thresholds are load-bearing on promotion. Read the caveat at the end of this section before
+trusting the `flicker` bucket:
+
+    correct
+      > omission — a gt segment pred never reaches, split by what pred did instead:
+          · swallowed     — pred flanks it with the SAME label both sides (bout absorbed, no trace)
+          · omission      — pred flanks it with two DIFFERENT labels (transitioned, skipped the class)
+          · edge_omission — touches a recording boundary, so one flank does not exist
+        > flicker — a pred run shorter than 200 ms flanked by equal labels
+          > late  — pred still shows the old label after a gt transition
+            > early — pred already shows the new label before a gt transition
+              > steady_confusion — pred stays in another class for the WHOLE gt segment
+
+An earlier version was wrong twice: **there is no `remainder` bucket** (`steady_confusion` absorbs
+whatever precedence leaves, so the partition closes without a catch-all), and **`omission` splits
+three ways** — `swallowed` is the one worth watching, since a fully absorbed bout leaves no trace at
+all. Thresholds: `FLICKER_MAX_MS=200`, `LAG_MAX_MS=1000`, `SUSTAINED_FRACTION=0.5`,
+`MIN_EVENTS_FOR_STATISTIC=10`, `WEAK_CLASS_F1=0.5`.
+
+**The taxonomy is ROW-level (~10 ms) and a windowed classifier cannot be scored by it directly
+[decided].** A model predicting once per 2 s is piecewise-constant over that span, so it *cannot
+emit* a run shorter than `FLICKER_MAX_MS` — flicker would read zero by construction, not by merit,
+and lag would quantize to whole windows. Inference therefore slides the window at a small stride and
+assigns each prediction to the rows around its **centre**; leading-edge assignment would shift every
+predicted transition half a window late and manufacture `late` rows. Training is unaffected — this is
+inference-side only. Row-level scoring is also what makes our classifier directly comparable to the
+incumbent algorithm under its own metrics.
+
+**The shipped stride is `DEFAULT_INFERENCE_STRIDE_S = 0.25` s** (`stages/s2_ml/train.py`, carried in
+`model_meta.json` and read by `label.py` / `roweval.py`). **Note 250 ms is COARSER than
+`FLICKER_MAX_MS = 200`**, so the argument above does not currently hold: a run shorter than the
+flicker threshold still cannot be emitted.
+
+> **The taxonomy is computed again as of 2026-08-04, and this entry's warning was answered rather
+> than inherited.** It used to end "tolerable only because nothing in this repo computes the
+> row-level taxonomy any more"; `experiment.run_experiment(taxonomy=True)` computes it now. But it
+> does *not* use the 250 ms serve stride. There are two strides, deliberately:
+> `train.DEFAULT_INFERENCE_STRIDE_S = 0.25` is the SERVE path's, chosen for cost over a customer's
+> whole recording, and `predict.DEFAULT_INFERENCE_STRIDE_S = 0.1` is the measurement path's, chosen
+> to sit **finer than `FLICKER_MAX_MS = 200`** so that flicker is expressible at all. `experiment.py`
+> imports the latter. So the `flicker` 0.011 in `champion.json` is a measurement and not an artefact
+> — but read it as a property of the 100 ms grid, not of the shipped 250 ms one, on which a 200 ms
+> flicker still cannot be represented.
 
 ---
 
@@ -610,25 +721,36 @@ training set is physically consistent, even though the *named* source axis diffe
   at a binary that was present, 253 MB, and ran fine standalone. The message is a guess: the SDK
   catches any `FileNotFoundError` during spawn and blames the CLI. The real cause was **WinError 206
   `ERROR_FILENAME_EXCED_RANGE`** — on `CreateProcess` that means *the command line is too long*, not
-  the path.
-  Cause: `run_agent` injects all of DOMAIN_NOTES into the system prompt, and the SDK spent it on
-  argv (`--system-prompt <text>`). This file grew **30,029 → 54,551 chars in one day (+82%)**,
+  the path. `run_agent` injects all of DOMAIN_NOTES into the system prompt and the SDK spent it on
+  argv (`--system-prompt <text>`); this file grew **30,029 → 54,551 chars in one day (+82%)**,
   putting the system prompt at **56,765** against a ~32,767 `CreateProcess` cap. It worked in the
   morning and not by evening; nothing in our code changed, only the size of this file.
-  **Fix:** `run_agent` writes the prompt to `runs/<run>/system_prompt.txt` and passes
-  `system_prompt={"type": "file", "path": …}`, which the SDK forwards as `--system-prompt-file`.
-  A path is O(1) on the command line, so institutional memory can now grow without a ceiling —
-  and the file doubles as an audit record of exactly what each agent was told.
-  **Diagnostic lesson:** an SDK error naming a missing file may be masking any spawn failure.
+  **Fix:** `run_agent` writes the prompt to `runs/keep/agent_runs/<run>/system_prompt.txt` and passes
+  `system_prompt={"type": "file", "path": …}`, which the SDK forwards as `--system-prompt-file`. A
+  path is O(1) on the command line, and the file doubles as an audit record of what each agent was
+  told. **Diagnostic lesson:** an SDK error naming a missing file may be masking any spawn failure.
   Unwrap `__cause__` before believing it — the stated path here was correct and healthy.
-- **Injecting all of DOMAIN_NOTES into every agent has a soft cost too [measured, 2026-07-20].**
-  On the same run, the cheap (haiku-class) exception agent returned 22 verdicts for 23 queue items
-  and stopped populating the `section` field (still citing sections in prose), while cost doubled
-  $0.052 → $0.111. Nothing else changed but prompt size. The deterministic wrapper caught the
-  missing verdict and marked it `needs_human` — no silent drop — but the trend is clear: the
-  whole-file injection does not scale indefinitely. When it bites again, inject the relevant
-  sections per agent rather than the entire file.
-- PowerShell 5.1 does not accept `&&` as a statement separator.
+- **Injecting all of DOMAIN_NOTES into every agent has a soft cost too [measured, 2026-07-20].** On
+  the same run, the cheap (haiku-class) exception agent returned 22 verdicts for 23 queue items and
+  stopped populating the `section` field (still citing sections in prose), while cost doubled
+  $0.052 → $0.111. Nothing else changed but prompt size. The deterministic wrapper caught the missing
+  verdict and marked it `needs_human` — no silent drop — but whole-file injection does not scale
+  indefinitely. The `--system-prompt-file` fix removed the hard ceiling, not this cost. When it bites
+  again, inject the relevant sections per agent rather than the entire file.
+- **Per-agent section injection is the named fix and nobody has scoped it [open, 2026-08-04].** The
+  two bullets above bound the problem from both sides: the hard ceiling is gone, the soft cost is
+  not, and the 2026-08-04 condense bought ~10% against a file that grows every stage — so this
+  returns. What is undecided is *how* to slice, and two constraints make it non-obvious. **(a)**
+  Agents cite sections by number — the `section` field in `exceptions_review.jsonl`, the §-references
+  in `agents/*.py` prompts — so a slice must leave every cross-reference in the injected text
+  resolvable, and this file cross-references heavily (§4.1b ↔ §6.2 ↔ §11.1 alone span three
+  sections). A citation to a section the agent was never shown is a dangling pointer that reads as a
+  grounded verdict. **(b)** The header rule requires an agent to speak up when its evidence
+  *contradicts* an entry; an agent shown only its own sections cannot do that for the entries it was
+  not shown, so narrowing the prompt narrows the contradiction check with it — the mechanism that
+  caught the `fb5ea2c2` axis error (§6.2) and the trunk-only framing (§4.1b). Closing this starts
+  with a measurement, not a guess: which sections each agent actually cites, across the archived
+  `runs/keep/agent_runs/*/system_prompt.txt` and review ledgers.
 - PowerShell 5.1 does not accept `&&` as a statement separator.
 
 ---
@@ -643,55 +765,57 @@ training set is physically consistent, even though the *named* source axis diffe
   this population, which runs to **0.13 Hz** (cadence 16–102 steps/min) **[measured]**.
 - Random Forest is the starting model. The windowing/feature-extraction layer is the durable,
   model-agnostic boundary — **feature selection lives there, not in the clean layer.**
-- **The canonical file keeps MEASURED channels only.** The line is measurement vs computation, not
-  useful vs useless. The device *measures* IMU channels (L/R/B x Deg/Gyro/Acc) and load cells; it
-  *computes* Cadence, Stride Length, Hip_ROM, GCP, Adaptability, admittance, PID state. Computed
-  columns are the firmware's opinion, not observation — the same category as `loco`, and there is
-  nothing to trust-check in a number the firmware derived. Two consequences beyond storage:
-  **(a)** every column that churns position between variants (`Step` 46/47, `Cadence` 45/46, the
-  whole 83/79/91 tail) is a computed one, so dropping them **collapses the schema variants into one**;
-  **(b)** computed values depend on firmware version, so training on them partly learns which
-  firmware produced the file — the era confound baked into the feature set.
-  Canonical = **30 measured columns**, defined as `KEEP_MEASURED` in `stages/s1_clean/config.py`.
-  (The rule targets *app-layer* compute; on-sensor fusion is a separate tier — see §4.6.)
-- **The column count is 30, 32 or 33 depending on which question is asked. All three are right
-  [measured, 2026-07-20]** — recorded because the drift looked like a bug and is not:
-  | count | is | where it comes from |
-  |---|---|---|
-  | **30** | `KEEP_MEASURED` | `Time` + 27 IMU (3 sides × Deg/Gyro/Acc × XYZ) + 2 load cells |
-  | 32 | 30 + the `Hip_Deg` pair | **historical — no longer produced**, see below |
-  | **33** | what is on disk | 32 + `segment`, which the clean layer *adds* |
-
-  `segment` is pipeline metadata (§3.1), not a raw column, which is why it appears in no `KEEP_*`
-  tuple. `Label` is **not** among these: raw carries no labels (§0), so `KEEP_IF_PRESENT` only fires
-  on the labeled family. **After the `Hip_Deg` removal below, raw-side clean output is 31 columns**
-  (30 measured + `segment`).
-- **`KEEP_EXCEPTIONS` is now EMPTY — the measured-only rule has no exceptions
-  [decided, 2026-07-20 — reverses the entry below it].** `Hip_Deg_L` / `Hip_Deg_R` were retained as
-  a bridge to the open-source gait dataset's `Hip_Flex_L/R`. Removed, because every premise of the
-  exception failed when checked:
-  - **It is redundant.** `corr(Hip_Deg_<side>, <side>_Deg_Y)` = **0.991** median across the clean
-    corpus (vs ~0.02–0.21 against X and Z). It is the sagittal angle S1 already keeps, re-zeroed.
-  - **But not a clean function of it**, which is worse than being redundant. Affine fits give slope
-    ~0.96–0.99 with a per-file offset of −75 to −88°, and max residual **4° to 152°**. The
-    unmodeled remainder *is* the firmware's zeroing convention — the exact firmware-version signal
-    the measured-only rule exists to strip (§9 consequence **b**). The old entry flagged that
-    convention as `[open]`; the resolution is that we do not need it.
-  - **It is dead on part of the corpus.** Zero-variance on **12 of 180** (file, side) pairs — six
-    files, four flat at `0.0`, and twice **frozen at a nonzero constant** (`-7.42`, `+9.58`), which
-    no `!= 0` sanity guard would catch.
-  - **The bridge had no far side.** §5.7: the open dataset is *not in the repo*. Nothing downstream
-    ever read the column — S2 trains on the four rotational rev* features only.
-
-  Recoverable by name from `data/raw/` if that dataset ever arrives — the same standing as `loco`
-  and `L/R_Ref_Force`. **The exception mechanism stays in place; it just holds nothing.** An empty
-  `KEEP_EXCEPTIONS` is a stronger invariant than a populated one: canonical == measured, no caveat.
+- Storage cost is a file-format problem, not a column-count problem: clean output is **parquet**.
+- HMM is a post-processing smoothing layer, not a standalone model. Its transition penalty trades off
+  against transition lag — the same problem the existing rule-based algorithm has. Tune it
+  deliberately; do not adopt naively.
 - `L_Ref_Force` / `R_Ref_Force` are excluded as controller setpoints (commanded, not measured).
   **[open]** — not yet confirmed with the firmware side.
-- Storage cost is a file-format problem, not a column-count problem: clean output is **parquet**.
-- HMM is a post-processing smoothing layer, not a standalone model. Its transition penalty trades
-  off against transition lag — the same problem the existing rule-based algorithm has. Tune it
-  deliberately; do not adopt naively.
+
+**The canonical file keeps MEASURED channels only.** The line is measurement vs computation, not
+useful vs useless. The device *measures* IMU channels (L/R/B × Deg/Gyro/Acc) and load cells; it
+*computes* Cadence, Stride Length, Hip_ROM, GCP, Adaptability, admittance, PID state. Computed
+columns are the firmware's opinion, not observation — the same category as `loco`, and there is
+nothing to trust-check in a number the firmware derived. Two consequences beyond storage:
+**(a)** every column that churns position between variants (`Step` 46/47, `Cadence` 45/46, the whole
+83/79/91 tail) is a computed one, so dropping them **collapses the schema variants into one**;
+**(b)** computed values depend on firmware version, so training on them partly learns which firmware
+produced the file — the era confound baked into the feature set. Canonical = **30 measured columns**,
+`KEEP_MEASURED` in `stages/s1_clean/config.py`. (The rule targets *app-layer* compute; on-sensor
+fusion is a separate tier — §4.6.)
+
+**The column count is 30, 32 or 33 depending on which question is asked. All three are right
+[measured, 2026-07-20]** — recorded because the drift looked like a bug and is not:
+
+| count | is | where it comes from |
+|---|---|---|
+| **30** | `KEEP_MEASURED` | `Time` + 27 IMU (3 sides × Deg/Gyro/Acc × XYZ) + 2 load cells |
+| 32 | 30 + the `Hip_Deg` pair | **historical — no longer produced**, see below |
+| **33** | what was on disk | 32 + `segment`, which the clean layer *adds* |
+
+`segment` is pipeline metadata (§3.1), not a raw column, which is why it appears in no `KEEP_*` tuple.
+`Label` is **not** among these: raw carries no labels (§0), so `KEEP_IF_PRESENT` only fires on the
+labeled family. **After the `Hip_Deg` removal, raw-side clean output is 31 columns** (30 + `segment`).
+
+**`KEEP_EXCEPTIONS` is now EMPTY — the measured-only rule has no exceptions [decided, 2026-07-20].**
+`Hip_Deg_L` / `Hip_Deg_R` were retained as a bridge to the open-source gait dataset's `Hip_Flex_L/R`.
+Removed, because every premise of the exception failed when checked:
+- **It is redundant.** `corr(Hip_Deg_<side>, <side>_Deg_Y)` = **0.991** median across the clean corpus
+  (vs ~0.02–0.21 against X and Z). It is the sagittal angle S1 already keeps, re-zeroed.
+- **But not a clean function of it**, which is worse than being redundant. Affine fits give slope
+  ~0.96–0.99 with a per-file offset of −75 to −88°, and max residual **4° to 152°**. The unmodeled
+  remainder *is* the firmware's zeroing convention — the exact firmware-version signal the
+  measured-only rule exists to strip (consequence **b** above). The old entry flagged that convention
+  as `[open]`; the resolution is that we do not need it.
+- **It is dead on part of the corpus.** Zero-variance on **12 of 180** (file, side) pairs — six files,
+  four flat at `0.0`, and twice **frozen at a nonzero constant** (`-7.42`, `+9.58`), which no `!= 0`
+  sanity guard would catch.
+- **The bridge had no far side.** §5.7: the open dataset is *not in the repo*. Nothing downstream ever
+  read the column — S2 trains on the four rotational rev* features only.
+
+Recoverable by name from `data/raw/` if that dataset ever arrives — the same standing as `loco` and
+`L/R_Ref_Force`. **The exception mechanism stays in place; it just holds nothing.** An empty
+`KEEP_EXCEPTIONS` is a stronger invariant than a populated one: canonical == measured, no caveat.
 
 ---
 
@@ -711,13 +835,16 @@ and when you shift your weight.
 | rev2_t3 | 1.000 | 0.930 | 0.729 | 0.776 |
 | **rev8_t3** (held out) | **0.966** | **1.000** | **0.981** | **0.988** |
 
-**Zero fitted parameters.** `delta = 1°` is a sensor noise floor — 5× the measured standing noise
-came out 0.76–0.88° on all three files independently. `1 swap` is not a chosen threshold: standing
-measures **0** and walking measures **2** on every file across a **4× amplitude range** (rev8 swings
-22°, rev2 swings 49°), so 1 is the only integer between them.
+**Zero fitted parameters.** `delta = 1°` is a sensor noise floor — 5× the measured standing noise came
+out 0.76–0.88° on all three files independently. `1 swap` is not a chosen threshold: standing measures
+**0** and walking measures **2** on every file across a **4× amplitude range** (rev8 swings 22°, rev2
+swings 49°), so 1 is the only integer between them. (Read that claim as scoped to the core rule —
+§10.7.)
 
 Known weakness: slow walking (0.22 Hz stride) yields ~0.9 swaps per 2 s window and abstains. A
-**window-length** problem, not a rule problem (§9).
+**window-length** problem, not a rule problem (§9). Measured and addressed since — §10.5 for the size
+of it, §10.6/§10.7 for what S3 ships now. The bands above are unchanged; what changed is the span
+they are counted over.
 
 ### 10.1 Validated descriptors **[measured]**
 
@@ -729,8 +856,8 @@ Known weakness: slow walking (0.22 Hz stride) yields ~0.9 swaps per 2 s window a
 ### 10.2 Recordings begin at rest **[measured — nearly all files]**
 
 An **external** label — it comes from how sessions are run, not from any algorithm. It gives every
-file a standing reference measured on the same person, sensor and mounting minutes earlier. **This
-is the mechanism that makes per-file calibration possible** (§7), and it is the
+file a standing reference measured on the same person, sensor and mounting minutes earlier. **This is
+the mechanism that makes per-file calibration possible** (§7), and it is the
 calibration-as-data-harvest insight arriving from the physics side.
 
 **[open]** many files also open with a segment of exactly 10 rows (§3.2). Possibly the same files —
@@ -743,17 +870,130 @@ Human labels are `0` / `10` / `-1`. The physics distinguishes more: `WALKING`; `
 offset +17°/−22° from baseline — stopped mid-stride, one leg leading); `STANDING_SHIFTING`
 (**unvalidated — rests on 3 and 8 windows**).
 
-In rev2_t1 the last **61.9 s** labeled WALKING is walking at a third the cadence, and the two
-STANDING bouts are **different postures**. The labels are coarser than the signal.
+In rev2_t1 the last **61.9 s** labeled WALKING is walking at a third the cadence, and the two STANDING
+bouts are **different postures**. The labels are coarser than the signal.
+
+### 10.4 Count swaps about the per-file REST ZERO, not about zero **[decided, measured]**
+
+`L_ang − R_ang` does not sit at 0° at rest. Mounting, cuff position and the sensor's own zeroing
+convention give every recording a per-subject interleg offset, and a large enough one holds the signal
+entirely to one side of `±delta` through real gait — every crossing suppressed, walking read as 0
+swaps. So the swap count is taken on `d − interleg_center`, where the centre comes from
+`features.rest_reference` (§10.2 is what makes this possible).
+
+**S3 shares S2's `rest_reference` rather than measuring its own, deliberately.** A swap count taken
+about a different origin than the `ileg_*` features the model reads would be a *silent* disagreement
+between the two stages rather than a visible one. Recordings that never rest fall back to a
+whole-recording median and carry `rest_offset_trusted = False` — **90 windows, 1.4%** on the current
+run. See `caveats.md` §2.2 for what that trade cost.
+
+The offset is removed for the **swap count only**. For the §10.1 descriptors the offset *is* the
+posture — `interleg_offset` is what separates feet-together from split stance — so subtracting it
+there would delete the signal.
+
+### 10.5 The fixed 2 s span under-calls walking, and here is how much **[measured, 2026-08-03]**
+
+§10's known weakness, quantified on the 5,984 label-pure development windows:
+
+| span | walk recall | stand recall | AMBIGUOUS share |
+|---|---|---|---|
+| fixed 2 s | **0.7092** | 0.8007 | 24.0% |
+| stride-adaptive (§10.6/§10.7) | **0.9384** | 0.7796 | **5.3%** |
+
+Nearly a third of genuine walking failed the `>=2 swaps` bar on a 2 s span, and a quarter of all
+windows landed in AMBIGUOUS. This is the rule abstaining exactly where §9 predicted it would — under
+one full stride of evidence — not the rule being wrong.
+
+Over all 6,339 windows rather than the label-pure subset, the same move reads:
+
+| verdict | fixed 2 s span | stride-adaptive span |
+|---|---|---|
+| `STANDING` | 955 | 833 |
+| `AMBIGUOUS` | **1,543** | **380** |
+| `WALKING` | 3,841 | 5,126 |
+
+Median adaptive span **3.3 s** (base 2.0 s, max 6.0 s) — the span grew on most windows, and the 380
+that still abstain are what §10.7 is holding down.
+
+> **This tally is frozen and nothing regenerates it.** It was rendered on 2026-08-03 by
+> `s3_physics/run.py` from `anchors.csv`, a 1.4 MB per-window table that existed only to feed S4's
+> join; both went when S4 did on 2026-08-04, and reproducing these six numbers today would mean
+> reviving a stage deleted for having no reader. They are quoted here rather than left in a `runs/`
+> page because a snapshot sitting among stage reports reads as current output — the argument in
+> §10.6/§10.7 is what they are evidence for, so this is where they live.
+>
+> **The rule itself is unchanged and still runs.** `label_audit.py` scores every trial against it,
+> `serve.py` carries the identical verdict onto the serve path, and `rate_audit.py` reproduces that
+> run's audit table exactly (`antiphase` 0.0005, `gyro_energy` 0.4994) — the standing check that the
+> rule did not drift when its driver was deleted and its audit re-homed. What is gone is the
+> per-window *tally*, not the rule that produced it.
+
+Note the trade: stand recall gives up 0.021 for walk recall's 0.229. A longer span sees more chances
+to swap, so some standing with a weight shift in it crosses the bar. §10.7 exists to hold that leak
+down.
+
+### 10.6 Size the analysis span to the stride **[decided, measured 2026-08-03]**
+
+Per window centre, estimate the stride period from the interleg signal over the maximum span, and
+count swaps over `±period` instead of `±1 s` — clipped to `[base window, MAX_SWAP_WINDOW_S]`
+(`stages/s3_physics/anchors.py`, `MAX_SWAP_WINDOW_S = 6.0`, `ADAPTIVE_PERIODICITY_FLOOR = 0.35`). A
+cell with no detectable period keeps the base window, so **standing does not grow a span** — only
+motion does. Median shipped span: **3.3 s**. The cap matters as much as the sizing: an unbounded span
+eventually swallows a whole bout and averages two states into one verdict.
+
+The swap count and the adaptive periodicity read the **same** span, single-sourced in
+`_adaptive_span`. Two spans would let a verdict and its own supporting evidence describe different
+stretches of time.
+
+### 10.7 The grow fallback needs three gates, not a swap count **[decided, measured 2026-08-03]**
+
+When the base verdict is not WALKING, S3 re-counts over the full 6 s span — but accepts WALKING only
+if that span *genuinely alternates*. Over 6 s, **a person who shifts their weight twice produces two
+crossings that are indistinguishable from a slow walker by swap count alone.** So all three must
+pass: both halves swing at least `GROW_MIN_PTP_DEG = 8.0°` (a real stride, not jitter), the legs
+oppose at `-corr(L,R) >= GROW_MIN_ANTIPHASE = 0.5` (alternation, not two isolated shifts), and the
+span still shows `>= 2` swaps.
+
+**This is where the "zero fitted parameters" claim (§10, `caveats.md` §1.3) stops being literally
+true, and it should be said plainly.** `SWAP_DELTA_DEG = 1.0` and the `0/1/>=2` bands remain
+underived-from-labels, but `6.0` s, `0.35`, `8.0°` and `0.5` are chosen constants on the slow-gait
+path. They were picked to make a physically-stated distinction (a stride swings both legs and
+alternates them; a weight shift does neither) rather than tuned against a score, and none was fitted
+to maximise agreement with the annotation — but "zero fitted parameters" is now a statement about the
+*core rule*, not about all of S3. Quote it that way.
+
+### 10.8 The four audited anchors **[measured]**
+
+`ANCHOR_NAMES = (periodicity, antiphase, grav_stab, gyro_energy)` — these, and not the swap rule or
+the §10.1 descriptors, are what the rate-invariance audit issues a verdict for. Current verdicts,
+tolerance 0.1, decimated 100 → 50 Hz through S1's anti-aliasing FIR (`runs/regen/s3_physics/rate_audit.md`,
+regenerated by `python -m stages.s3_physics.rate_audit`):
+
+| anchor | metric | median Δ | verdict |
+|---|---|---|---|
+| `periodicity` | abs | 0.0273 | invariant |
+| `antiphase` | abs | 0.0005 | invariant |
+| `grav_stab` | abs | 0.0001 | invariant |
+| `gyro_energy` | rel | 0.4994 | **rate_dependent** |
+
+`gyro_energy` fails **on purpose** — it sums over samples, so halving the rate halves it. It is the
+audit's negative control: an audit that has never rejected anything is not evidence that the others
+passed (§11.1). It is not a feature and not a fusion input.
+
+Two things the audit itself had to get right first, both in `caveats.md` §5: it must decimate with
+real context either side (on a bare 200-sample window the FIR's edge transient covers over half the
+window and condemned `antiphase` at Δ 0.1734 instead of 0.0005), and it is gated to the windows the
+swap rule calls WALKING — standing has no cadence to compare, and the gate is what keeps the audit
+label-free.
 
 ---
 
 ## 11. Methodology warnings **[measured — each was hit in practice]**
 
-1. **Density needs mass.** Mode-finding declared files "unimodal — one behaviour" when a 5 s stand
-   was 0.4% of the file. Hit **twice**, the second time one message after invoking it as a lesson.
-   *A stop is not a mode; it is a stretch of time.* This is also what broke §4.1 (whole-file p99 on
-   a 93.7%-walking file).
+1. **Density needs mass.** Mode-finding declared files "unimodal — one behaviour" when a 5 s stand was
+   0.4% of the file. Hit **twice**, the second time one message after invoking it as a lesson. *A stop
+   is not a mode; it is a stretch of time.* This is also what broke §4.1 (whole-file p99 on a
+   93.7%-walking file).
 2. **Windows must not straddle edges.** A "32× cadence-invariant" claim measured whole phases, not
    per-window. A bout analysis deleted UNKNOWNs *then* computed runs, silently merging across gaps.
 3. **Index ≠ time.** See §7.
@@ -775,8 +1015,8 @@ STANDING bouts are **different postures**. The labels are coarser than the signa
 
 - **"Walking with no rhythm" does not exist.** Those windows are identical to normal walking on every
   descriptor except a `periodicity` measure that fails at **cadence changes**, not arrhythmia. They
-  occur at ~69 s and ~196 s in *both* trials independently — a protocol event, probably a turn.
-  Claude invented a category to explain its own artifact and nearly asked for it to be defined.
+  occur at ~69 s and ~196 s in *both* trials independently — a protocol event, probably a turn. Claude
+  invented a category to explain its own artifact and nearly asked for it to be defined.
 - **`gyro_energy` bimodality (modes 22 / 61) was two subjects**, unimodal within each (sub1 at 43,
   sub2 at 64) — not two behaviours.
 - **`0.605` (HI/p75 ratio) was `30/49.6` from one file counted twice.** rev8's true ratio is 0.426.
@@ -793,14 +1033,18 @@ fitting. This belongs in the S3 agent's system prompt verbatim.
 
 ## Changelog
 
-| Date | Phase | Added |
+| Date | Milestone | Added |
 |---|---|---|
-| 2026-07-20 | 3 | **"Recorded" ≠ "handled" — audited both places this file claimed handling it did not have.** §4.1b's "resolve it from `channel_trust.json`" and §4.2's "must consult the per-file drift flag" both read as descriptions of pipeline behaviour; **neither had a consumer.** `transform.py` resolved axes from `SAGITTAL_DEG_AXIS_BY_VARIANT` + `DOCUMENTED_GYRO_PERMUTATION` and never opened the per-file record, so a file whose *permutation* breaks on its sagittal axis would have been read on the documented column silently — inert to date only because both known anomalies are B-side and the feature path reads L/R. **FIXED:** `transform.check_axis_trust` hard-fails such a file (same idiom as `UnknownVariantError` — refuse, never guess); `trust` is now a **required** argument on `raw_to_features` with an explicit `TRUST_UNCHECKED` opt-out, so skipping the check is a decision at the call site. Bridge still exact: 19/19 pairs at 7.4e-13. Drift flag left **unenforced and now labelled so** — no yaw feature exists to exclude. **S1 exception agent reworked** for the same root cause: `known_expected`/`novel`/`needs_human` collided on two different axes with no precedence, so the agent now answers two orthogonal questions — `explained` (yes/no/**contradicts**) and `action` (none/human) — and `collapse()` derives the disposition deterministically, so the taxonomy is the pipeline's and not re-decided per run. A contradicted note lands in `novel` (it is a find) with `action` forced to human (never acted on), which was the case the old contradiction rule buried. Queue items now carry machine-derived `handled {value, why}` computed from the real consumers, plus the `conflicts_with_documented` field that was the missing grievance; `confidence` pinned to the disposition, not the cause. Same partition on the current corpus (7 + 2 + 14). |
-| 2026-07-20 | 3 | Provenance audit (4 flags raised on the 33-column canonical set, all checked against the corpus). **CORRECTED §4.1b:** the Deg↔Gyro Y↔Z crossing is **device-wide, not a trunk defect** — `d(Deg_Y)/dt`→`Gyro_Z` unanimously on L (62 files) and R (65), and 45/47 on B; `L_Gyro_Y` is no more sagittal than `B_Gyro_Y` (median \|r\| 0.16 vs 0.99). The earlier trunk-only framing would have sent a fix to one side of a three-side convention. Post-clean slopes 0.987/0.984/0.986 confirm the unit fix landed. **§4.3 narrowed** to placement risk only. **NEW §4.6:** `Deg` is on-sensor *fusion*, not a transducer reading — three-tier provenance (transducer / on-sensor fusion / app-layer compute); explains §4.2 yaw drift mechanistically and demotes §4.1's r=0.999 from corroboration to near-tautology. **CUT `Hip_Deg_L/R`** — `KEEP_EXCEPTIONS` is now empty: 0.991 redundant with `Deg_Y`, residual = firmware zeroing convention, zero-variance on 12/180 (file,side) pairs (twice frozen nonzero), and the open dataset it bridged to is not in the repo (§5.7) — nothing read it. **§9 count reconciliation:** 30 / 32 / 33 all correct, different questions; raw-side clean output is now **31** (30 + `segment`). |
-| 2026-07-16 | 0 | v1 seeded: channel trust, rate confound, label semantics, eval rules, NumPy gotcha |
-| 2026-07-16 | 1 | v2 from the real corpus: 5 variants / 45-col contract / position-is-a-lie; two rate eras; quantization tiers; anti-aliasing proof; segments + startup burst; -1 vs 255; rev2 as lossy family; provenance tags |
-| 2026-07-20 | 2→3 | Phase 2 gate CLOSED: Lu signed off on the exception review (7 `needs_human` = §2.6 broken-clock batch → re-export; 16 `known_expected`; 0 novel). Dead code removed (`Resolution.has`, unreachable `legacy_algo` interp-role). Count-free sweep extended past the prose into code comments, the generated `clean_report.md`, and surviving inventory counts (schema-variant / subject / startup-burst tallies); named-file example stats and this changelog keep their numbers. Phase 3 (S2 loop) starting. |
-| 2026-07-20 | 2 | Phase 2: S1 exception agent (`agents/s1_exception.py`). Read-only agent triages the clean stage's genuine exceptions (quarantines + gyro axis anomalies + yaw-drift flags; routine abstentions summarized, not triaged) into `known_expected` / `novel` / `needs_human`, each grounded in a DOMAIN_NOTES section; deterministic wrapper writes `exceptions_review.jsonl`. Degenerate-time-base quarantines → `needs_human` (re-export); handled anomalies/drift → `known_expected`. Deleted the Phase-0 smoke agent; fixed the shipped-but-uncalled `load_dotenv()`. |
-| 2026-07-20 | 1 | Corpus refreshed (more raw files + new subjects `70`/`92`; `sub1/sub2` markers removed). §2.6 NEW: a 2026-05 batch has a degenerate time base (non-monotonic, duplicated timestamps, median dt=0) — quarantined, the pipeline's first real quarantine; `measure_hz`/`clean_one` now guard `median(dt)>0`. **Records made count-free** (per Lu): live tallies live in the run artifacts, not this file. Gate still holds (partition asserted). |
-| 2026-07-20 | 1 | S1 hardening. **MEASURED:** §4.1b confirmed on all 88 files (gyro units normalized to deg/s in the clean layer, per-file `channel_trust.json`, detect-don't-assert with static-file abstention); §4.2 yaw is `Deg_Z`, drift is file-specific (13 chans / 11 files), flagged not dropped; §7 `resample.py` proven time-safe by drift test. **REVERSED §5.5:** filename field 2 IS the subject (`69` recurs across 5 months) — subject known for every file, `needs_human` RESOLVED (Lu confirmed `sub1/sub2` are trial batches). **DESIGN:** quarantine is a `quarantine.jsonl` ledger, raw file never moved. Docs reconciled (angvel "untrusted"→reliable §6.1; 30-vs-32 cols; PLAN/README status). |
-| 2026-07-16 | 1 | v3 merging the physics/rule-discovery track. **RETRACTED §4.1** (angvel is reliable, r=0.999 — the noise claim was never verified and the "confirming" measurement was taken over a 93.7%-walking file). **NEW:** §4.1b gyro units inconsistent within a file (B=rad/s, L/R=deg/s; Y↔Z swap); §5.5 session ≠ subject, subject unknown for 88/95 (needs_human); §10 the swap rule + validated descriptors + richer states; §11 methodology warnings, broken tests, retractions. **UPGRADED:** §4.5 loco severed with evidence; §6.2 raw→rev2 mapping largely resolved; §7 select-by-time, per-file calibration, abstain-don't-force; §9 window length now an open tradeoff, gait band 0.13 Hz not 0.5–3.0 |
+| 2026-08-04 | 3 | **Condensed.** Repetition, superseded-claim retellings and changelog prose cut. Every section number, tag, table, measured number and stated reason kept; no finding removed. Motivated by §8's soft cost — whole-file injection degrades the cheap agents and doubles their cost. **NEW §8 [open]:** per-agent section injection is the named fix and is unscoped; the ~10% this edit bought does not retire it, and slicing is constrained by §-citations needing to stay resolvable and by the contradiction check narrowing with the prompt. |
+| 2026-08-04 | 3 | **§6.1 family renamed `rev2_view` → `lpf_view`** (`config.FAMILY_MARKERS`; `label.REV2_VIEW` → `LPF_VIEW`, `REV2_COLUMNS` → `GOLDEN_COLUMNS`; roles `rev2_angle`/`rev2_angvel` → `lpf_angle`/`lpf_angvel`). The old name asserted a product where the marker names a representation. Free because the families are cleanly separated on disk (`data/raw/` 91/91 `raw_device`, `data/labeled/` 43/43 `lpf_view`) and **no persisted artifact contained the old strings** — no ledger rewritten. `rev2` as a *subject* (§5.3, §7, `OPERATING_POINTS`, `runs/`) is untouched. |
+| 2026-08-04 | 3 | **Stale-claim sweep against the live artifacts.** **§2.6 CLEARED** — quarantine ledger empty, the named file now reads a clean 500 Hz clock; entry kept because the failure mode recurs. **§6.2 CORRECTED** — the "12 unmapped + 1 quarantined, near-disjoint" split was wrong on both halves (the sets were *nested*; the ledger is 13 rows, all `UnknownVariantError`). Lesson: **a reason breakdown is a fact about guard order, not a partition of the files.** **§5.5 CORRECTED** — subject `70`'s single file is now an unmapped variant, not a degenerate clock. `caveats.md` §3.1 repointed. |
+| 2026-08-04 | 3 | **NEW §6.3 [open]: two asks for HUROTICS.** (1) What a `variant_id` *is* — our sha1 of the stripped header, tracking neither subject nor time, so "one variant = one hardware revision" is assumed and unconfirmed; two revisions sharing a header would go unnoticed. (2) One annotated `lpf_view` export + its raw source for `e5f2660f` and `86069795` — the only thing that can earn them an axis entry, and the entire cost of the 13 abstentions. |
+| 2026-07-20 | 3 | **"Recorded" ≠ "handled" — audited both places this file claimed handling it did not have.** §4.1b's "resolve it from `channel_trust.json`" and §4.2's drift flag both read as descriptions of pipeline behaviour; **neither had a consumer.** **FIXED:** `transform.check_axis_trust` hard-fails a conflicting file (same idiom as `UnknownVariantError` — refuse, never guess); `trust` is a **required** argument on `raw_to_features` with an explicit `TRUST_UNCHECKED` opt-out. Drift flag left **unenforced and now labelled so.** **S1 exception agent reworked** for the same root cause: `known_expected`/`novel`/`needs_human` collided on two axes with no precedence, so the agent now answers two orthogonal questions — `explained` (yes/no/**contradicts**) and `action` (none/human) — and `collapse()` derives the disposition deterministically. Queue items carry machine-derived `handled {value, why}` computed from the real consumers. |
+| 2026-07-20 | 3 | Provenance audit. **CORRECTED §4.1b:** the Deg↔Gyro Y↔Z crossing is **device-wide, not a trunk defect**; the earlier framing would have sent a fix to one side of a three-side convention. **§4.3 narrowed** to placement risk only. **NEW §4.6:** `Deg` is on-sensor *fusion* — three-tier provenance; explains §4.2 drift mechanistically and demotes §4.1's r=0.999 to near-tautology. **CUT `Hip_Deg_L/R`** — `KEEP_EXCEPTIONS` now empty. **§9 count reconciliation:** 30 / 32 / 33 all correct, different questions; raw-side clean output is **31**. |
+| 2026-07-20 | 2→3 | Phase 2 gate CLOSED: Lu signed off on the exception review (7 `needs_human` → re-export; 16 `known_expected`; 0 novel). Dead code removed. Count-free sweep extended past the prose into code comments and generated reports; named-file example stats and this changelog keep their numbers. Phase 3 (S2 loop) starting. |
+| 2026-07-20 | 2 | Phase 2: S1 exception agent (`agents/s1_exception.py`). Read-only triage of genuine exceptions into `known_expected` / `novel` / `needs_human`, each grounded in a DOMAIN_NOTES section; deterministic wrapper writes `exceptions_review.jsonl`. |
+| 2026-07-20 | 1 | Corpus refreshed (new subjects `70`/`92`; `sub1/sub2` markers removed). §2.6 NEW: degenerate time base quarantined — the pipeline's first real quarantine. **Records made count-free** (per Lu). |
+| 2026-07-20 | 1 | S1 hardening. §4.1b confirmed corpus-wide (gyro normalized to deg/s in the clean layer, per-file `channel_trust.json`, detect-don't-assert with static-file abstention); §4.2 yaw is `Deg_Z`, drift file-specific, flagged not dropped; §7 `resample.py` proven time-safe. **REVERSED §5.5:** field 2 IS the subject — `needs_human` RESOLVED. **DESIGN:** quarantine is a ledger; the raw file is never moved. |
+| 2026-07-16 | 1 | v3 merging the physics/rule-discovery track. **RETRACTED §4.1** (angvel is reliable, r=0.999). **NEW:** §4.1b gyro units + Y↔Z swap; §5.5; §10 the swap rule, descriptors, richer states; §11 methodology warnings, broken tests, retractions. **UPGRADED:** §4.5 loco severed with evidence; §6.2 mapping largely resolved; §7 select-by-time, per-file calibration, abstain-don't-force; §9 gait band 0.13 Hz not 0.5–3.0. |
+| 2026-07-16 | 1 | v2 from the real corpus: 5 variants / 45-col contract / position-is-a-lie; two rate eras; quantization tiers; anti-aliasing proof; segments + startup burst; -1 vs 255; lossy view family; provenance tags. |
+| 2026-07-16 | 0 | v1 seeded: channel trust, rate confound, label semantics, eval rules, NumPy gotcha. |

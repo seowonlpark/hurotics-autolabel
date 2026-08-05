@@ -1,0 +1,12 @@
+{
+  "champion": {
+    "path": "runs/regen/s2_ml/champion.joblib",
+    "sha256": "a597626bc00219c20a76e702a91a5a71734dda32f6c52cd636ddd2b83f937677",
+    "bytes": 29384409
+  },
+  "model_meta": {
+    "path": "runs/regen/s2_ml/model_meta.json",
+    "sha256": "31c54bcbd1f6eb27b9804846c05ea274c354157e9b02dede0650486fe615e008",
+    "bytes": 7791
+  }
+}

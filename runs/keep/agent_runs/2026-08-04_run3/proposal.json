@@ -1,0 +1,9 @@
+{
+  "name": "min_leaf2_extratrees",
+  "rationale": "champion_spec.json's MODEL_PARAMS never sets bootstrap, so ExtraTreesClassifier trains every tree on the FULL training set (sklearn default bootstrap=False) with default min_samples_leaf=1, meaning the only source of inter-tree diversity is randomized split thresholds/features rather than bagging's per-tree sample perturbation -- so a single idiosyncratic training window (e.g. a standing bout with an incidental weight-shift, whose whole-window amplitude features like L_ang_LPF_std/ptp and R_ang_p95_p05 spike exactly the way _min_over_parts's own docstring names as this corpus's dominant residual error) can form a size-1 leaf that many trees repeat rather than average away, memorized instead of generalized under leave-one-rev-out; requiring min_samples_leaf=2 is the smallest possible move off that default and forces every leaf to generalize across at least two examples, distinct from the ledger's min_samples_leaf=10 test (which crushed macro-F1 by -0.0549) since that was a heavy regularizer on a bootstrapped RandomForest over a different 18-feature basis, not a minimal nudge on this bootstrap-free ExtraTrees/38-feature basis where no min_samples_leaf value has yet been measured.",
+  "drop_features": [],
+  "window_s": null,
+  "model_params": {
+    "min_samples_leaf": 2
+  }
+}

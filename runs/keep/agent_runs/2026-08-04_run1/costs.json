@@ -1,0 +1,11 @@
+{
+  "stages": [
+    {
+      "ts": "2026-08-04T03:05:53.537168+00:00",
+      "agent": "s3_label_review",
+      "cost_usd": 0.35051375,
+      "num_turns": 1
+    }
+  ],
+  "total_usd": 0.350514
+}

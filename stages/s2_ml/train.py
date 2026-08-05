@@ -1,20 +1,20 @@
-"""S2 train: fit a model, score it honestly, write the artifacts.
-
-    python -m stages.s2_ml.train --out runs/s2_ml
-
-Deterministic core of the champion/challenger loop (PLAN S2). The agent layer proposes
-changes; this module runs them and reports numbers. It never decides what is "best".
-
-Two guarantees it enforces in code, not in comments:
-
-  1. **The lockbox is never touched.** Whole revs are sealed (§7). Training asserts it,
-     so a future refactor that quietly widens the split fails loudly instead of
-     producing an optimistic final number nobody can trust again.
-  2. **Validation is leave-one-rev-out.** A rev is one subject on one day, so holding a
-     whole rev out is the closest honest stand-in for "a new person on a new day" —
-     the deployment question. Random k-fold would split one subject's trials across
-     train and test and report a flattering, meaningless score.
-"""
+# S2 train: fit the champion, score it leave-one-rev-out, write the artifacts; lockbox untouched
+#
+# WHY ExtraTrees and not RandomForest -- `champion_spec.json`'s rationale points here for this,
+# so it lives here rather than in the spec, where every edit re-trips the input stamps of three
+# stages that declare it. Both fitted on identical features, folds and params, 5 seeds each
+# (`runs/keep/ablations/s2_ml_seedsweep.json`):
+#
+#   ExtraTrees     macro-F1 0.9194   coverage @0.85 0.8760   selective accuracy 0.9887
+#   RandomForest   macro-F1 0.9138   coverage @0.85 0.8189   selective accuracy 0.9889
+#
+# The precision a caller gets is the same to within a thousandth. What differs is how much of
+# the corpus is left to be precise ABOUT: RandomForest abstains on nearly one window in five,
+# ExtraTrees on one in eight. The usual explanation -- randomized splits decorrelate the trees,
+# so the vote spreads out instead of piling up against the threshold -- is not measured here;
+# what is measured is the coverage gap, and it is what the choice rests on.
+# `runs/keep/ablations/s2_ml_rf42` is the earlier single-seed RF fit at 42 features that the
+# sweep supersedes; it is kept because it is the only copy of that measurement.
 
 from __future__ import annotations
 
@@ -24,114 +24,145 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.model_selection import LeaveOneGroupOut
 
-from stages.s2_ml.dataset import load_dataset
-from stages.s2_ml.features import TRANSITION, WindowSpec, build_windows, feature_columns
-from stages.s2_ml.locoeval import evaluate, render, save, transition_report
-from stages.s2_ml.predict import DEFAULT_INFERENCE_STRIDE_S, dense_predict_trial
-from stages.s2_ml.taxonomy import (
-    ERROR_BUCKETS,
-    FLICKER_MAX_MS,
-    LAG_MAX_MS,
-    aggregate,
-    bucket_errors,
+from freshness import stamp_inputs
+from runslayout import REGEN
+from stages.s2_ml.dataset import STAND, TRAIN_CLASSES, WALK, load_dataset
+from stages.s2_ml.features import (
+    WindowSpec,
+    amplitude_band,
+    build_windows,
+    feature_columns,
 )
+from stages.s2_ml.locoeval import evaluate, render, save, selective_curve
+from stages.report import add_report_flag
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Random Forest is the documented starting model (§9). Depth is left unbounded; the
-# windowed feature count is small and the champion/challenger loop is where tuning
-# belongs, not a hand-picked constant here.
-MODEL_PARAMS = dict(n_estimators=300, random_state=0, n_jobs=-1, class_weight="balanced")
+# the champion, DECLARED and git-tracked, so the claim travels with the code instead of with runs/
+CHAMPION_SPEC_PATH = Path(__file__).resolve().parent / "champion_spec.json"
 
 
-def build_model() -> RandomForestClassifier:
-    return RandomForestClassifier(**MODEL_PARAMS)
+def load_spec(path: Path = CHAMPION_SPEC_PATH) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
+# READ from the spec, not restated: a promotion rewrites it, and a second copy would trip the assert
+MODEL_PARAMS = load_spec()["params"]
+
+# inference slides the window, so a row averages several overlapping views; training does not
+DEFAULT_INFERENCE_STRIDE_S = 0.25
+
+# named operating points; `balanced` is the lowest threshold where every held-out subject clears 95%
+PRESETS = {"high_coverage": 0.70, "balanced": 0.85, "high_precision": 0.95}
+DEFAULT_PRESET = "balanced"
+
+
+# the champion estimator; the CLASS is not a parameter- a proposal may retune, not replace
+def build_model(params: dict | None = None) -> ExtraTreesClassifier:
+    return ExtraTreesClassifier(**(params or MODEL_PARAMS))
+
+
+# the feature set minus `drop`; an unknown name is fatal- a typo would record a no-op as an ablation
+def select_features(all_feats: list[str], drop: list[str]) -> list[str]:
+    if (unknown := [f for f in drop if f not in all_feats]):
+        raise SystemExit(
+            f"[s2] cannot drop {unknown}: not in the {len(all_feats)} features this corpus "
+            f"builds. Check the spelling against runs/regen/s2_ml/model_meta.json."
+        )
+    return [f for f in all_feats if f not in drop]
+
+
+# refuse to fit a champion the spec does not describe; a DECLARATION check, not a quality gate
+def assert_matches_spec(spec: dict, model, window: WindowSpec, feats: list[str],
+                        dropped: list[str]) -> None:
+    got = {
+        "model": type(model).__name__,
+        "window_s": window.window_s,
+        "stride_s": window.stride_s,
+        "fs_hz": window.fs_hz,
+        "n_features": len(feats),
+    }
+    bad = [f"  {k}: spec says {spec[k]!r}, code builds {v!r}"
+           for k, v in got.items() if spec[k] != v]
+    if sorted(spec["drop_features"]) != sorted(dropped):
+        bad.append(f"  drop_features: spec drops {sorted(spec['drop_features'])}, "
+                   f"this run dropped {sorted(dropped)}")
+    if bad:
+        # ASCII only: an em-dash on a cp949 console turns a clear refusal into a UnicodeEncodeError
+        raise SystemExit(
+            f"[s2] champion drift - {CHAMPION_SPEC_PATH.name} does not describe this code:\n"
+            + "\n".join(bad)
+            + "\n[s2] Fix ONE of them on purpose: revert the code, or update the spec and "
+              "re-run to record what the new champion actually scores."
+        )
+
+
+# label-pure windows of one split, selected POSITIVELY: excluding by name lets a third state through
 def trainable(df: pd.DataFrame, split: str = "train") -> pd.DataFrame:
-    """Label-pure windows of one split. Transitions are excluded from targets (§5.2)."""
-    return df[(df["split"] == split) & (df["label"] != TRANSITION)].reset_index(drop=True)
+    return df[(df["split"] == split)
+              & df["label"].isin(TRAIN_CLASSES)].reset_index(drop=True)
 
 
-def taxonomy_loro(trials, train_df: pd.DataFrame, feats: list[str], spec: WindowSpec,
-                  stride_s: float) -> dict:
-    """Leave-one-rev-out error taxonomy, scored at ROW level via dense inference.
-
-    Held to the same honesty as the macro-F1 CV: a rev's rows are only ever scored by a
-    model that never saw that rev. Dense inference is what makes the millisecond
-    thresholds meaningful (see predict.py).
-    """
-    per_run = []
-    for rev in sorted(train_df["rev"].unique()):
-        fit = train_df[train_df["rev"] != rev]
-        model = build_model()
-        model.fit(fit[feats].to_numpy(float), fit["label"].to_numpy(int))
-        for tr in trials:
-            if tr.split != "train" or tr.rev != rev:
-                continue
-            for gt, pred, t in dense_predict_trial(model, tr.frame, feats, spec, stride_s):
-                per_run.append(bucket_errors(gt, pred, t))
-    return aggregate(per_run)
-
-
-def render_taxonomy(agg: dict, stride_s: float) -> str:
-    lines = [
-        "## Error taxonomy (row-level, leave-one-rev-out)", "",
-        f"Ported from `hurotics-locotool/locoeval/diagnose.py`; thresholds unchanged "
-        f"(flicker < {FLICKER_MAX_MS:g} ms, lag < {LAG_MAX_MS:g} ms). Scored on dense "
-        f"inference at {stride_s * 1000:.0f} ms so the thresholds are resolvable.", "",
-        f"- row accuracy: **{agg['row_accuracy']:.4f}**  "
-        f"({agg['correct_rows']:,} correct / {agg['total_error_rows']:,} error rows)",
-        f"- dominant error bucket: **{agg['dominant']}**", "",
-        "| bucket | rows | share of errors |", "|---|---|---|",
-    ]
-    for b in ERROR_BUCKETS:
-        lines.append(f"| `{b}` | {agg['counts'][b]:,} | {agg['fractions'][b]:.3f} |")
-    return "\n".join(lines)
-
-
-def cross_validate(df: pd.DataFrame, feats: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    """Leave-one-rev-out out-of-fold predictions. Returns (y_true, y_pred)."""
+# leave-one-rev-out OOF P(walk); challengers score through THIS function so the gate compares like
+def cross_validate(df: pd.DataFrame, feats: list[str],
+                   params: dict | None = None) -> np.ndarray:
     X = df[feats].to_numpy(float)
     y = df["label"].to_numpy(int)
-    groups = df["rev"].to_numpy()
-
-    oof = np.empty_like(y)
-    for tr, te in LeaveOneGroupOut().split(X, y, groups):
-        model = build_model()
+    oof = np.zeros(len(y))
+    for tr, te in LeaveOneGroupOut().split(X, y, df["rev"].to_numpy()):
+        model = build_model(params)
         model.fit(X[tr], y[tr])
-        oof[te] = model.predict(X[te])
-    return y, oof
+        oof[te] = model.predict_proba(X[te])[:, list(model.classes_).index(WALK)]
+    return oof
+
+
+# the constants the ambiguity reasons are stated against; label.py reads them instead of hard-coding
+def reference_stats(df: pd.DataFrame, feats: list[str]) -> dict:
+    walk = df[df["label"] == WALK]
+    stand = df[df["label"] == STAND]
+    # how far BOTH thighs sit above this recording's own standing posture- a signature for sitting
+    posture = np.minimum(df["L_ang_med_rest"], df["R_ang_med_rest"])
+    band_lo, band_hi = amplitude_band(df["ileg_minhalf"], df["label"])
+    return {
+        # a walk prediction below where real walking lives is slow gait or sway; either is worth a flag
+        "walk_minhalf_p05": float(np.percentile(walk["ileg_minhalf"], 5)),
+        "posture_shift_p99": float(np.percentile(posture, 99)),
+        # the ambiguity band, so `label.py` reads it off the champion rather than recomputing at serve
+        "band_lo": band_lo,
+        "band_hi": band_hi,
+        # Per-feature training range, for the out-of-distribution check
+        "feat_p01": {c: float(np.percentile(df[c], 1)) for c in feats},
+        "feat_p99": {c: float(np.percentile(df[c], 99)) for c in feats},
+    }
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="runs/s2_ml")
-    ap.add_argument("--window-s", type=float, default=None,
-                    help="window length in seconds (§9 open tradeoff)")
-    ap.add_argument("--window-stride-s", type=float, default=None,
-                    help="windowing stride in seconds; independent of --window-s on "
-                         "purpose, so changing the window does not also change the "
-                         "training-set size (see experiment.py). Not --stride-s, which "
-                         "is the inference stride.")
-    ap.add_argument("--taxonomy", action="store_true",
-                    help="also run the row-level error taxonomy via dense inference (slow)")
-    ap.add_argument("--stride-s", type=float, default=DEFAULT_INFERENCE_STRIDE_S,
-                    help="dense inference stride in seconds")
+    ap.add_argument("--out", default=str(REGEN / "s2_ml"))
+    add_report_flag(ap)
+    # The ONE override here, because it is the one whose output is read: an ablation's `locoeval`
+    # sits beside the champion's in `breakdown`. There is deliberately no `--window-s` twin -- the
+    # window is a field of `ExperimentSpec`, so a window change belongs in the ledger, where it is
+    # recorded with the rationale that motivated it and the decision it drew.
+    ap.add_argument("--drop", nargs="+", metavar="FEATURE", default=None,
+                    help="ablation: train without these features instead of the spec's "
+                         "drop_features. Marks the run an experiment, not the champion.")
     args = ap.parse_args()
 
     out_dir = (REPO_ROOT / args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    default = WindowSpec()
-    spec = WindowSpec(window_s=args.window_s or default.window_s,
-                      stride_s=args.window_stride_s or default.stride_s)
+    spec = WindowSpec()
     trials = load_dataset()
     windows = build_windows(trials, spec)
-    feats = feature_columns(windows)
+
+    # The champion's own drop list unless an ablation overrides it on the command line
+    champion = load_spec()
+    dropped = args.drop if args.drop is not None else champion["drop_features"]
+    feats = select_features(feature_columns(windows), dropped)
 
     train_df = trainable(windows, "train")
     assert "lockbox" not in set(train_df["split"]), "lockbox leaked into training"
@@ -139,60 +170,85 @@ def main() -> None:
     print(f"[s2] window={spec.window_s}s  train windows={len(train_df):,}  "
           f"features={len(feats)}  revs={len(revs)} {revs}")
 
-    y, oof = cross_validate(train_df, feats)
-    result = evaluate(y, oof, groups=train_df["rev"].to_numpy(),
+    # `--drop` is an experiment, not a refit, so say the declaration cannot hold
+    is_experiment = args.drop is not None
+    if is_experiment:
+        print(f"[s2] NOTE: experiment, not the champion "
+              f"(--drop {len(dropped)} feature(s): {' '.join(dropped)})")
+    else:
+        assert_matches_spec(champion, build_model(), spec, feats, dropped)
+        print(f"[s2] champion spec '{champion['name']}' matches the code")
+
+    oof = cross_validate(train_df, feats)
+    y = train_df["label"].to_numpy(int)
+    result = evaluate(y, np.where(oof >= 0.5, WALK, STAND),
+                      groups=train_df["rev"].to_numpy(),
                       unknown_frac=train_df["unknown_frac"].to_numpy())
-    # Stride passed explicitly: train_df has had its `transition` windows removed, so
-    # window adjacency has to be judged against the clock, not array position.
-    trans = transition_report(train_df, oof, stride_ms=spec.stride_s * 1000.0)
+    curve = selective_curve(y, oof, groups=train_df["rev"].to_numpy())
 
     print(f"[s2] leave-one-rev-out macro-F1 = {result.macro_f1:.4f}  "
           f"(acc {result.accuracy:.4f}, balanced {result.balanced_accuracy:.4f})")
     for rev, f1 in sorted(result.per_rev_macro_f1.items()):
-        print(f"[s2]   held-out {rev}: macro-F1 {f1:.4f}")
+        acc = result.per_rev_accuracy[rev]
+        print(f"[s2]   held-out {rev}: macro-F1 {f1:.4f}  acc {acc * 100:.2f}%")
+    print("[s2] window-level selective accuracy:")
+    for row in curve:
+        if row["threshold"] in tuple(PRESETS.values()):
+            print(f"[s2]   thr {row['threshold']:.2f}: coverage {row['coverage']:.4f}  "
+                  f"selective_acc {row['selective_accuracy']:.4f}  "
+                  f"worst_rev {row['worst_rev_accuracy']:.4f} "
+                  f"({row.get('worst_rev') or '?'})")
 
-    # Final model: refit on every training rev. The lockbox stays sealed.
+    # Champion: refit on every training rev; the lockbox stays sealed
     model = build_model()
-    model.fit(train_df[feats].to_numpy(float), train_df["label"].to_numpy(int))
-
+    model.fit(train_df[feats].to_numpy(float), y)
     importances = sorted(zip(feats, model.feature_importances_), key=lambda x: -x[1])
 
-    tax = None
-    if args.taxonomy:
-        print(f"[s2] dense inference @ {args.stride_s * 1000:.0f} ms for the row-level taxonomy...")
-        tax = taxonomy_loro(trials, train_df, feats, spec, args.stride_s)
-        print(f"[s2] row accuracy {tax['row_accuracy']:.4f}, dominant error: {tax['dominant']}")
-        for b in ERROR_BUCKETS:
-            if tax["counts"][b]:
-                print(f"[s2]   {b:<16} {tax['counts'][b]:>8,}  ({tax['fractions'][b]:.3f})")
-
-    save(result, out_dir / "locoeval.json", trans)
-    body = render(result, trans, title="S2 champion — leave-one-rev-out CV")
-    if tax:
-        body += "\n\n" + render_taxonomy(tax, args.stride_s)
-    (out_dir / "locoeval.md").write_text(
-        body + "\n\n## Feature importance (top 12)\n\n"
-        + "\n".join(f"- `{n}`: {v:.4f}" for n, v in importances[:12]) + "\n",
-        encoding="utf-8",
-    )
-    if tax:
-        (out_dir / "taxonomy.json").write_text(json.dumps(tax, indent=2), encoding="utf-8")
+    save(result, out_dir / "locoeval.json", curve=curve)
+    if args.report:
+        (out_dir / "locoeval.md").write_text(
+            render(result, curve, title="S2 champion - leave-one-rev-out CV")
+            + "\n\n## Feature importance (top 12)\n\n"
+            + "\n".join(f"- `{n}`: {v:.4f}" for n, v in importances[:12]) + "\n",
+            encoding="utf-8",
+        )
     (out_dir / "model_meta.json").write_text(json.dumps({
-        "model": "RandomForestClassifier",
-        "params": MODEL_PARAMS,
+        "champion_spec": champion["name"],
+        "dropped_features": sorted(dropped),
+        "model": "ExtraTreesClassifier",
+        "params": dict(MODEL_PARAMS),
         "window_s": spec.window_s, "stride_s": spec.stride_s, "fs_hz": spec.fs_hz,
+        "inference_stride_s": DEFAULT_INFERENCE_STRIDE_S,
         "features": feats,
+        # every feature, not locoeval.md's top 12: the spec's ablation argues from ranks that deep
+        "feature_importance": [[n, float(v)] for n, v in importances],
         "train_revs": revs,
         "n_train_windows": int(len(train_df)),
         "cv": "LeaveOneGroupOut(rev)",
         "macro_f1_cv": result.macro_f1,
+        "presets": PRESETS,
+        "default_preset": DEFAULT_PRESET,
+        "reference_stats": reference_stats(train_df, feats),
     }, indent=2), encoding="utf-8")
 
-    try:
-        import joblib
-        joblib.dump(model, out_dir / "champion.joblib")
-    except Exception as exc:  # model artifact is optional; metrics are not
-        print(f"[s2] WARNING: could not persist model ({exc})")
+    # only a refit persists the estimator, because only a refit has a reader; rerun to get one back
+    if is_experiment:
+        print("[s2] experiment: writing metrics only, no champion.joblib (nothing loads it)")
+    else:
+        try:
+            import joblib
+            joblib.dump(model, out_dir / "champion.joblib")
+        except Exception as exc:  # metrics are the deliverable; the artifact is convenience
+            print(f"[s2] WARNING: could not persist model ({exc})")
+
+    # the spec can change without anyone touching data, so between a promotion and a refit all this lies
+    stamp_inputs(out_dir, {"champion_spec": CHAMPION_SPEC_PATH}, stage="train")
+
+    # This stage used to write the bare `_inputs.json` here, before stamps were split per stage.
+    # Left behind it becomes a stamp with no writer: nothing refreshes it, so the next spec change
+    # makes it complain about a report that was in fact rebuilt. Superseded, so removed by the
+    # stage that owned it -- the same reasoning that deleted `s3_physics/physics.md` (RUNBOOK §7).
+    (out_dir / "_inputs.json").unlink(missing_ok=True)
 
     print(f"[s2] artifacts -> {out_dir}")
 

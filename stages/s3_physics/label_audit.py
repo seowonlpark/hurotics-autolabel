@@ -1,0 +1,356 @@
+# audit the human LABELS against the physics verdict; it nominates, it does not exclude
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from numpy.lib.stride_tricks import sliding_window_view
+from scipy.stats import binomtest
+
+from freshness import stamp_inputs
+from runslayout import REGEN
+from stages.s2_ml.dataset import LABEL_COL, STAND, WALK, Trial, load_dataset
+from stages.report import add_report_flag
+from stages.s2_ml.features import WindowSpec, amplitude_band
+from stages.s3_physics.anchors import AMBIGUOUS, STANDING, WALKING, trial_anchors
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# incoherent when MOST label-pure windows contradict; not tuned- the corpus median is near 0.03
+MAX_DISAGREE = 0.50
+
+# Below this a trial is too short for the fraction to mean anything
+MIN_WINDOWS = 20
+
+# family-wise error rate for the band-policy test: 0.05, Bonferroni'd across the trials tested
+BAND_ALPHA = 0.05
+
+VERDICT_CLASS = {STANDING: STAND, WALKING: WALK}
+
+# what `coherence` carries per window; wider than `band_policy` needs, so `nominate` shares it
+WINDOW_COLUMNS = ["rev", "trial", "split", "segment", "t_start_ms", "label",
+                  "ileg_minhalf", "swap_verdict_adaptive", "swap_count_adaptive",
+                  "swap_window_s", "physics_class", "contradicts"]
+
+# at most this many windows per flagged trial, spread out; ergonomic, and the drops are reported
+MAX_NOMINATIONS_PER_TRIAL = 12
+MIN_NOMINATION_GAP_S = 5.0
+
+
+# human label per window, on the SAME grid `trial_anchors` walks
+def window_labels(trial: Trial, spec: WindowSpec) -> pd.DataFrame:
+    frame = trial.frame.reset_index(drop=True)
+    rows = []
+    for seg_id, seg in frame.groupby("segment", sort=True):
+        seg = seg.reset_index(drop=True)
+        if len(seg) < spec.n:
+            continue
+        L = sliding_window_view(seg[LABEL_COL].to_numpy(), spec.n)[::spec.step]
+        n_stand = (L == STAND).sum(1)
+        n_walk = (L == WALK).sum(1)
+        valid = n_stand + n_walk
+        pure = (valid > 0) & ((n_stand == valid) | (n_walk == valid))
+        starts = np.arange(0, len(seg) - spec.n + 1, spec.step)
+        rows.append(pd.DataFrame({
+            "rev": trial.rev, "trial": trial.trial, "segment": int(seg_id),
+            "t_start_ms": seg["Time"].to_numpy(float)[starts],
+            "label": np.where(n_walk > n_stand, WALK, STAND), "pure": pure,
+        }))
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
+
+# how often this trial's labels contradict the physics verdict
+def coherence(trial: Trial, spec: WindowSpec | None = None
+              ) -> tuple[dict, pd.DataFrame]:
+    spec = spec or WindowSpec()
+    anchors = trial_anchors(trial, spec)
+    labels = window_labels(trial, spec)
+    empty = pd.DataFrame(columns=WINDOW_COLUMNS)
+    if anchors.empty or labels.empty:
+        return ({"rev": trial.rev, "trial": trial.trial, "windows": 0, "disagree": 0,
+                 "disagree_frac": float("nan"), "abstain_frac": float("nan"),
+                 "rest_trusted": False, "flag": False,
+                 "t_first_s": float("nan"), "t_last_s": float("nan"),
+                 "contradict_t_first_s": float("nan"),
+                 "contradict_t_last_s": float("nan")}, empty)
+
+    j = anchors.merge(labels, on=["rev", "trial", "segment", "t_start_ms"],
+                      validate="one_to_one")
+    pure = j[j["pure"]].copy()
+    # carried out rather than recomputed: `disagree_frac` is this column's mean, so they can't differ
+    pure["physics_class"] = pure["swap_verdict_adaptive"].map(VERDICT_CLASS)
+    pure["contradicts"] = pure["physics_class"].notna() & (pure["physics_class"] != pure["label"])
+    pure["split"] = trial.split
+
+    decided = pure[pure["swap_verdict_adaptive"] != AMBIGUOUS]
+    dis = int(pure["contradicts"].sum())
+    n = len(decided)
+
+    # WHERE the contradiction sits, not just how much: the trial's span against the bad windows' span
+    t_c = pure["t_start_ms"] / 1000.0 + spec.window_s / 2.0
+    bad_t = t_c[pure["contradicts"]]
+    return ({
+        "rev": trial.rev, "trial": trial.trial, "windows": n, "disagree": dis,
+        "disagree_frac": dis / n if n else float("nan"),
+        "abstain_frac": float((pure["swap_verdict_adaptive"] == AMBIGUOUS).mean())
+        if len(pure) else float("nan"),
+        "rest_trusted": bool(j["rest_offset_trusted"].iloc[0]),
+        "flag": bool(n >= MIN_WINDOWS and n and dis / n > MAX_DISAGREE),
+        "t_first_s": float(t_c.min()) if len(t_c) else float("nan"),
+        "t_last_s": float(t_c.max()) if len(t_c) else float("nan"),
+        "contradict_t_first_s": float(bad_t.min()) if len(bad_t) else float("nan"),
+        "contradict_t_last_s": float(bad_t.max()) if len(bad_t) else float("nan"),
+    }, pure[WINDOW_COLUMNS].copy())
+
+
+# per-trial annotation convention inside the ambiguity band
+def band_policy(windows: pd.DataFrame, broken: set[tuple[str, int]] | None = None
+                ) -> tuple[pd.DataFrame, tuple[float, float], float]:
+    broken = broken or set()
+    clean = windows[(windows["split"] != "lockbox")
+                    & ~windows.set_index(["rev", "trial"]).index.isin(broken)]
+    lo, hi = amplitude_band(clean["ileg_minhalf"], clean["label"])
+    inband = windows[windows["ileg_minhalf"].between(lo, hi)]
+    corpus = float((inband["label"] == WALK).mean()) if len(inband) else float("nan")
+
+    rows = []
+    for (rev, trial), g in inband.groupby(["rev", "trial"], sort=False):
+        rows.append({"rev": rev, "trial": trial, "band_windows": len(g),
+                     "band_walk": int((g["label"] == WALK).sum())})
+    out = pd.DataFrame(rows, columns=["rev", "trial", "band_windows", "band_walk"])
+    if out.empty:
+        return out.assign(band_walk_frac=[], band_p=[], band_flag=[]), (lo, hi), corpus
+
+    out["band_walk_frac"] = out["band_walk"] / out["band_windows"]
+    testable = out["band_windows"] >= MIN_WINDOWS
+    alpha = BAND_ALPHA / max(int(testable.sum()), 1)
+    out["band_p"] = [
+        binomtest(int(r.band_walk), int(r.band_windows), corpus,
+                  alternative="two-sided").pvalue
+        if r.band_windows >= MIN_WINDOWS else float("nan")
+        for r in out.itertuples()
+    ]
+    out["band_flag"] = out["band_p"].notna() & (out["band_p"] < alpha)
+    return out, (lo, hi), corpus
+
+
+# individual windows a human should adjudicate, with the command that shows them
+def nominate(windows: pd.DataFrame, targets: set[tuple[str, int]],
+             spec: WindowSpec | None = None) -> tuple[pd.DataFrame, int]:
+    spec = spec or WindowSpec()
+    bad = windows[windows["contradicts"] & windows.set_index(
+        ["rev", "trial"]).index.isin(targets)].copy()
+    if bad.empty:
+        return pd.DataFrame(columns=["rev", "trial", "t_center_s", "cmd"]), 0
+
+    # centre, which is what `inspect_window --t` wants: it prints a span AROUND the timestamp
+    bad["t_center_s"] = bad["t_start_ms"] / 1000.0 + spec.window_s / 2.0
+    bad["evidence"] = np.where(
+        bad["physics_class"] == WALK,
+        bad["swap_count_adaptive"].astype(float) - 1.0,
+        1.0 / (1.0 + bad["ileg_minhalf"].clip(lower=0.0).astype(float)),
+    )
+
+    kept, dropped = [], 0
+    for (rev, trial), g in bad.groupby(["rev", "trial"], sort=True):
+        taken: list[float] = []
+        for r in g.sort_values("evidence", ascending=False).itertuples():
+            if len(taken) >= MAX_NOMINATIONS_PER_TRIAL:
+                dropped += 1
+                continue
+            # greedy spread: strongest first, but never within the gap of one already taken
+            if any(abs(r.t_center_s - t) < MIN_NOMINATION_GAP_S for t in taken):
+                dropped += 1
+                continue
+            taken.append(r.t_center_s)
+            kept.append({
+                "rev": rev, "trial": int(trial), "segment": int(r.segment),
+                "t_center_s": round(float(r.t_center_s), 2),
+                "label": "walk" if r.label == WALK else "stand",
+                "physics": r.swap_verdict_adaptive,
+                "swap_count_adaptive": float(r.swap_count_adaptive),
+                "swap_window_s": round(float(r.swap_window_s), 2),
+                "ileg_minhalf": round(float(r.ileg_minhalf), 3),
+                "cmd": f"python -m stages.s3_physics.inspect_window {rev} {int(trial)} "
+                       f"--t {r.t_center_s:.2f}",
+            })
+    return pd.DataFrame(kept), dropped
+
+
+# two detectors, two verdicts, one table
+def render(df: pd.DataFrame, band: tuple[float, float], corpus: float,
+           noms: pd.DataFrame, dropped: int) -> str:
+    broken = df[df["flag"]]
+    diverge = df[df["band_flag"].fillna(False)].sort_values("band_walk_frac")
+    lines = [
+        "# Label audit (physics vs annotation)", "",
+        "Two independent trial-level failures, both scored against the swap rule (§10), "
+        "which has no trained parameter and never sees a label.", "",
+        f"- **`disagree`** — share of label-pure, physics-decided windows whose verdict "
+        f"contradicts the annotation. Flags above **{MAX_DISAGREE:.2f}** over at least "
+        f"{MIN_WINDOWS} windows: the file contradicts itself more often than it agrees. "
+        f"That is broken data — a swapped channel or a misaligned label track.",
+        f"- **`band walk`** — share of the trial's windows *inside the ambiguity band* "
+        f"(**{band[0]:.2f}–{band[1]:.2f}°** interleg swing, where both human labels "
+        f"genuinely occur) that it annotated `walk`. The corpus sits at "
+        f"**{corpus:.3f}**; a trial far from it is not broken, it is annotated to a "
+        f"different convention. Flagged by a two-sided binomial test at "
+        f"{BAND_ALPHA:.2f} Bonferroni-corrected across trials with at least "
+        f"{MIN_WINDOWS} band windows.", "",
+        "The second is the one that costs accuracy quietly: the model learns the corpus "
+        "convention, so a divergent trial reads as model error and no amount of retraining "
+        "removes it.", "",
+    ]
+    lines += ["## Broken (`disagree`)", ""]
+    if len(broken):
+        lines += ["| rev | trial | windows | disagree | fraction |", "|---|---|---|---|---|"]
+        for _, r in broken.iterrows():
+            lines.append(f"| {r['rev']} | {r['trial']} | {r['windows']:,} | "
+                         f"{r['disagree']:,} | **{r['disagree_frac']:.4f}** |")
+        lines += ["", "Add confirmed cases to `dataset.EXCLUDED_TRIALS` with the evidence.", ""]
+    else:
+        lines += ["None.", ""]
+
+    # the bridge to adjudication: a flag nobody can act on is a flag that gets ignored
+    lines += ["## Nominated windows — run these to adjudicate", ""]
+    if len(noms):
+        lines += [
+            f"{len(noms)} window(s) across {noms['rev'].nunique()} rev(s), strongest "
+            f"contradiction first, spread at least {MIN_NOMINATION_GAP_S:g} s apart so a "
+            f"reader can tell a swapped channel (wrong everywhere) from a misaligned "
+            f"label track (wrong in a stretch). Capped at "
+            f"{MAX_NOMINATIONS_PER_TRIAL} per trial"
+            + (f"; **{dropped:,} further contradicting window(s) not listed**." if dropped
+               else "; nothing was dropped."), "",
+            "A nomination is *not* a verdict. The swap rule can be wrong about a window, "
+            "which is exactly why this hands you the raw trace instead of a decision.", "",
+            "| rev | trial | t (s) | label | physics | swaps | interleg | command |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        for _, r in noms.iterrows():
+            lines.append(
+                f"| {r['rev']} | {r['trial']} | {r['t_center_s']:.2f} | `{r['label']}` "
+                f"| `{r['physics']}` | {r['swap_count_adaptive']:.0f} over "
+                f"{r['swap_window_s']:.1f} s | {r['ileg_minhalf']:.2f}° "
+                f"| `{r['cmd']}` |")
+        lines += ["", "Machine-readable copy: `label_audit_windows.jsonl`.", ""]
+    else:
+        lines += ["None — no flagged trial has a contradicting window to show.", ""]
+
+    lines += ["## Divergent convention (`band walk`)", ""]
+    if len(diverge):
+        lines += ["| rev | trial | band windows | band walk | vs corpus | p |",
+                  "|---|---|---|---|---|---|"]
+        for _, r in diverge.iterrows():
+            lines.append(f"| {r['rev']} | {r['trial']} | {int(r['band_windows']):,} | "
+                         f"**{r['band_walk_frac']:.3f}** | {r['band_walk_frac']-corpus:+.3f} "
+                         f"| {r['band_p']:.2g} |")
+        lines += ["",
+                  "**Do not exclude these.** A self-consistent minority convention is not "
+                  "bad data; it is the part of the residual error that is annotation "
+                  "policy rather than model failure. Re-annotating them to the corpus "
+                  "convention — or accepting them and reporting the ceiling — are both "
+                  "defensible. Silently counting them as model error is not.", ""]
+    else:
+        lines += ["None — every trial annotates the band consistently with the corpus.", ""]
+
+    lines += ["## All trials, worst first", "",
+              "| rev | trial | windows | disagree | physics abstains | band n | band walk | rest |",
+              "|---|---|---|---|---|---|---|---|"]
+    for _, r in df.iterrows():
+        bn = "—" if pd.isna(r["band_windows"]) else f"{int(r['band_windows']):,}"
+        bw = "—" if pd.isna(r["band_walk_frac"]) else f"{r['band_walk_frac']:.3f}"
+        mark = " ⚑" if bool(r["band_flag"]) else ""
+        lines.append(f"| {r['rev']} | {r['trial']} | {r['windows']:,} | "
+                     f"{r['disagree_frac']:.4f} | {r['abstain_frac']:.4f} | {bn} | "
+                     f"{bw}{mark} | {'yes' if r['rest_trusted'] else 'NO'} |")
+    return "\n".join(lines)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default=str(REGEN / "s3_physics"))
+    add_report_flag(ap)
+    ap.add_argument("--include-lockbox", action="store_true")
+    args = ap.parse_args()
+
+    out_dir = (REPO_ROOT / args.out).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # the RAW corpus: a quarantined trial must still appear, or the report stops justifying it
+    kw = {"lockbox_revs": ()} if args.include_lockbox else {}
+    trials = load_dataset(excluded=set(), **kw)
+
+    scored = [coherence(t) for t in trials]
+    rows = [r for r, _ in scored]
+    windows = pd.concat([w for _, w in scored if len(w)], ignore_index=True)
+
+    # first on purpose: its verdicts decide which trials define the band the second measures against
+    broken_keys = {(r["rev"], r["trial"]) for r in rows if r["flag"]}
+    policy, band, corpus = band_policy(windows, broken_keys)
+    df = (pd.DataFrame([r for r in rows if r["windows"]])
+          .merge(policy, on=["rev", "trial"], how="left")
+          .sort_values("disagree_frac", ascending=False).reset_index(drop=True))
+    df["band_flag"] = df["band_flag"].fillna(False).astype(bool)
+    broken, diverge = df[df["flag"]], df[df["band_flag"]]
+
+    print(f"[audit] {len(df)} trials scored against the physics verdict")
+    print(f"[audit] ambiguity band {band[0]:.2f}-{band[1]:.2f} deg holds "
+          f"{len(windows[windows['ileg_minhalf'].between(*band)]):,} of {len(windows):,} "
+          f"label-pure windows; the corpus annotates {corpus:.1%} of it walk")
+
+    if len(broken):
+        print(f"\n[audit] BROKEN: {len(broken)} trial(s) over {MAX_DISAGREE:.2f} disagreement:")
+        for _, r in broken.iterrows():
+            print(f"[audit]   {r['rev']} trial {r['trial']}: {r['disagree']:,}/"
+                  f"{r['windows']:,} windows contradict the label ({r['disagree_frac']:.1%})")
+        print("[audit]   -> add confirmed cases to dataset.EXCLUDED_TRIALS; nothing deleted")
+    else:
+        print(f"\n[audit] no trial exceeds {MAX_DISAGREE:.2f} disagreement")
+
+    if len(diverge):
+        print(f"\n[audit] DIVERGENT CONVENTION: {len(diverge)} trial(s) annotate the "
+              f"ambiguity band unlike the corpus ({corpus:.2f}):")
+        for _, r in diverge.sort_values("band_walk_frac").iterrows():
+            print(f"[audit]   {r['rev']} trial {r['trial']}: {r['band_walk_frac']:.2f} walk "
+                  f"over {int(r['band_windows'])} band windows (p={r['band_p']:.2g})")
+        print("[audit]   -> NOT grounds for exclusion; this is annotation policy, not bad data")
+    else:
+        print("[audit] every trial annotates the ambiguity band consistently with the corpus")
+
+    # BROKEN trials only: a divergent-convention trial looks defensible window by window
+    noms, dropped = nominate(windows, broken_keys)
+    if len(noms):
+        print(f"\n[audit] {len(noms)} window(s) nominated for adjudication"
+              + (f" ({dropped:,} further contradicting windows not listed)" if dropped else ""))
+        for _, r in noms.head(3).iterrows():
+            print(f"[audit]   {r['cmd']}   # label={r['label']} physics={r['physics']}")
+        if len(noms) > 3:
+            print(f"[audit]   ... {len(noms) - 3} more in label_audit_windows.jsonl")
+
+    if args.report:
+        (out_dir / "label_audit.md").write_text(
+            render(df, band, corpus, noms, dropped), encoding="utf-8")
+    (out_dir / "label_audit.json").write_text(json.dumps(
+        {"max_disagree": MAX_DISAGREE, "min_windows": MIN_WINDOWS,
+         "band_alpha": BAND_ALPHA, "band": list(band), "band_corpus_walk_frac": corpus,
+         "n_nominated": len(noms), "n_nominations_dropped": dropped,
+         "trials": df.to_dict("records")}, indent=2, default=float), encoding="utf-8")
+    # written even when empty: a zero-line file says the audit ran, a missing one says nobody looked
+    (out_dir / "label_audit_windows.jsonl").write_text(
+        "".join(json.dumps(r, default=float) + "\n" for r in noms.to_dict("records")),
+        encoding="utf-8")
+    # Model-free like `rate_audit`: this reads the annotations and the anchors, never the champion.
+    # Declared empty rather than left unstamped, so it says "checked, nothing upstream" instead of
+    # "nobody can tell" -- and so no stage sharing runs/regen/s3_physics is silently exempt from the check.
+    stamp_inputs(out_dir, {}, stage="label_audit")
+
+    print(f"\n[audit] -> {out_dir / ('label_audit.md' if args.report else 'label_audit.json')}")
+
+
+if __name__ == "__main__":
+    main()

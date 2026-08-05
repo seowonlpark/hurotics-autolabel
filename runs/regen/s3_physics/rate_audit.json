@@ -1,0 +1,50 @@
+{
+  "periodicity": {
+    "metric": "abs",
+    "median_delta": 0.0273,
+    "p90_delta": 0.0324,
+    "tol": 0.1,
+    "verdict": "invariant",
+    "n_windows_total": 6339,
+    "n_windows_walking": 3841,
+    "n_windows_audited": 3831,
+    "n_skipped_unpaddable": 10,
+    "pad_samples": 128
+  },
+  "antiphase": {
+    "metric": "abs",
+    "median_delta": 0.0005,
+    "p90_delta": 0.0024,
+    "tol": 0.1,
+    "verdict": "invariant",
+    "n_windows_total": 6339,
+    "n_windows_walking": 3841,
+    "n_windows_audited": 3831,
+    "n_skipped_unpaddable": 10,
+    "pad_samples": 128
+  },
+  "grav_stab": {
+    "metric": "abs",
+    "median_delta": 0.0001,
+    "p90_delta": 0.0003,
+    "tol": 0.1,
+    "verdict": "invariant",
+    "n_windows_total": 6339,
+    "n_windows_walking": 3841,
+    "n_windows_audited": 3831,
+    "n_skipped_unpaddable": 10,
+    "pad_samples": 128
+  },
+  "gyro_energy": {
+    "metric": "rel",
+    "median_delta": 0.4994,
+    "p90_delta": 0.5017,
+    "tol": 0.1,
+    "verdict": "rate_dependent",
+    "n_windows_total": 6339,
+    "n_windows_walking": 3841,
+    "n_windows_audited": 3831,
+    "n_skipped_unpaddable": 10,
+    "pad_samples": 128
+  }
+}

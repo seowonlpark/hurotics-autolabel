@@ -1,47 +1,14 @@
-"""Error taxonomy — a faithful port of `locoeval/diagnose.py` bucketing.
-
-Source: github.com/seowonlpark/hurotics-locotool (`locoeval/diagnose.py`, `core.py`).
-Ported rather than reinvented so our classifier is scored by the SAME yardstick as the
-incumbent algorithm. Thresholds and precedence are copied exactly; changing either would
-silently make our numbers incomparable to every number already recorded against it.
-
-Every row lands in exactly one bucket, assigned in strict precedence order:
-
-    (1) correct
-      > (2) omission — a gt segment pred never reaches, split by what pred did instead:
-              · swallowed     — pred flanks it with the SAME label both sides
-              · omission      — pred flanks it with two DIFFERENT labels
-              · edge_omission — touches a recording boundary; one flank doesn't exist
-        > (3) flicker — a pred run shorter than FLICKER_MAX_MS flanked by equal labels
-          > (4) late  — pred still shows the old label after a gt transition
-            > (5) early — pred already shows the new label before a gt transition
-              > (6) steady_confusion — pred stays in another class for the WHOLE segment
-
-Note there is no `remainder` bucket: `steady_confusion` absorbs whatever precedence
-leaves, so the partition closes without a catch-all.
-
-RESOLUTION MATTERS. These thresholds are in milliseconds and assume per-row predictions
-(~10 ms). A windowed classifier predicting once per 2 s cannot emit a run shorter than
-`FLICKER_MAX_MS`, so flicker would score a structural zero rather than a measured one.
-Feed this row-level predictions from dense-stride inference (`predict.py`), not raw
-window labels.
-
-Gaps: this pipeline segments at gaps and never windows across one (§3.1), so the
-taxonomy runs PER SEGMENT and a segment boundary is a genuine recording boundary —
-which is exactly what `edge_omission` is for.
-"""
+# error taxonomy, ported from the incumbent: flicker > late > early > steady_confusion, dense rows
 
 from __future__ import annotations
 
 import numpy as np
 
-# Copied verbatim from diagnose.py. Do not tune: they define comparability.
-FLICKER_MAX_MS = 200.0        # pred run shorter than this, flanked by equal others => flicker
-LAG_MAX_MS = 1000.0           # beyond this, a lag is not detection jitter
-SUSTAINED_FRACTION = 0.5      # early/late covering >= this fraction of the adjacent
-                              # segment AND clearing LAG_MAX_MS is a sustained
-                              # misclassification, not jitter
-MIN_EVENTS_FOR_STATISTIC = 10  # below this, timing statistics are tagged low_sample
+# copied verbatim from diagnose.py- do not tune, they define comparability
+FLICKER_MAX_MS = 200.0 # pred run shorter than this, flanked by equal others => flicker
+LAG_MAX_MS = 1000.0 # beyond this, a lag is not detection jitter
+SUSTAINED_FRACTION = 0.5 # early/late over >= this fraction of the segment AND past
+                         # LAG_MAX_MS is a sustained misclassification, not jitter
 
 ERROR_BUCKETS = [
     "omission",
@@ -56,8 +23,8 @@ UNCLASSIFIED = "unclassified"
 CORRECT = "correct"
 
 
+# indices where the label changes, with the from/to pair
 def transitions(labels: np.ndarray, times: np.ndarray) -> list[dict]:
-    """Indices where the label changes, with the from/to pair."""
     a = np.asarray(labels)
     t = np.asarray(times, dtype=float)
     idx = np.where(a[1:] != a[:-1])[0] + 1
@@ -65,8 +32,8 @@ def transitions(labels: np.ndarray, times: np.ndarray) -> list[dict]:
             for i in idx]
 
 
+# contiguous runs of one label, with duration in ms
 def segments(labels: np.ndarray, times: np.ndarray) -> list[dict]:
-    """Contiguous runs of one label, with duration in ms."""
     a = np.asarray(labels)
     t = np.asarray(times, dtype=float)
     n = len(a)
@@ -83,23 +50,19 @@ def segments(labels: np.ndarray, times: np.ndarray) -> list[dict]:
     return out
 
 
+# the labels flanking [s, e), or None at a recording boundary
 def _flanks(arr: np.ndarray, s: int, e: int, n: int):
     return (arr[s - 1] if s > 0 else None), (arr[e] if e < n else None)
 
 
+# assign label to still-unclassified rows in [s, e): earlier buckets claim first, never overwritten
 def _claim(bucket: np.ndarray, s: int, e: int, label: str) -> None:
-    """Assign `label` to rows in [s, e) that are still unclassified.
-
-    This is the precedence mechanism: `correct` is written first and earlier buckets
-    claim before later ones, so nothing is ever overwritten.
-    """
     region = bucket[s:e]
     region[region == UNCLASSIFIED] = label
 
 
+# one gt transition and how the prediction handled it
 class TransitionResult:
-    """One gt transition and how the prediction handled it."""
-
     __slots__ = ("frm", "to", "offset_ms", "gt_idx", "full_segment_miss",
                  "sustained_early", "sustained_late", "late_end_idx",
                  "early_start_idx", "omission_kind")
@@ -116,8 +79,8 @@ class TransitionResult:
         return {k: getattr(self, k) for k in self.__slots__}
 
 
+# for each gt transition into class X, read forward until pred catches up to X
 def transition_timing(gt: np.ndarray, pred: np.ndarray, t: np.ndarray) -> list[TransitionResult]:
-    """For each gt transition into class X, read forward until pred catches up to X."""
     n = len(gt)
     if n == 0:
         return []
@@ -140,18 +103,18 @@ def transition_timing(gt: np.ndarray, pred: np.ndarray, t: np.ndarray) -> list[T
 
         if j < seg_end:
             if j == i and pred[i] == to:
-                # pred was already in the target class: walk back to when it entered.
+                # pred was already in the target class: walk back to when it entered
                 jj = i
                 while jj > seg_start and pred[jj - 1] == to:
                     jj -= 1
-                off = float(t[jj] - tr["time"])          # negative => early
+                off = float(t[jj] - tr["time"]) # negative => early
                 full_segment_miss = (jj == seg_start)
                 seg_dur_ms = float(t[i] - t[seg_start])
                 sustained_early = bool(seg_dur_ms > 0 and abs(off) >= LAG_MAX_MS
                                        and abs(off) / seg_dur_ms >= SUSTAINED_FRACTION)
                 sustained_late, early_start = False, jj
             else:
-                # Late arrival. A stray class in between makes the offset unmeasurable.
+                # late arrival; a stray class in between makes the offset unmeasurable
                 off = float(t[j] - tr["time"]) if np.all(pred[i:j] == frm) else None
                 full_segment_miss, sustained_early, early_start = False, False, i
                 if off is not None:
@@ -165,7 +128,7 @@ def transition_timing(gt: np.ndarray, pred: np.ndarray, t: np.ndarray) -> list[T
                                             sustained_early, sustained_late,
                                             late_end, early_start))
         else:
-            # pred never reaches the target class inside this gt segment.
+            # pred never reaches the target class inside this gt segment
             left, right = _flanks(pred, i, seg_end, n)
             if left is None or right is None:
                 kind = "edge_omission"
@@ -178,9 +141,9 @@ def transition_timing(gt: np.ndarray, pred: np.ndarray, t: np.ndarray) -> list[T
     return results
 
 
+# one bucket per row, assigned in strict precedence order
 def row_buckets(gt: np.ndarray, pred: np.ndarray, t: np.ndarray,
                 results: list[TransitionResult] | None = None) -> np.ndarray:
-    """One bucket per row, assigned in strict precedence order."""
     n = len(gt)
     if n == 0:
         return np.full(0, UNCLASSIFIED, dtype=object)
@@ -191,7 +154,7 @@ def row_buckets(gt: np.ndarray, pred: np.ndarray, t: np.ndarray,
     if results is None:
         results = transition_timing(gt, pred, t)
 
-    # (2) omission — including the leading segment, which has no gt transition of its own
+    # (2) omission- including the leading segment, which has no gt transition of its own
     first_end = results[0].gt_idx if results else n
     if not np.any(pred[0:first_end] == gt[0]):
         _claim(bucket, 0, first_end, "edge_omission")
@@ -213,13 +176,13 @@ def row_buckets(gt: np.ndarray, pred: np.ndarray, t: np.ndarray,
         _claim(bucket, r.gt_idx, r.late_end_idx, "late")
         _claim(bucket, r.early_start_idx, r.gt_idx, "early")
 
-    # (6) steady_confusion absorbs the rest — no catch-all bucket needed
+    # (6) steady_confusion absorbs the rest- no catch-all bucket needed
     bucket[bucket == UNCLASSIFIED] = "steady_confusion"
     return bucket
 
 
+# bucket counts/fractions over one gap-free segment
 def bucket_errors(gt: np.ndarray, pred: np.ndarray, t: np.ndarray) -> dict:
-    """Bucket counts/fractions over one gap-free segment."""
     n = len(gt)
     if n == 0:
         return {"counts": {b: 0 for b in ERROR_BUCKETS},
@@ -239,8 +202,8 @@ def bucket_errors(gt: np.ndarray, pred: np.ndarray, t: np.ndarray) -> dict:
     }
 
 
+# sum bucket counts across segments/trials into one corpus-level result
 def aggregate(per_segment: list[dict]) -> dict:
-    """Sum bucket counts across segments/trials into one corpus-level result."""
     counts = {b: 0 for b in ERROR_BUCKETS}
     correct = 0
     for r in per_segment:

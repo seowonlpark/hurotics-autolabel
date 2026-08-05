@@ -1,0 +1,179 @@
+{
+  "threshold": 0.85,
+  "n_pairs": 13,
+  "revs": [
+    "rev13",
+    "rev4",
+    "rev7"
+  ],
+  "n_features": 38,
+  "lockbox_refused": [
+    "rev8"
+  ],
+  "pairs": [
+    {
+      "annotated": "annotated_loco_rev13_trial_1.csv",
+      "raw": "00001_69_2026_1_14_10_4_0.csv",
+      "variant": "fb5ea2c2"
+    },
+    {
+      "annotated": "annotated_loco_rev13_trial_2.csv",
+      "raw": "00008_69_2026_1_14_10_48_0.csv",
+      "variant": "fb5ea2c2"
+    },
+    {
+      "annotated": "annotated_loco_rev13_trial_3.csv",
+      "raw": "00009_69_2026_1_14_10_48_0.csv",
+      "variant": "fb5ea2c2"
+    },
+    {
+      "annotated": "annotated_loco_rev13_trial_5.csv",
+      "raw": "00011_69_2026_1_14_11_2_0.csv",
+      "variant": "fb5ea2c2"
+    },
+    {
+      "annotated": "annotated_loco_rev13_trial_6.csv",
+      "raw": "00012_69_2026_1_14_11_10_0.csv",
+      "variant": "fb5ea2c2"
+    },
+    {
+      "annotated": "annotated_loco_rev13_trial_7.csv",
+      "raw": "00013_69_2026_1_14_11_10_0.csv",
+      "variant": "fb5ea2c2"
+    },
+    {
+      "annotated": "annotated_loco_rev4_trial_1.csv",
+      "raw": "00203_30_2025_10_21_18_18_0_edit.csv",
+      "variant": "4bfd6ab2"
+    },
+    {
+      "annotated": "annotated_loco_rev7_trial_1.csv",
+      "raw": "00321_63_2025_10_24_15_32_0.csv",
+      "variant": "0fda484e"
+    },
+    {
+      "annotated": "annotated_loco_rev7_trial_2.csv",
+      "raw": "00322_63_2025_10_24_15_34_0.csv",
+      "variant": "0fda484e"
+    },
+    {
+      "annotated": "annotated_loco_rev7_trial_3.csv",
+      "raw": "00323_63_2025_10_24_15_35_0.csv",
+      "variant": "0fda484e"
+    },
+    {
+      "annotated": "annotated_loco_rev7_trial_4.csv",
+      "raw": "00324_63_2025_10_24_15_56_0.csv",
+      "variant": "0fda484e"
+    },
+    {
+      "annotated": "annotated_loco_rev7_trial_5.csv",
+      "raw": "00325_63_2025_10_24_15_56_0.csv",
+      "variant": "0fda484e"
+    },
+    {
+      "annotated": "annotated_loco_rev7_trial_6.csv",
+      "raw": "00326_63_2025_10_24_16_29_0.csv",
+      "variant": "0fda484e"
+    }
+  ],
+  "transitive_lpf_view": {
+    "rows_scored": 475260,
+    "committed": 431926,
+    "coverage": 0.9088204351302445,
+    "selective_accuracy": 0.9914244569671656
+  },
+  "overall": {
+    "rows_scored": 474773,
+    "committed": 431612,
+    "coverage": 0.9090912920490424,
+    "selective_accuracy": 0.9914390702760812,
+    "errors_kept": 3695,
+    "worst_subject": 0.9821313287157097,
+    "worst_subject_rev": "rev7"
+  },
+  "per_rev": {
+    "rev13": {
+      "rows_scored": 234752,
+      "committed": 232084,
+      "coverage": 0.9886348146128681,
+      "selective_accuracy": 0.9984746901983764,
+      "errors_kept": 354,
+      "stand_recall": 0.9363194819212088,
+      "stand_support": 5559,
+      "stand_rows": 8060,
+      "walk_recall": 1.0,
+      "walk_support": 226525,
+      "walk_rows": 226692
+    },
+    "rev4": {
+      "rows_scored": 20751,
+      "committed": 16750,
+      "coverage": 0.8071900149390391,
+      "selective_accuracy": 0.9955223880597015,
+      "errors_kept": 75,
+      "stand_recall": 0.9797297297297297,
+      "stand_support": 3700,
+      "stand_rows": 6305,
+      "walk_recall": 1.0,
+      "walk_support": 13050,
+      "walk_rows": 14446
+    },
+    "rev7": {
+      "rows_scored": 219270,
+      "committed": 182778,
+      "coverage": 0.8335750444657272,
+      "selective_accuracy": 0.9821313287157097,
+      "errors_kept": 3266,
+      "stand_recall": 0.8719222369716952,
+      "stand_support": 23353,
+      "stand_rows": 43821,
+      "walk_recall": 0.9982750509644033,
+      "walk_support": 159425,
+      "walk_rows": 175449
+    }
+  },
+  "per_variant": {
+    "0fda484e": {
+      "revs": [
+        "rev7"
+      ],
+      "rows_scored": 219270,
+      "committed": 182778,
+      "coverage": 0.8335750444657272,
+      "selective_accuracy": 0.9821313287157097,
+      "errors_kept": 3266
+    },
+    "4bfd6ab2": {
+      "revs": [
+        "rev4"
+      ],
+      "rows_scored": 20751,
+      "committed": 16750,
+      "coverage": 0.8071900149390391,
+      "selective_accuracy": 0.9955223880597015,
+      "errors_kept": 75
+    },
+    "fb5ea2c2": {
+      "revs": [
+        "rev13"
+      ],
+      "rows_scored": 234752,
+      "committed": 232084,
+      "coverage": 0.9886348146128681,
+      "selective_accuracy": 0.9984746901983764,
+      "errors_kept": 354
+    }
+  },
+  "confusion": {
+    "stand->stand": 29192,
+    "stand->walk": 3420,
+    "walk->stand": 275,
+    "walk->walk": 398725
+  },
+  "excluded": {
+    "human_unknown": 5927,
+    "unmatched_time": 0,
+    "total_rows_returned": 480700
+  }
+}

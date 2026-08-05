@@ -1,88 +1,96 @@
-"""Champion/challenger machinery: run an experiment, gate it, log it.
-
-PLAN S2's gate: *the champion only ever changes via a logged, metric-justified
-promotion.* That is enforced here, in code — not in an agent's judgement, and not in a
-human's memory of what was tried.
-
-Division of labour (non-negotiable, PLAN principle 1):
-  - An agent proposes an `ExperimentSpec` — a **declarative** change drawn from a fixed
-    vocabulary (features to drop, window length, model hyperparameters). It never writes
-    code, never touches data, never runs training.
-  - This module runs it, scores it with locoeval, and applies the promotion rule.
-  - Every outcome lands in `experiments.jsonl`, promoted or not. Rejections are the more
-    valuable half of the record: they are what stops the same idea being re-proposed.
-
-Why a declarative spec rather than agent-authored code: a spec is reviewable before it
-runs, reproducible after, and cannot do anything the vocabulary does not allow. It also
-makes "revert" trivial — re-running a logged spec reproduces the model exactly.
-"""
+# champion/challenger machinery: run, gate, log; the champion changes only by a justified promotion
 
 from __future__ import annotations
 
 import json
 import platform
-import subprocess
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import LeaveOneGroupOut
 
-from stages.s2_ml.dataset import load_dataset
-from stages.s2_ml.features import TRANSITION, WindowSpec, build_windows, feature_columns
+from runmeta import git_sha
+from runslayout import LEDGER_FILENAME, PROPOSALS_FILENAME, REGEN, keep_dir_for
+from stages.s2_ml.dataset import (
+    FEATURES,
+    # this corpus carries no optional channel, so the selectable set IS the required one
+    SELECTABLE_FEATURES,
+    load_dataset,
+)
+from stages.s2_ml.features import WindowSpec, build_windows, feature_columns
 from stages.s2_ml.locoeval import evaluate
 from stages.s2_ml.predict import DEFAULT_INFERENCE_STRIDE_S, dense_predict_trial
 from stages.s2_ml.taxonomy import aggregate, bucket_errors
+# estimator and window filter come from train.py; restating them here is the wrong that still scores
+from stages.s2_ml.train import MODEL_PARAMS, build_model, trainable
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-LEDGER_FILENAME = "experiments.jsonl"
+# Beside the model it names, and rewritten whole on every promotion, so it regenerates. The
+# ledger and the proposals log next to it do NOT -- both are append-only records of cycles whose
+# code is already gone, so they are written to keep_dir_for(out_dir) instead.
 CHAMPION_FILENAME = "champion.json"
 
-BASE_MODEL_PARAMS = dict(n_estimators=300, random_state=0, n_jobs=-1,
-                         class_weight="balanced")
+# the champion's spec, tracked in git; record() rewrites it on every promotion so it cannot drift
+CHAMPION_SPEC_PATH = Path(__file__).resolve().parent / "champion_spec.json"
 
-# A challenger must clear the champion by this much on the headline metric. A margin,
-# not ">", because leave-one-rev-out over a handful of revs is noisy: promoting on a
-# +0.001 difference would ratchet the champion on noise and call it progress.
+# the champion's own hyperparameters; a literal here would make every delta measure two changes
+BASE_MODEL_PARAMS = MODEL_PARAMS
+
+# a margin, not ">": LORO over a handful of revs is noisy and a +0.001 win would ratchet on noise
 PROMOTION_MARGIN = 0.005
 
 
+# a declarative, replayable description of one challenger
 @dataclass
 class ExperimentSpec:
-    """A declarative, replayable description of one challenger."""
-
-    name: str
-    rationale: str                                  # why this should help, in one line
-    drop_features: list[str] = field(default_factory=list)
-    window_s: float | None = None                   # None => champion/default window
-    # Stride is INDEPENDENT of window length, and that independence is load-bearing.
-    # Tying stride to window (the first version of this) means changing window_s also
-    # changes the training-set size: 2s->4s halved it, 5,226 windows -> 2,477. The
-    # resulting comparison confounds "longer window" with "half the data" and cannot
-    # attribute the difference to either. Leave as None to keep the champion's stride.
+    name: str # unique spec name
+    rationale: str # why this should help, in one line
+    # features to remove; None => the CHAMPION's drops, [] => drop nothing (defaulting to [] is a trap)
+    drop_features: list[str] | None = None
+    window_s: float | None = None # None => champion/default window
+    # stride is INDEPENDENT of window length, or "longer window" confounds with "less data"
     stride_s: float | None = None
-    model_params: dict = field(default_factory=dict)  # overrides on BASE_MODEL_PARAMS
+    model_params: dict = field(default_factory=dict) # overrides on BASE_MODEL_PARAMS
+    # INPUT channels, coarser than drop_features: adding one changes which trials are even loadable
+    channels: list[str] = field(default_factory=list)
 
+    # base params with this spec's overrides applied
     def resolved_params(self) -> dict:
         return {**BASE_MODEL_PARAMS, **self.model_params}
+
+    # the concrete drop list: the champion's unless this spec states its own
+    def resolved_drops(self) -> list[str]:
+        if self.drop_features is not None:
+            return list(self.drop_features)
+        return list(json.loads(
+            CHAMPION_SPEC_PATH.read_text(encoding="utf-8"))["drop_features"])
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
+# WHAT a macro-F1 was measured over; two are comparable only when these match, since class count moves it
+def corpus_fingerprint(train_df: pd.DataFrame) -> dict:
+    return {
+        "n_windows": int(len(train_df)),
+        "classes": sorted(int(c) for c in pd.unique(train_df["label"])),
+        "revs": sorted(str(r) for r in pd.unique(train_df["rev"])),
+    }
+
+
+# scored outcome of one experiment
 @dataclass
 class ExperimentResult:
-    spec: ExperimentSpec
-    macro_f1: float
+    spec: ExperimentSpec # the spec that produced it
+    macro_f1: float # headline metric
     accuracy: float
     balanced_accuracy: float
-    per_rev_macro_f1: dict
-    n_features: int
-    n_train_windows: int
-    taxonomy: dict | None = None
+    per_rev_macro_f1: dict # per-held-out-rev macro-F1
+    n_features: int # features after drops
+    n_train_windows: int # training windows used
+    taxonomy: dict | None = None # row-level error taxonomy, if run
+    corpus: dict | None = None # what it was measured OVER; see corpus_fingerprint
 
     def to_dict(self) -> dict:
         d = {"spec": self.spec.to_dict(), "macro_f1": self.macro_f1,
@@ -93,39 +101,26 @@ class ExperimentResult:
             d["taxonomy"] = {"row_accuracy": self.taxonomy["row_accuracy"],
                              "dominant": self.taxonomy["dominant"],
                              "fractions": self.taxonomy["fractions"]}
+        if self.corpus:
+            d["corpus"] = self.corpus
         return d
 
 
-def git_sha() -> str:
-    try:
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
-                                       cwd=REPO_ROOT, text=True).strip()
-    except Exception:
-        return "unknown"
-
-
-# The hyperparameters a proposal may touch, with bounds. A whitelist, not a blacklist:
-# an agent-authored dict otherwise reaches the estimator constructor verbatim, where a
-# stray key is at best a crash and at worst a silent resource or determinism change.
-# `random_state` and `n_jobs` are deliberately absent — reproducibility and machine
-# resources are the pipeline's to decide, not a proposal's.
+# the hyperparameters a proposal may touch; a whitelist, so a stray key cannot reach the estimator
 ALLOWED_MODEL_PARAMS = {
     "n_estimators": (10, 2000),
     "max_depth": (1, 100),
     "min_samples_leaf": (1, 100),
     "min_samples_split": (2, 100),
-    "max_features": None,       # categorical: "sqrt" | "log2" | float | int
-    "criterion": None,          # categorical: "gini" | "entropy" | "log_loss"
-    "class_weight": None,       # categorical: "balanced" | "balanced_subsample" | None
+    "max_features": None, # categorical: "sqrt" | "log2" | float | int
+    "criterion": None, # categorical: "gini" | "entropy" | "log_loss"
+    "class_weight": None, # categorical: "balanced" | "balanced_subsample" | None
 }
 WINDOW_S_RANGE = (0.5, 10.0)
 
 
+# reject a proposal outside the vocabulary; runs before any training, so a bad one costs nothing
 def validate_spec(spec: ExperimentSpec) -> None:
-    """Reject a proposal that steps outside the vocabulary. Raises ValueError.
-
-    Runs BEFORE any training: a bad proposal should cost nothing and say why.
-    """
     if not spec.name or not spec.rationale:
         raise ValueError("a spec needs both a name and a rationale")
 
@@ -146,10 +141,33 @@ def validate_spec(spec: ExperimentSpec) -> None:
         if not (lo <= spec.window_s <= hi):
             raise ValueError(f"window_s={spec.window_s} outside [{lo}, {hi}] s")
 
+    if spec.channels:
+        unknown = [c for c in spec.channels if c not in SELECTABLE_FEATURES]
+        if unknown:
+            raise ValueError(f"channels names no such input channel: {unknown}; "
+                             f"available: {list(SELECTABLE_FEATURES)}")
+        # a spec may ADD an optional channel, never drop a required one- that moves the corpus itself
+        missing = [c for c in FEATURES if c not in spec.channels]
+        if missing:
+            raise ValueError(f"channels must include the required {missing}; "
+                             f"use drop_features to prune what is computed from them")
+        # ...and today it may not add one either. SELECTABLE_FEATURES == FEATURES, so the two
+        # checks above already force this; it is stated on its own because it is the one that
+        # stops holding the day the selectable set widens, and what it prevents is SILENT:
+        # features.{segment_features, feature_names, windows_of_trial} read features.FEATURES
+        # directly- and two of them read it BY POSITION- so an added channel would be loaded,
+        # never turned into a feature, and the fit recorded under a spec that names it. A
+        # four-channel model filed as a five-channel one is the exact skew this repo refuses
+        if tuple(spec.channels) != FEATURES:
+            raise ValueError(
+                f"channels={list(spec.channels)} is not {list(FEATURES)}; fitting a different "
+                f"input channel set is not implemented. Thread the channel set through "
+                f"features.segment_features, features.feature_names and "
+                f"features.windows_of_trial first- they read features.FEATURES directly.")
 
+
+# feature set after drops; an unknown name is an error, not a typo that 'passes' while changing nothing
 def select_features(all_feats: list[str], drop: list[str]) -> list[str]:
-    """Feature set after drops. Unknown names are an error, not a silent no-op —
-    a typo'd drop would otherwise 'pass' while changing nothing."""
     unknown = [d for d in drop if d not in all_feats]
     if unknown:
         raise ValueError(f"drop_features names no such feature: {unknown}")
@@ -159,31 +177,19 @@ def select_features(all_feats: list[str], drop: list[str]) -> list[str]:
     return keep
 
 
+# train + score one spec under leave-one-rev-out; the lockbox is never touched
 def run_experiment(spec: ExperimentSpec, trials=None, *, taxonomy: bool = False,
                    stride_s: float = DEFAULT_INFERENCE_STRIDE_S) -> ExperimentResult:
-    """Train + score one spec under leave-one-rev-out. The lockbox is never touched."""
     validate_spec(spec)
+    # resolve the drop list ONCE: the record must name which features a number was measured over
+    spec = replace(spec, drop_features=spec.resolved_drops())
+    # `validate_spec` has just guaranteed the spec reads FEATURES and nothing else, so there is
+    # one corpus to load and no per-spec trial set to resolve
     trials = trials if trials is not None else load_dataset()
-    default = WindowSpec()
-    # Stride falls back to the CHAMPION'S stride, never to `window_s`. Deriving it from
-    # the window is what the field comment above forbids, and it was the behaviour here
-    # until 2026-08-03: a 4 s proposal silently got a 4 s stride, halving the training
-    # set, so "longer window" and "half the data" moved together and neither could be
-    # credited. Holding stride fixed keeps N roughly constant and isolates the variable.
-    #
-    # The cost is overlap: a 4 s window at a 2 s stride shares half its samples with its
-    # neighbour, so N overstates the independent sample count and CV spread reads tighter
-    # than it is. That is a precision claim, not a leakage one — CV groups by rev, and
-    # overlapping windows are neighbours inside one trial, so no duplicate ever straddles
-    # the fold boundary. PROMOTION_MARGIN is what guards against ratcheting on that noise.
-    wspec = WindowSpec(
-        window_s=spec.window_s if spec.window_s else default.window_s,
-        stride_s=spec.stride_s if spec.stride_s else default.stride_s,
-    )
+    wspec, params, _ = champion_config(spec)
     windows = build_windows(trials, wspec)
 
-    train_df = windows[(windows["split"] == "train") &
-                       (windows["label"] != TRANSITION)].reset_index(drop=True)
+    train_df = trainable(windows, "train")
     assert "lockbox" not in set(train_df["split"]), "lockbox leaked into training"
 
     feats = select_features(feature_columns(windows), spec.drop_features)
@@ -191,47 +197,105 @@ def run_experiment(spec: ExperimentSpec, trials=None, *, taxonomy: bool = False,
     y = train_df["label"].to_numpy(int)
     groups = train_df["rev"].to_numpy()
 
+    # one leave-one-rev-out pass scores windows and rows from the same fold; filled by mask, not order
     oof = np.empty_like(y)
-    for tr, te in LeaveOneGroupOut().split(X, y, groups):
-        model = RandomForestClassifier(**spec.resolved_params())
-        model.fit(X[tr], y[tr])
+    per_run: list = []
+    for rev in sorted(pd.unique(groups)):
+        te = groups == rev
+        model = build_model(params)
+        model.fit(X[~te], y[~te])
         oof[te] = model.predict(X[te])
+        if not taxonomy:
+            continue
+        for tr in trials:
+            if tr.split != "train" or tr.rev != rev:
+                continue
+            for gt, pred, t in dense_predict_trial(model, tr.frame, feats, wspec, stride_s):
+                per_run.append(bucket_errors(gt, pred, t))
 
     result = evaluate(y, oof, groups=groups)
-
-    tax = None
-    if taxonomy:
-        per_run = []
-        for rev in sorted(pd.unique(groups)):
-            fit = train_df[train_df["rev"] != rev]
-            model = RandomForestClassifier(**spec.resolved_params())
-            model.fit(fit[feats].to_numpy(float), fit["label"].to_numpy(int))
-            for tr in trials:
-                if tr.split != "train" or tr.rev != rev:
-                    continue
-                for gt, pred, t in dense_predict_trial(model, tr.frame, feats, wspec, stride_s):
-                    per_run.append(bucket_errors(gt, pred, t))
-        tax = aggregate(per_run)
+    tax = aggregate(per_run) if taxonomy else None
 
     return ExperimentResult(spec, result.macro_f1, result.accuracy,
                             result.balanced_accuracy, result.per_rev_macro_f1,
-                            len(feats), len(train_df), tax)
+                            len(feats), len(train_df), tax, corpus_fingerprint(train_df))
 
 
+# the current champion record, or None
 def load_champion(out_dir: Path) -> dict | None:
     path = out_dir / CHAMPION_FILENAME
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
-# Secondary criterion, applied ONLY when macro-F1 is a statistical tie (Lu, 2026-07-20).
-# Accuracy is the objective; error *type* is the tiebreaker. Of the buckets,
-# `steady_confusion` is the one to avoid: it is a sustained wrong call over a whole bout,
-# which on a powered device becomes a sustained wrong ACTION (stairs read as sitting).
-# `swallowed`/`omission` are fail-passive — no assistance — which is unhelpful rather
-# than hazardous. Wrong action beats no action as a hazard.
+# the tracked champion spec as an ExperimentSpec; tolerant of an older/newer schema
+def load_champion_spec(path: Path = CHAMPION_SPEC_PATH) -> ExperimentSpec:
+    return _spec_from_dict(json.loads(path.read_text(encoding="utf-8")))
+
+
+# the promoted challenger in champion_spec.json's OWN schema, which train.py has to be able to read
+def champion_spec_dict(result: ExperimentResult, supersedes: str | None = None) -> dict:
+    wspec, params, drops = champion_config(result.spec)
+    out = {
+        "name": result.spec.name,
+        "rationale": result.spec.rationale,
+        "model": type(build_model()).__name__,
+        "params": params,
+        "window_s": wspec.window_s,
+        "stride_s": wspec.stride_s,
+        "fs_hz": wspec.fs_hz,
+        "n_features": result.n_features,
+        "drop_features": sorted(drops),
+    }
+    if supersedes:
+        out["supersedes"] = supersedes
+    return out
+
+
+# rewrite the tracked spec on every promotion, so the git seed matches the ungitted champion.json
+def save_champion_spec(spec: dict, path: Path = CHAMPION_SPEC_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(spec, indent=2) + "\n", encoding="utf-8")
+
+
+# a spec dict -> ExperimentSpec, tolerant of an older/newer schema (unknown keys dropped)
+def _spec_from_dict(data: dict) -> ExperimentSpec:
+    valid = {f.name for f in fields(ExperimentSpec)}
+    return ExperimentSpec(**{k: v for k, v in data.items() if k in valid})
+
+
+# a spec -> the (WindowSpec, params, drops) train.main uses; window and stride resolve INDEPENDENTLY
+def champion_config(spec: ExperimentSpec) -> tuple[WindowSpec, dict, list[str]]:
+    default = WindowSpec()
+    return (WindowSpec(window_s=spec.window_s or default.window_s,
+                       stride_s=spec.stride_s or default.stride_s),
+            spec.resolved_params(), spec.resolved_drops())
+
+
+# same measurement ground? a MISSING fingerprint fails like a different one, or the guard is decorative
+def comparable(new: dict | None, old: dict | None) -> tuple[bool, str]:
+    if new is None or old is None:
+        which = "challenger" if new is None else "incumbent"
+        return False, (f"the {which} carries no corpus fingerprint, so the two cannot be shown to "
+                       f"have been measured over the same data")
+    diffs = []
+    if new["classes"] != old["classes"]:
+        diffs.append(f"class set {old['classes']} -> {new['classes']}")
+    if new["revs"] != old["revs"]:
+        gone = sorted(set(old["revs"]) - set(new["revs"]))
+        added = sorted(set(new["revs"]) - set(old["revs"]))
+        diffs.append(f"revs changed (-{len(gone)} +{len(added)}; added {added[:4]})")
+    if new["n_windows"] != old["n_windows"]:
+        diffs.append(f"window count {old['n_windows']:,} -> {new['n_windows']:,}")
+    if diffs:
+        return False, "; ".join(diffs)
+    return True, ""
+
+
+# on a macro-F1 tie, prefer lower steady_confusion: a sustained wrong call drives a powered device
 STEADY_CONFUSION_MARGIN = 0.02
 
 
+# steady_confusion share of a result or champion record, or None if no taxonomy
 def _steady(result_or_champion) -> float | None:
     tax = (result_or_champion.taxonomy if isinstance(result_or_champion, ExperimentResult)
            else result_or_champion.get("taxonomy"))
@@ -240,25 +304,26 @@ def _steady(result_or_champion) -> float | None:
     return tax["fractions"]["steady_confusion"]
 
 
+# the ONLY path to champion: macro-F1 past PROMOTION_MARGIN, tie broken on steady_confusion
 def decide(challenger: ExperimentResult, champion: dict | None) -> tuple[bool, str]:
-    """The promotion rule. Objective, margin-based, and the ONLY path to champion.
-
-    Primary: macro-F1 must clear PROMOTION_MARGIN. Secondary, only on a tie: a
-    materially lower `steady_confusion` share wins, because at equal accuracy the model
-    that fails passively is the better one to ship.
-
-    Returns (promote, reason). The reason is recorded either way — a rejection with its
-    number is what stops the same proposal coming back.
-    """
     if champion is None:
         return True, "no incumbent champion; establishing baseline"
+
+    # a delta across corpora is meaningless; fail-passive, so an unverifiable one keeps the incumbent
+    ok, why = comparable(challenger.corpus, champion.get("corpus"))
+    if not ok:
+        return False, (f"REFUSING to compare: {why}. macro-F1 averages per-class F1, so it does not "
+                       f"survive a change of class set, corpus or window count -- subtracting across "
+                       f"one is how a two-class incumbent scored six-class challengers for the whole "
+                       f"GaTech import. Re-baseline the champion by re-running its own spec on this "
+                       f"corpus and recording it as the incumbent, then challenge that.")
 
     delta = challenger.macro_f1 - champion["macro_f1"]
     if delta >= PROMOTION_MARGIN:
         return True, (f"macro-F1 {challenger.macro_f1:.4f} beats champion "
                       f"{champion['macro_f1']:.4f} by {delta:+.4f} >= {PROMOTION_MARGIN}")
 
-    # Statistical tie on the headline metric -> fall through to the error-type preference.
+    # tie on the headline metric -> fall through to the error-type preference
     if abs(delta) < PROMOTION_MARGIN:
         new, old = _steady(challenger), _steady(champion)
         if new is not None and old is not None:
@@ -276,10 +341,12 @@ def decide(challenger: ExperimentResult, champion: dict | None) -> tuple[bool, s
                    f"below the {PROMOTION_MARGIN} promotion margin")
 
 
+# append to the ledger; update champion.json only on promotion
 def record(out_dir: Path, result: ExperimentResult, promoted: bool, reason: str,
-           critic: dict | None = None) -> dict:
-    """Append to the ledger; update champion.json only on promotion."""
+           critic: dict | None = None, update_spec: bool = True) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
+    # read before writing: the tracked spec records the name champion.json is about to stop holding
+    prior = load_champion(out_dir)
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "git_sha": git_sha(),
@@ -290,34 +357,30 @@ def record(out_dir: Path, result: ExperimentResult, promoted: bool, reason: str,
     }
     if critic:
         entry["critic"] = critic
-    with (out_dir / LEDGER_FILENAME).open("a", encoding="utf-8") as fh:
+    keep = keep_dir_for(out_dir)
+    keep.mkdir(parents=True, exist_ok=True)
+    with (keep / LEDGER_FILENAME).open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     if promoted:
-        # `taxonomy` is carried so decide() can apply the error-type tiebreaker against
-        # the incumbent; without it the secondary criterion silently never fires.
+        # carry taxonomy, or decide()'s error-type tiebreaker silently never fires next time
         keys = ("ts", "git_sha", "spec", "macro_f1", "accuracy", "balanced_accuracy",
-                "per_rev_macro_f1", "n_features", "taxonomy")
+                "per_rev_macro_f1", "n_features", "taxonomy", "corpus")
         (out_dir / CHAMPION_FILENAME).write_text(
             json.dumps({k: entry[k] for k in keys if k in entry}, indent=2),
             encoding="utf-8")
+        # keep the seed in lockstep; update_spec=False for the seed run, which keeps `rejected`
+        if update_spec:
+            save_champion_spec(champion_spec_dict(
+                result, (prior or {}).get("spec", {}).get("name")))
     return entry
 
 
-PROPOSALS_FILENAME = "proposals.jsonl"
-
-
+# log every proposal and its fate, critic-stopped included, so the next cycle sees what was refused
 def record_proposal(out_dir: Path, proposal: dict, critic: dict, ran: bool,
                     note: str = "") -> dict:
-    """Log every proposal and its fate — including ones the critic stopped.
-
-    Kept separate from `experiments.jsonl`, which means "things that were actually
-    measured". A proposal killed before training has no metrics and does not belong
-    there. It still has to be recorded somewhere, though: otherwise the next cycle's
-    experimenter cannot see that an idea was already raised and refused, and will
-    cheerfully propose it again.
-    """
-    out_dir.mkdir(parents=True, exist_ok=True)
+    keep = keep_dir_for(out_dir)
+    keep.mkdir(parents=True, exist_ok=True)
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "git_sha": git_sha(),
@@ -326,20 +389,82 @@ def record_proposal(out_dir: Path, proposal: dict, critic: dict, ran: bool,
         "ran": ran,
         "note": note,
     }
-    with (out_dir / PROPOSALS_FILENAME).open("a", encoding="utf-8") as fh:
+    with (keep / PROPOSALS_FILENAME).open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
     return entry
 
 
+# JSONL -> records, empty when absent; the one reader for both the proposals log and the ledger
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+# every logged proposal, in order
 def proposals(out_dir: Path) -> list[dict]:
-    path = out_dir / PROPOSALS_FILENAME
-    if not path.exists():
-        return []
-    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return _read_jsonl(keep_dir_for(out_dir) / PROPOSALS_FILENAME)
 
 
+# every measured experiment, in order
 def ledger(out_dir: Path) -> list[dict]:
-    path = out_dir / LEDGER_FILENAME
-    if not path.exists():
-        return []
-    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return _read_jsonl(keep_dir_for(out_dir) / LEDGER_FILENAME)
+
+
+# split the ledger by corpus fingerprint; no fingerprint sorts earlier- unshown ground is not ground
+def ledger_by_basis(out_dir: Path,
+                    champion: dict | None = None) -> tuple[list[dict], list[dict]]:
+    champion = champion if champion is not None else load_champion(out_dir)
+    ref = (champion or {}).get("corpus")
+    current, prior = [], []
+    for row in ledger(out_dir):
+        ok, _why = comparable(row.get("corpus"), ref)
+        (current if ok else prior).append(row)
+    return current, prior
+
+
+# measure the tracked champion as the incumbent: its number must come from THIS code, corpus and grid
+def seed(out_dir: Path, trials=None, *, taxonomy: bool = True) -> dict:
+    spec = load_champion_spec()
+    print(f"[s2-exp] seeding the incumbent from champion_spec.json: '{spec.name}'")
+    result = run_experiment(spec, trials, taxonomy=taxonomy)
+    entry = record(out_dir, result, True,
+                   "seed: the tracked champion spec, re-measured as the incumbent",
+                   update_spec=False)
+    print(f"[s2-exp] incumbent macro-F1 {result.macro_f1:.4f} over "
+          f"{result.n_train_windows:,} windows, {result.n_features} features"
+          + (f", dominant error '{result.taxonomy['dominant']}'" if result.taxonomy else ""))
+    return entry
+
+
+# This CLI READS. It cannot start a cycle -- that needs the agents, so it runs from
+# run_pipeline.py -- and it no longer offers to seed the incumbent either: `_s2_cycle` seeds
+# whenever the ledger has no champion measured over the corpus in front of it, which is every
+# occasion a hand-run `--seed` was for, minus the chance to do it at the wrong moment.
+def main() -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        description="print the S2 champion/challenger ledger (a cycle runs from run_pipeline.py)")
+    ap.add_argument("--out", default=str(REGEN / "s2_ml"))
+    args = ap.parse_args()
+
+    out_dir = (Path(__file__).resolve().parents[2] / args.out).resolve()
+
+    champ = load_champion(out_dir)
+    print(f"champion: {champ['spec']['name']} at macro-F1 {champ['macro_f1']:.4f}"
+          if champ else "champion: none recorded")
+    current, prior = ledger_by_basis(out_dir, champ)
+    for label, rows in (("this basis", current), ("an earlier basis", prior)):
+        for e in rows:
+            mark = "PROMOTED" if e["promoted"] else "rejected"
+            print(f"  [{label}] {e['ts'][:19]}  {e['spec']['name']:<34} "
+                  f"{e['macro_f1']:.4f}  {mark}: {e['decision_reason'][:80]}")
+    for p in proposals(out_dir):
+        if not p["ran"]:
+            print(f"  [not run] {p['ts'][:19]}  "
+                  f"{p['proposal'].get('name', '(unparsed)'):<34} {p['note'][:80]}")
+
+
+if __name__ == "__main__":
+    main()

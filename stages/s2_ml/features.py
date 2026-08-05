@@ -1,54 +1,64 @@
-"""S2 windowing + feature extraction: the model-agnostic boundary.
-
-Per DOMAIN_NOTES §9 this is where feature selection lives — NOT in the clean layer.
-The clean layer keeps the honest superset; this module decides what a model sees, and
-it is the surface the S2 experimenter agent proposes changes to.
-
-Three rules it exists to enforce:
-
-  1. **Never window across a gap.** A window is drawn inside one segment. Spanning a
-     gap would invent continuity that was never measured (§3.1).
-  2. **A mixed window is not a training example.** If a window spans a stand->walk
-     transition its label is genuinely ambiguous, mirroring the human `-1` (§5.2).
-     Such windows are kept and marked `transition`, but excluded from training targets:
-     abstain rather than force (§7).
-  3. **Window length is an OPEN TRADEOFF, not a constant** (§9). 2 s gives transition
-     precision; 4 s is needed for slow gait — this population runs to 0.13 Hz, far below
-     the healthy-adult band. Hence `window_s` is a parameter, and the frequency features
-     below are only meaningful when the window actually spans a few strides.
-"""
+# S2 windowing + features, the model-agnostic boundary: never across a gap, calibrated per file
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from numpy.lib.stride_tricks import sliding_window_view
 
 from stages.s1_clean.config import CANONICAL_HZ
 from stages.s2_ml.dataset import (
     FEATURES,
     HUMAN_UNKNOWN,
     LABEL_COL,
+    STAND,
     TIME_COL,
     TRAIN_CLASSES,
     Trial,
+    WALK,
+)
+from stages.s2_ml.rest import (
+    ANGLE_CHANNELS,
+    REST_ANCHOR_S,
+    SWAP_DELTA_DEG,
+    is_rest,
+    rest_span_frame,
 )
 
-# Defaults. Non-overlapping by default: overlapping windows manufacture near-duplicate
-# rows, which inflates apparent sample count and flatters any metric computed on them.
+# non-overlapping for training: overlap manufactures near-duplicate rows and flatters every metric
 DEFAULT_WINDOW_S = 2.0
 DEFAULT_STRIDE_S = 2.0
 
-# A training window must be label-pure. Anything less is a transition (rule 2).
+# A training window must be label-pure; anything less is a transition (rule 2)
 PURITY_MIN = 1.0
 
-# The band a stride can plausibly occupy for this population (§9): cadence 16-102
-# steps/min. Deliberately NOT the healthy-adult (0.5, 3.0) Hz band.
+# the stride band for THIS population (cadence 16-102 steps/min), NOT healthy-adult (0.5, 3.0) Hz
 GAIT_BAND_HZ = (0.13, 3.0)
+HF_BAND_HZ = (GAIT_BAND_HZ[1], 15.0)
+CYCLE_BAND_S = (0.6, 2.5)
+MAX_LAG_S = 1.0
 
 TRANSITION = "transition"
+
+# tail excluded per class when measuring the band; 1% not 5%- at 5% a quarter of trials go empty
+BAND_TAIL_PCT = 1.0
+
+META_COLUMNS = {"rev", "trial", "split", "segment", "t_start_ms", "start_row",
+                "label", "purity", "unknown_frac", "rest_trusted"}
+
+
+# where the two ANNOTATED classes overlap; no model output goes in, keeping label_audit model-free
+def amplitude_band(minhalf, labels, tail_pct: float = BAND_TAIL_PCT) -> tuple[float, float]:
+    minhalf = np.asarray(minhalf, dtype=float)
+    labels = np.asarray(labels)
+    walk = minhalf[(labels == WALK) & np.isfinite(minhalf)]
+    stand = minhalf[(labels == STAND) & np.isfinite(minhalf)]
+    if not len(walk) or not len(stand):
+        return float("inf"), float("-inf")
+    return (float(np.percentile(walk, tail_pct)),
+            float(np.percentile(stand, 100.0 - tail_pct)))
 
 
 @dataclass
@@ -66,115 +76,252 @@ class WindowSpec:
         return int(round(self.stride_s * self.fs_hz))
 
 
-def _spectral(x: np.ndarray, fs: float) -> tuple[float, float]:
-    """(dominant frequency in the gait band, fraction of power inside the band).
-
-    Resolution is 1/window_s, so at 2 s the low edge of the band is unresolvable — the
-    number is still computed, but it is near-meaningless for slow gait. That is the §9
-    tradeoff made visible rather than hidden.
-    """
-    x = x - x.mean()
-    if x.size < 4 or not np.any(x):
-        return 0.0, 0.0
-    power = np.abs(np.fft.rfft(x * np.hanning(x.size))) ** 2
-    freq = np.fft.rfftfreq(x.size, 1.0 / fs)
-    band = (freq >= GAIT_BAND_HZ[0]) & (freq <= GAIT_BAND_HZ[1])
-    total = power[1:].sum()  # drop DC
-    if not band.any() or total <= 0:
-        return 0.0, 0.0
-    return float(freq[band][np.argmax(power[band])]), float(power[band].sum() / total)
-
-
-def _corr(a: np.ndarray, b: np.ndarray) -> float:
-    if a.size < 2 or a.std() == 0 or b.std() == 0:
-        return 0.0
-    return float(np.corrcoef(a, b)[0, 1])
+# rest.swap_count for every window at once; a sign change needs BOTH endpoints inside the window
+def swap_counts(d: np.ndarray, starts: np.ndarray, n: int,
+                delta: float = SWAP_DELTA_DEG) -> np.ndarray:
+    s = np.where(d > delta, 1, np.where(d < -delta, -1, 0))
+    nz = np.flatnonzero(s)
+    change = np.zeros(d.size, dtype=np.int64)
+    if nz.size > 1:
+        change[nz[1:]] = (s[nz[1:]] != s[nz[:-1]]).astype(np.int64)
+    pre = np.concatenate([[0], np.cumsum(change)])
+    total = pre[starts + n] - pre[starts]
+    if nz.size == 0:
+        return total
+    k = np.searchsorted(nz, starts)
+    inside = k < nz.size
+    first = np.where(inside, nz[np.minimum(k, nz.size - 1)], 0)
+    return total - np.where(inside & (first < starts + n), change[first], 0)
 
 
-def window_features(win: pd.DataFrame, fs: float) -> dict[str, float]:
-    """Features for one window. Time-domain per channel + cross-leg + spectral.
+def _corr(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    a = A - A.mean(1, keepdims=True)
+    b = B - B.mean(1, keepdims=True)
+    den = np.sqrt((a * a).sum(1)) * np.sqrt((b * b).sum(1))
+    out = np.zeros(A.shape[0])
+    ok = den > 0
+    out[ok] = (a[ok] * b[ok]).sum(1) / den[ok]
+    return out
 
-    Cross-leg correlation earns its place on physical grounds: walking swings the legs
-    in antiphase, standing does not — it separates the two classes by mechanism rather
-    than by amplitude, so it should survive a change of subject or walking speed.
-    """
-    feats: dict[str, float] = {}
-    arrays = {c: win[c].to_numpy(float) for c in FEATURES}
 
-    for name, v in arrays.items():
-        feats[f"{name}_mean"] = float(v.mean())
-        feats[f"{name}_std"] = float(v.std())
-        feats[f"{name}_ptp"] = float(np.ptp(v))       # np.ptp: ndarray.ptp() gone in NumPy 2 (§8)
-        feats[f"{name}_absmean"] = float(np.abs(v).mean())
+def _power(A: np.ndarray) -> np.ndarray:
+    return np.abs(np.fft.rfft((A - A.mean(1, keepdims=True)) * np.hanning(A.shape[1]),
+                              axis=1)) ** 2
 
-    feats["ang_LR_corr"] = _corr(arrays["L_ang_LPF"], arrays["R_ang_LPF"])
-    feats["angvel_LR_corr"] = _corr(arrays["L_angvel_LPF"], arrays["R_angvel_LPF"])
-    feats["ang_LR_offset"] = float(np.median(arrays["L_ang_LPF"]) - np.median(arrays["R_ang_LPF"]))
+
+# (dominant gait-band frequency, gait-band share of non-DC power, above-gait-band share)
+# ONE transform for all three: they read the same periodogram of the same windows, and taking
+# it twice was ~6% of segment_features for no difference in the answer
+# the HF share is mostly gone after the 1 Hz low-pass, but dropping it costs worst-subject accuracy
+def _spectral(A: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    P = _power(A)
+    freq = np.fft.rfftfreq(A.shape[1], 1.0 / fs)
+    gait = (freq >= GAIT_BAND_HZ[0]) & (freq <= GAIT_BAND_HZ[1])
+    hf = (freq >= HF_BAND_HZ[0]) & (freq <= HF_BAND_HZ[1])
+    total = P[:, 1:].sum(1)
+    dom = np.zeros(A.shape[0])
+    frac = np.zeros(A.shape[0])
+    hf_ratio = np.zeros(A.shape[0])
+    ok = total > 0
+    if gait.any():
+        Pb = P[:, gait]
+        dom[ok] = freq[gait][Pb[ok].argmax(1)]
+        frac[ok] = Pb[ok].sum(1) / total[ok]
+    if hf.any():
+        hf_ratio[ok] = P[:, hf][ok].sum(1) / total[ok]
+    # a window that never leaves zero has no spectrum to describe; say 0 rather than 0/0
+    flat = ~np.any(A, axis=1)
+    dom[flat] = 0.0
+    frac[flat] = 0.0
+    hf_ratio[flat] = 0.0
+    return dom, frac, hf_ratio
+
+
+# standardized k-th central moment; 0 where the window is constant
+def _moment(A: np.ndarray, k: int) -> np.ndarray:
+    c = A - A.mean(1, keepdims=True)
+    s = A.std(1)
+    out = np.zeros(A.shape[0])
+    ok = s > 0
+    out[ok] = (c[ok] ** k).mean(1) / s[ok] ** k
+    return out
+
+
+def _autocorr(A: np.ndarray) -> np.ndarray:
+    n = A.shape[1]
+    c = A - A.mean(1, keepdims=True)
+    nfft = 1 << int(np.ceil(np.log2(2 * n)))
+    F = np.fft.rfft(c, nfft, axis=1)
+    return np.fft.irfft(F * np.conj(F), nfft, axis=1)[:, :n]
+
+
+# stride period from the first in-band autocorr peak; sub-bin, unlike _spectral's 1/window_s grid
+def _cycle_s(A: np.ndarray, fs: float) -> np.ndarray:
+    n = A.shape[1]
+    lo, hi = int(CYCLE_BAND_S[0] * fs), min(int(CYCLE_BAND_S[1] * fs), n - 1)
+    if hi <= lo:
+        return np.zeros(A.shape[0])
+    ac = _autocorr(A)
+    out = np.zeros(A.shape[0])
+    ok = A.std(1) > 0
+    out[ok] = (ac[ok, lo:hi + 1].argmax(1) + lo) / fs
+    return out
+
+
+# inter-leg timing offset from the cross-correlation peak; level gait is a half cycle out of phase
+def _lag_s(A: np.ndarray, B: np.ndarray, fs: float) -> np.ndarray:
+    n = A.shape[1]
+    sa, sb = A.std(1), B.std(1)
+    ok = (sa > 0) & (sb > 0)
+    out = np.zeros(A.shape[0])
+    if not ok.any():
+        return out
+    a = (A[ok] - A[ok].mean(1, keepdims=True)) / sa[ok, None]
+    b = (B[ok] - B[ok].mean(1, keepdims=True)) / sb[ok, None]
+    m = min(int(MAX_LAG_S * fs), n - 1)
+    nfft = 1 << int(np.ceil(np.log2(2 * n)))
+    cc = np.fft.irfft(np.fft.rfft(a, nfft, axis=1) * np.conj(np.fft.rfft(b, nfft, axis=1)),
+                      nfft, axis=1)
+    full = np.concatenate([cc[:, nfft - m:], cc[:, :m + 1]], axis=1)
+    out[ok] = (full.argmax(1) - m) / fs
+    return out
+
+
+# smallest interleg ptp among k sub-windows; the whole-window ptp reads high on one weight shift
+def _min_over_parts(D: np.ndarray, k: int) -> np.ndarray:
+    n = D.shape[1] // k
+    if n < 2:
+        return np.zeros(D.shape[0])
+    return np.minimum.reduce([D[:, i * n:(i + 1) * n].max(1) - D[:, i * n:(i + 1) * n].min(1)
+                              for i in range(k)])
+
+
+# the feature vector's column order; the single source of truth for it
+def feature_names() -> list[str]:
+    names: list[str] = []
+    for c in FEATURES:
+        # the static-offset family is deliberately absent: it carries zeroing bias, not gait
+        stats = ("std", "ptp") if c in ANGLE_CHANNELS else ("mean", "std", "ptp", "absmean")
+        names += [f"{c}_{s}" for s in stats]
+    names += ["ang_LR_corr", "angvel_LR_corr"]
+    for side in ("L", "R"):
+        names += [f"{side}_angvel_dom_hz", f"{side}_angvel_band_frac",
+                  f"{side}_angvel_skew", f"{side}_angvel_kurt",
+                  f"{side}_angvel_posfrac", f"{side}_angvel_peakratio",
+                  f"{side}_angvel_hf_ratio", f"{side}_angacc_rms", f"{side}_cycle_s",
+                  f"{side}_ang_p95_rest", f"{side}_ang_med_rest", f"{side}_ang_p95_p05"]
+    names += ["angvel_LR_lag_s", "ileg_minhalf", "ileg_minquarter", "ileg_swaps"]
+    return names
+
+
+# (X, start_row) per window of one segment; zeros/ileg_zero required- a silent default is skew
+def segment_features(chan: dict[str, np.ndarray], spec: WindowSpec,
+                     zeros: dict[str, float], ileg_zero: float
+                     ) -> tuple[np.ndarray, np.ndarray]:
+    n, step, fs = spec.n, spec.step, spec.fs_hz
+    W = {c: sliding_window_view(chan[c], n)[::step] for c in FEATURES}
+    starts = np.arange(W[FEATURES[0]].shape[0]) * step
+    d = chan[ANGLE_CHANNELS[0]] - chan[ANGLE_CHANNELS[1]] - ileg_zero
+    D = sliding_window_view(d, n)[::step]
+
+    cols: dict[str, np.ndarray] = {}
+    for c in FEATURES:
+        A = W[c]
+        if c not in ANGLE_CHANNELS:
+            cols[f"{c}_mean"] = A.mean(1)
+            cols[f"{c}_absmean"] = np.abs(A).mean(1)
+        cols[f"{c}_std"] = A.std(1)
+        cols[f"{c}_ptp"] = A.max(1) - A.min(1)
+
+    cols["ang_LR_corr"] = _corr(W[ANGLE_CHANNELS[0]], W[ANGLE_CHANNELS[1]])
+    cols["angvel_LR_corr"] = _corr(W[FEATURES[2]], W[FEATURES[3]])
 
     for side in ("L", "R"):
-        dom, frac = _spectral(arrays[f"{side}_angvel_LPF"], fs)
-        feats[f"{side}_angvel_dom_hz"] = dom
-        feats[f"{side}_angvel_band_frac"] = frac
+        V = W[f"{side}_angvel_LPF"]
+        dom, frac, hf_ratio = _spectral(V, fs)
+        cols[f"{side}_angvel_dom_hz"] = dom
+        cols[f"{side}_angvel_band_frac"] = frac
+        cols[f"{side}_angvel_skew"] = _moment(V, 3)
+        cols[f"{side}_angvel_kurt"] = _moment(V, 4) - 3.0
+        cols[f"{side}_angvel_posfrac"] = (V > 0).mean(1)
+        cols[f"{side}_angvel_peakratio"] = V.max(1) / (np.abs(V.min(1)) + 1e-6)
+        cols[f"{side}_angvel_hf_ratio"] = hf_ratio
+        cols[f"{side}_angacc_rms"] = np.sqrt(((np.diff(V, axis=1) * fs) ** 2).mean(1))
+        cols[f"{side}_cycle_s"] = _cycle_s(V, fs)
 
-    return feats
+        A = W[f"{side}_ang_LPF"]
+        p95 = np.percentile(A, 95, axis=1)
+        p05 = np.percentile(A, 5, axis=1)
+        z = zeros[f"{side}_ang_LPF"]
+        # How far the thigh lifts above THIS subject's own standing posture
+        cols[f"{side}_ang_p95_rest"] = p95 - z
+        cols[f"{side}_ang_med_rest"] = np.median(A, 1) - z
+        cols[f"{side}_ang_p95_p05"] = p95 - p05
+
+    cols["angvel_LR_lag_s"] = _lag_s(W[FEATURES[2]], W[FEATURES[3]], fs)
+    cols["ileg_minhalf"] = _min_over_parts(D, 2)
+    cols["ileg_minquarter"] = _min_over_parts(D, 4)
+    cols["ileg_swaps"] = swap_counts(d, starts, n).astype(float)
+
+    names = feature_names()
+    return np.column_stack([cols[k] for k in names]), starts
 
 
-def label_window(labels: np.ndarray) -> tuple[object, float, float]:
-    """(label, purity, unknown_fraction) for a window.
-
-    `-1` is excluded before voting (§5.2: training-poison, evaluation-gold) but its share
-    is reported so a confidence signal can be evaluated against it later. A window that
-    is not pure over {stand, walk} is TRANSITION, never a coin-flip majority vote.
-
-    KNOWN AND ACCEPTED (Lu, 2026-08-03 — §5.2): exclusion is per ROW, so `purity` is
-    computed over the survivors and a window can be "pure" on a minority of its rows.
-    Measured at the 2 s default: 92 of 4,812 trainable windows contain `-1`, 20 are
-    over half `-1`, worst is 93.5%. Left in deliberately — 1.9% label noise is inside
-    what an RF tolerates, and no threshold on `unknown_frac` has evidence behind it.
-    `unknown_frac` rides along on every window so the decision stays checkable.
-    """
-    unknown_frac = float(np.mean(labels == HUMAN_UNKNOWN))
-    valid = labels[np.isin(labels, TRAIN_CLASSES)]
-    if valid.size == 0:
-        return None, 0.0, unknown_frac
-    values, counts = np.unique(valid, return_counts=True)
-    purity = float(counts.max() / valid.size)
-    winner = int(values[counts.argmax()])
-    return (winner if purity >= PURITY_MIN else TRANSITION), purity, unknown_frac
+# (per-side posture, interleg offset, trusted); untrusted falls back to whole-recording medians
+def rest_reference(frame: pd.DataFrame, fs: float = CANONICAL_HZ
+                   ) -> tuple[dict[str, float], float, bool]:
+    span = int(round(REST_ANCHOR_S * fs))
+    seg0 = frame[frame["segment"] == frame["segment"].min()]
+    opening = seg0.iloc[:span]
+    # the opening if it is genuinely rest, otherwise the best resting span anywhere in the file
+    if len(opening) == span and is_rest(
+            (opening[ANGLE_CHANNELS[0]] - opening[ANGLE_CHANNELS[1]]).to_numpy(float), span):
+        best = opening
+    else:
+        best = rest_span_frame(frame, span)
+    if best is None:
+        zeros = {c: float(frame[c].median()) for c in ANGLE_CHANNELS}
+        return zeros, zeros[ANGLE_CHANNELS[0]] - zeros[ANGLE_CHANNELS[1]], False
+    zeros = {c: float(best[c].median()) for c in ANGLE_CHANNELS}
+    return zeros, zeros[ANGLE_CHANNELS[0]] - zeros[ANGLE_CHANNELS[1]], True
 
 
-def iter_windows(trial: Trial, spec: WindowSpec) -> Iterator[tuple[dict, pd.DataFrame]]:
-    """Yield (metadata, window) for every window of one trial, never spanning a gap.
+# (label, purity, unknown_fraction) per window; impure over {stand, walk} is TRANSITION, not a vote
+def label_windows(labels_2d: np.ndarray):
+    unknown = (labels_2d == HUMAN_UNKNOWN).mean(1)
+    counts = np.stack([(labels_2d == c).sum(1) for c in TRAIN_CLASSES], axis=1)
+    valid = counts.sum(1)
+    purity = np.where(valid > 0, counts.max(1) / np.maximum(valid, 1), 0.0)
+    winner = np.array(TRAIN_CLASSES, dtype=object)[counts.argmax(1)]
+    label = np.where(purity >= PURITY_MIN, winner, TRANSITION)
+    return np.where(valid == 0, None, label), purity, unknown
 
-    THE windowing primitive — S2 features and S3 anchors both consume it, so the two
-    stages cannot drift into windowing the same trial differently. Anything keyed on
-    `(segment, t_start_ms)` from one stage joins to the other exactly.
 
-    Yields the window unlabeled: what a window *is* does not depend on ground truth,
-    and S3 must be able to run on raw recordings that carry none.
-    """
-    frame = trial.frame
+# every window of one trial, never spanning a gap
+def windows_of_trial(trial: Trial, spec: WindowSpec) -> pd.DataFrame:
+    frame = trial.frame.reset_index(drop=True)
     if frame.empty:
-        return
+        return pd.DataFrame()
+    zeros, ileg_zero, trusted = rest_reference(frame, spec.fs_hz)
+    out = []
     for seg_id, seg in frame.groupby("segment", sort=True):
         seg = seg.reset_index(drop=True)
-        for start in range(0, len(seg) - spec.n + 1, spec.step):
-            win = seg.iloc[start:start + spec.n]
-            yield ({"rev": trial.rev, "trial": trial.trial, "split": trial.split,
-                    "segment": int(seg_id), "t_start_ms": float(win[TIME_COL].iloc[0])},
-                   win)
-
-
-def windows_of_trial(trial: Trial, spec: WindowSpec) -> pd.DataFrame:
-    """Every window of one trial, labeled and featurized."""
-    rows = []
-    for meta, win in iter_windows(trial, spec):
-        label, purity, unk = label_window(win[LABEL_COL].to_numpy())
-        if label is None:
+        if len(seg) < spec.n:
             continue
-        rows.append({**meta, "label": label, "purity": purity, "unknown_frac": unk,
-                     **window_features(win, spec.fs_hz)})
-    return pd.DataFrame(rows)
+        chan = {c: seg[c].to_numpy(float) for c in FEATURES}
+        X, starts = segment_features(chan, spec, zeros, ileg_zero)
+        if X.shape[0] == 0:
+            continue
+        lab, purity, unknown = label_windows(
+            sliding_window_view(seg[LABEL_COL].to_numpy(), spec.n)[::spec.step])
+        meta = pd.DataFrame({
+            "rev": trial.rev, "trial": trial.trial, "split": trial.split,
+            "segment": int(seg_id), "t_start_ms": seg[TIME_COL].to_numpy(float)[starts],
+            "start_row": starts, "label": lab, "purity": purity,
+            "unknown_frac": unknown, "rest_trusted": trusted,
+        })
+        out.append(pd.concat([meta, pd.DataFrame(X, columns=feature_names())], axis=1))
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
 
 
 def build_windows(trials: list[Trial], spec: WindowSpec | None = None) -> pd.DataFrame:
@@ -183,25 +330,6 @@ def build_windows(trials: list[Trial], spec: WindowSpec | None = None) -> pd.Dat
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+# feature columns only, never the metadata or the target
 def feature_columns(df: pd.DataFrame) -> list[str]:
-    """Feature columns only — never the metadata or the target."""
-    meta = {"rev", "trial", "split", "segment", "t_start_ms", "label", "purity", "unknown_frac"}
-    return [c for c in df.columns if c not in meta]
-
-
-def main() -> None:
-    from stages.s2_ml.dataset import load_dataset
-
-    spec = WindowSpec()
-    df = build_windows(load_dataset(), spec)
-    trainable = df[df["label"] != TRANSITION]
-    print(f"[s2] window={spec.window_s}s stride={spec.stride_s}s @ {spec.fs_hz} Hz "
-          f"-> {len(df):,} windows, {len(feature_columns(df))} features")
-    print(f"[s2] trainable (label-pure): {len(trainable):,}  "
-          f"transition (excluded from training): {len(df) - len(trainable):,}")
-    print()
-    print(pd.crosstab(df["split"], df["label"]).to_string())
-
-
-if __name__ == "__main__":
-    main()
+    return [c for c in df.columns if c not in META_COLUMNS]
