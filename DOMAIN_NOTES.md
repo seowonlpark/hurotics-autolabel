@@ -1,4 +1,4 @@
-# DOMAIN NOTES — H-CARE IMU locomotion pipeline
+# DOMAIN NOTES
 
 **This file is injected into every agent's system prompt. It is the pipeline's institutional memory.**
 
