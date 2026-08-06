@@ -10,8 +10,8 @@
 [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overview) (Python) 기반.
 
 > **이름에 대하여.** 이 저장소의 모든 측정 대상 — 코퍼스, 장비, 데이터 — 은 **h-medi**다.
-> git 리모트는 `hurotics-autolabel`, 작업 디렉터리는 아직 `h-care-champion-5219cd5`인데,
-> 둘 다 파이프라인보다 먼저 붙은 이름이고 어느 쪽도 데이터를 가리키지 않는다. HUROTICS는
+> 작업 디렉터리와 git 리모트는 둘 다 `hurotics-autolabel`이다. 파이프라인보다 먼저 붙은
+> 이름이고, 데이터가 아니라 벤더를 가리킨다. HUROTICS는
 > 벤더 이름이다. `archive/`나 `runs/keep/agent_runs/*/system_prompt.txt` 안에 남아 있는
 > *H-CARE*는 당시 기록을 그대로 얼려 둔 것이며 의도적으로 고치지 않았다 —
 > [여기 남아 있는 "h-care"의 의미](#여기-남아-있는-h-care의-의미) 참고.
@@ -493,13 +493,14 @@ Length, GCP, 어드미턴스, PID 상태는 장비가 *계산한* 것이다. 계
 ## 여기 남아 있는 "h-care"의 의미
 
 데이터와는 아무 상관이 없다. 산문에 잘못 실려 다니던 제품명이었고 2026-08-05에 정정했다.
-코퍼스는 처음부터 h-medi였다. 이 문자열이 아직 남아 있는 곳은 세 부류이고, 각각 의도적이다:
+코퍼스는 처음부터 h-medi였다. 작업 디렉터리는 2026-08-07까지 `h-care-champion-5219cd5`였고,
+리모트에 맞춰 `hurotics-autolabel`로 개명했다 — 편집이 아니라 체크아웃 수준의 이동이다.
+이 문자열이 아직 남아 있는 곳은 두 부류이고, 각각 의도적이다:
 
 | 어디 | 왜 남기는가 |
 |---|---|
 | `runs/keep/agent_runs/*/system_prompt.txt`, `archive/runs/*/system_prompt.txt` | **문서가 아니라 증거다.** 이 파일들은 *에이전트가 정확히 무엇을 들었는지*를 기록하려고 존재한다. 하나라도 고치면 이미 일어난 실행에 대해 기록이 거짓말을 하게 되고, 같은 디렉터리의 모든 판정은 지금 적힌 그 텍스트 아래에서 내려진 것이다. |
-| `labeled_raw/preset_sweep.json`, `runs/keep/agent_runs/*/run_log.jsonl` | 절대 경로를 담은 생성 산출물이라 디렉터리 이름을 그대로 물고 있다. 다음 실행에 재생성되고, 그 문자열을 읽는 코드는 없다. |
-| 작업 디렉터리와 `hurotics-autolabel` 리모트 | 둘 중 어느 쪽을 바꾸든 편집이 아니라 체크아웃 수준의 이동이고, `runs/`에 도장 찍힌 모든 절대 경로가 깨진다. |
+| `labeled_raw/preset_sweep.json`, `runs/keep/agent_runs/*/run_log.jsonl` | 절대 경로를 담은 생성 산출물이라 쓰일 당시의 디렉터리 이름을 그대로 물고 있다. 다음 실행에 재생성되고, 그 문자열을 읽는 코드는 없다. |
 
 `archive/needtowrite.md`는 **고쳤다.** "아카이브는 발견된 그대로 둔다"는 일반 규칙에 대한
 예외이며, 근거는 그 파일이 `rev2_view` → `lpf_view` 개명에 대해 스스로 세운 선례다: 아카이브는

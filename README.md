@@ -10,8 +10,8 @@ with every decision logged and reproducible.
 Built on the [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overview) (Python).
 
 > **On the names.** The corpus, the device and the subject of every measurement in this repo
-> is **h-medi**. The git remote is `hurotics-autolabel` and the working directory is still
-> `h-care-champion-5219cd5`; both predate the pipeline and neither names the data. HUROTICS
+> is **h-medi**. The working directory and the git remote are both `hurotics-autolabel`,
+> which predates the pipeline and names the vendor, not the data. HUROTICS
 > is the vendor. Anything in `archive/` or in a `runs/keep/agent_runs/*/system_prompt.txt`
 > that says *H-CARE* is a frozen record of what was written at the time and is deliberately
 > not rewritten — see [What "h-care" still means here](#what-h-care-still-means-here).
@@ -511,14 +511,15 @@ not be read a third time without a new sealed subject.
 ## What "h-care" still means here
 
 Nothing about the data. It was a wrong product name carried in prose, corrected on
-2026-08-05; the corpus was always h-medi. Three places still contain the string, and each
-is deliberate:
+2026-08-05; the corpus was always h-medi. The working directory was `h-care-champion-5219cd5`
+until 2026-08-07, when it was renamed to `hurotics-autolabel` to match the remote — a
+checkout-level move, not an edit. Two places still contain the string, and each is
+deliberate:
 
 | where | why it stays |
 |---|---|
 | `runs/keep/agent_runs/*/system_prompt.txt`, `archive/runs/*/system_prompt.txt` | **Evidence, not documentation.** These files exist to record *exactly what the agent was told*. Editing one would make the record lie about a run that already happened, and every verdict in the same directory was reached under the text as written. |
-| `labeled_raw/preset_sweep.json`, `runs/keep/agent_runs/*/run_log.jsonl` | Generated artifacts holding absolute paths, so they carry the directory name. Regenerated on the next run; nothing reads the string. |
-| the working directory and the `hurotics-autolabel` remote | Renaming either is a checkout-level move, not an edit, and would break every absolute path stamped into `runs/`. |
+| `labeled_raw/preset_sweep.json`, `runs/keep/agent_runs/*/run_log.jsonl` | Generated artifacts holding absolute paths, so they carry the directory name as it stood when they were written. Regenerated on the next run; nothing reads the string. |
 
 `archive/needtowrite.md` **was** rewritten, against the general rule that the archive is
 left as found — on the precedent that file sets itself for the `rev2_view` → `lpf_view`
