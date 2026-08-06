@@ -42,7 +42,6 @@ LABELED_RAW = REPO_ROOT / "labeled_raw"
 # Named here rather than in each writer so `runs/README.md` and the writers cannot drift.
 LEDGER_FILENAME = "experiments.jsonl"
 PROPOSALS_FILENAME = "proposals.jsonl"
-LOCKBOX_STEM = "roweval_lockbox"
 
 
 # Every directory a staleness check should consider, stamped or not: selecting on "has a stamp"

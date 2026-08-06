@@ -32,10 +32,15 @@ from anything under `runs/`.
 > **coverage 84.66% at 0.9901, worst subject `rev5` 0.9525**, from
 > `runs/s2_ml/roweval_loro.json`, argued in `OPERATING_POINTS.md`.
 >
-> One deliberate exception to "left as found": the `rev2_view` → `lpf_view` rename
-> (2026-08-04, DOMAIN_NOTES §6.1) was applied **inside** the archive too. The archive exists
-> to be rewritten from, and transcribing a name the code no longer uses would carry the
-> defect forward into the very file this one specifies.
+> Two deliberate exceptions to "left as found". The `rev2_view` → `lpf_view` rename
+> (2026-08-04, DOMAIN_NOTES §6.1) was applied **inside** the archive too, and so was the
+> **`H-CARE` → `h-medi` correction (2026-08-05)** — the product name in the deleted README's
+> header was simply wrong, and the corpus this pipeline reads was always h-medi
+> (`DOMAIN_NOTES` §5.6). The archive exists to be rewritten from, and transcribing a name
+> the code no longer uses — or never described — would carry the defect forward into the
+> very file this one specifies. The `system_prompt.txt` files under `archive/runs/` are
+> **not** covered by either exception: those record what an agent was actually told, and a
+> corrected transcript would misdescribe the run that produced the verdicts beside it.
 >
 > Two more §5 claims have since gone stale and must not be transcribed forward. **§5.9's
 > closing line — "one 2026-05 file is quarantined for a broken time base" — is no longer
@@ -534,9 +539,9 @@ Prune freely when rewriting — it is here so the choice is yours, not the files
 ### §6.1 — Header, command index, and reading order (lines 1–46)
 
 ````markdown
-# h-care-agents
+# h-medi-agents
 
-A staged pipeline for turning raw H-CARE IMU device logs into a locomotion classification system —
+A staged pipeline for turning raw h-medi IMU device logs into a locomotion classification system —
 cleaning, ML experimentation, physics-based analysis, and reporting — where **deterministic code
 does the work and Claude agents handle judgment at defined points**, with every decision logged and
 reproducible.

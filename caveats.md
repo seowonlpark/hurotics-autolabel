@@ -708,3 +708,42 @@ because they were being read as current: `fuse.py` and `agents/s4_fusion.py` des
 opened by asserting the swap rule is "independent of S2" and "reads a different quantity" —
 which §1.1b measured to be false. That claim is the load-bearing one for the whole fusion
 argument, so it is now retracted in place rather than quietly softened.
+
+---
+
+## 6. Stale things removed from this repo's own work
+
+§5 is about corrections the sibling repos still need; this section is about the ones only this
+repo carried. Same rule applies — a removal is recorded, not silent, because the next reader
+cannot tell a thing that was deliberately dropped from a thing nobody noticed.
+
+### 6.1 The parquet decision outlived the parquet **[2026-08-05]**
+
+S1 stopped persisting the cleaned frame — it measures the canonical grid and drops it, keeping
+only `channel_trust.json` per file. **Nothing in this repo has written or read a parquet since,
+and two things went on describing one:**
+
+| removed | why |
+|---|---|
+| `pyarrow>=15.0` (`requirements.txt`) | The parquet engine, and its only reason to be installed. No module imports it, nothing passes `engine="pyarrow"` or an arrow dtype backend, and the worktree holds no `.parquet`, `.pkl` or `.npy` at all. |
+| §9's "clean output is **parquet**" (`DOMAIN_NOTES.md`) | Corrected in place, not deleted. The *reasoning* — storage is a file-format problem, not a column-count one — is what licensed keeping the honest measured superset, and it still stands. Only the conclusion is dead. §4.1b's "anyone reading the parquet" went with it. |
+
+**`.gitignore` still excludes `runs/**/*.parquet`, `*.pkl` and `*.npy`, and that is left alone
+on purpose.** An ignore rule for a file type nothing produces costs nothing and fails safe; the
+two that are load-bearing, `*.joblib` and `*.csv`, sit in the same list.
+
+### 6.2 `runslayout.LOCKBOX_STEM` removed — it was the drift it existed to prevent **[2026-08-05]**
+
+Never imported, while its two neighbours `LEDGER_FILENAME` and `PROPOSALS_FILENAME` are, by
+`experiment.py`. Their shared comment says they are "named here rather than in each writer so
+`runs/README.md` and the writers cannot drift" — and the third one had already lost that
+argument: the literal `"roweval_lockbox"` is restated once in `roweval.py` and at four sites in
+`breakdown.py`, so the canonical copy was the only one no code could reach.
+
+**Deleting it is the smaller change; importing it at those five sites is the better one, and is
+deliberately not done here** — that is a behaviour-neutral refactor of two live stage modules,
+not a cleanup, and it should be its own commit with its own reason.
+
+Nothing measured moved in either of the above. `verify_features` and `freshness --self-test`
+pass, `run_pipeline.py --dry-run` still plans 14 steps, and no gate artifact, champion or figure
+in `runs/breakdown.md` was touched.
