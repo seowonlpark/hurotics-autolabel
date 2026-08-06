@@ -219,7 +219,7 @@ There is no "the legs are fine, the trunk is swapped": **`L_Gyro_Y` is no more s
 `B_Gyro_Y` is.** The column *name* and the physical axis disagree on all three sides identically — a
 naming convention of the device, not a bug in one IMU.
 
-**Consequence for anyone reading the parquet: `*_Gyro_Y` is NOT the sagittal rate.** The channel that
+**Consequence for anyone reading these channels: `*_Gyro_Y` is NOT the sagittal rate.** The channel that
 matches `*_Deg_Y` (and hence `*_ang_LPF`) is `*_Gyro_Z`. Resolve it from the file's
 `channel_trust.json` (`sides.<side>.gyro_axis_by_deg_axis`), never from the column name.
 
@@ -765,7 +765,11 @@ flicker threshold still cannot be emitted.
   this population, which runs to **0.13 Hz** (cadence 16–102 steps/min) **[measured]**.
 - Random Forest is the starting model. The windowing/feature-extraction layer is the durable,
   model-agnostic boundary — **feature selection lives there, not in the clean layer.**
-- Storage cost is a file-format problem, not a column-count problem: clean output is **parquet**.
+- Storage cost is a file-format problem, not a column-count problem — the argument that let the
+  canonical frame keep the honest measured superset instead of pruning to save space. **Its
+  conclusion, "clean output is parquet", is dead [2026-08-05]:** clean persists no frame at all,
+  only `channel_trust.json` per file (`s1_clean/clean.py`). The reasoning stands; the artifact it
+  was about does not exist.
 - HMM is a post-processing smoothing layer, not a standalone model. Its transition penalty trades off
   against transition lag — the same problem the existing rule-based algorithm has. Tune it
   deliberately; do not adopt naively.

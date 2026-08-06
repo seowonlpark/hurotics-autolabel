@@ -29,7 +29,9 @@ ACCURACY_TARGET = 0.95
 
 # which headline each checked-in document quotes, explicit per artifact and hand-maintained
 PROSE_CLAIMS = {
-    "S2 row-level": ["README.md", "caveats.md", "OPERATING_POINTS.md"],
+    # README.ko.md is listed for the same reason as README.md: a translation that outlives the
+    # number it translates is worse than no translation, because it reads as independently checked
+    "S2 row-level": ["README.md", "README.ko.md", "caveats.md", "OPERATING_POINTS.md"],
 }
 
 # below this a file commits to less than half its rows- structural; a reporting line, not a policy

@@ -1,7 +1,7 @@
 # Pipeline breakdown
 
-- generated: **2026-08-04T09:12:09.573639+00:00**
-- commit: `7d0176c`
+- generated: **2026-08-05T05:22:14.067571+00:00**
+- commit: `e20b5e5`
 - flags raised: **5** (concentration, gap, risk, unchecked)
 - artifacts missing: **0**
 

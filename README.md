@@ -1,11 +1,40 @@
-# h-care-champion
+# h-medi data distillation
 
-A staged pipeline that turns raw H-CARE IMU device logs into a per-row stand/walk
-classification with a stated confidence and, where it is unsure, a stated reason —
+**English** · [한국어](README.ko.md)
+
+A staged pipeline that distils raw **h-medi** IMU device logs down to a per-row stand/walk
+call with a stated confidence and, where it is unsure, a stated reason —
 **deterministic code does the work and Claude agents handle judgment at defined points**,
 with every decision logged and reproducible.
 
 Built on the [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overview) (Python).
+
+> **On the names.** The corpus, the device and the subject of every measurement in this repo
+> is **h-medi**. The git remote is `hurotics-autolabel` and the working directory is still
+> `h-care-champion-5219cd5`; both predate the pipeline and neither names the data. HUROTICS
+> is the vendor. Anything in `archive/` or in a `runs/keep/agent_runs/*/system_prompt.txt`
+> that says *H-CARE* is a frozen record of what was written at the time and is deliberately
+> not rewritten — see [What "h-care" still means here](#what-h-care-still-means-here).
+
+---
+
+## What "distillation" means here, concretely
+
+Each stage throws away more than it keeps, and the discard is the point — every column that
+survives is one a downstream number can be traced back to.
+
+| from | to | thrown away, on purpose |
+|---|---|---|
+| a raw device log | the **45-column contract**, `Time` … `Total Gait Length` | the variant-specific tail past index 44, which is a firmware era, not a measurement |
+| the 45 columns | the **measured** channels only, on a canonical **100 Hz** grid | everything the firmware *computed* — Cadence, Stride Length, GCP, admittance, PID state |
+| a cleaned frame | one **`channel_trust.json`** per file | the frame itself. S1 measures the frame and drops it (see [Data layout](#data-layout)) |
+| the measured superset | **4 rotational channels** — `L/R_ang_LPF`, `L/R_angvel_LPF` | every channel encoding linear translation, which reads ~0 on a treadmill while the person is plainly walking (`DOMAIN_NOTES` §5.7) |
+| 4 channels × 2 s windows | **38 window features** (`extratrees400_drop_moments38`) | four moment features the ablation ledger could not justify |
+| 38 features per window | **one committed call per row**, or an abstention with a named reason | the rows the ensemble was not sure enough about — 15.3% of them at the shipped threshold |
+
+The last row is the one that makes this a distillation rather than a classifier: **coverage
+is a deliberate loss**, argued in `OPERATING_POINTS.md`, and the discarded rows leave with
+their reason attached rather than silently.
 
 ---
 
@@ -32,10 +61,10 @@ recorded in `archive/needtowrite.md` §4 as a defect worth not repeating.
 
 | file | what it is |
 |---|---|
-| **`DOMAIN_NOTES.md`** | Everything the corpus taught us the hard way. Injected into every agent's prompt. **Read before touching any data.** |
+| **`DOMAIN_NOTES.md`** | Everything the h-medi corpus taught us the hard way. Injected into every agent's prompt. **Read before touching any data.** |
 | **`caveats.md`** | What this pipeline is shaky about: thin constants, accepted imperfections, unverified paths, deliberate omissions. Read before trusting a number. |
 | **`OPERATING_POINTS.md`** | The abstention threshold: what each preset costs and buys, and why the default is 0.85. |
-| this file | How to run it. |
+| this file | How to run it. [`README.ko.md`](README.ko.md) is the Korean twin of this page. |
 | **`RUNBOOK.md`** | What each command *touches*: every input path, every step's gate, every file it writes. Derived by reading the code, not from the other docs. Read it when this file says what to run and you need to know what landed where. |
 | **`runs/README.md`** | The `runs/` tree itself — what is safe to delete, what can never be rebuilt, and why. |
 
@@ -79,7 +108,7 @@ source of `ModuleNotFoundError` here.
 ## Data layout
 
 ```
-data/raw/<YYYYMMDD[_n]>/*.csv       unlabeled device logs, exactly as the device wrote them
+data/raw/<YYYYMMDD[_n]>/*.csv       unlabeled h-medi device logs, exactly as the device wrote them
 data/labeled/rev*/csv/*.csv         the golden annotated corpus, never mixed into raw
 data/clean/<session>/
     <stem>.channel_trust.json       S1 output, and the ONLY thing it persists per file: the
@@ -109,7 +138,7 @@ pipeline deletes raw data.
 ### What is and is not in git
 
 `data/` in its entirety, `.env`, `tracker/`, and anything new under `archive/` are
-gitignored. **Nothing from HUROTICS leaves the machine via git.**
+gitignored. **No h-medi recording leaves the machine via git.**
 
 `runs/` and `labeled_raw/` are filtered on **size**, not on worth: what stays out is the
 heavy binaries — fitted models, per-row scores, and the few-GB per-session labelled CSVs,
@@ -286,7 +315,9 @@ mechanical rules — the lockbox below target, a subject spread this wide, corpu
 clustering on one variant or one run of sessions, and *whether the checked-in prose still
 quotes the live headline*. That last one exists because `README.md` and `caveats.md` both
 sat at a stale pair for a run that measured something else; both told the reader to prefer
-the report, and both were still wrong to a reader who did not.
+the report, and both were still wrong to a reader who did not. [`README.ko.md`](README.ko.md)
+is checked by the same rule, so a translation cannot quietly outlive the number it
+translates.
 
 Flags are not verdicts. Each names what to look at and none of them conclude anything.
 
@@ -445,16 +476,17 @@ none.
 | **S3** plausibility | complete — file-level bounds with synthetic-fault controls |
 | **S2** corpus sweep | complete — `label_all` on the spine after the champion is final, so `labeled_raw/` describes the run's own model |
 | breakdown | complete — final step of every run, reads every stage, states its own gaps, raises mechanical flags |
-| handoff docs | complete — `RUNBOOK.md` (every path, command and output, read off the code), `runs/README.md` (what is safe to delete), `archive/README.md` (what was retired and why) |
+| handoff docs | complete — `RUNBOOK.md` (every path, command and output, read off the code), `runs/README.md` (what is safe to delete), `archive/README.md` (what was retired and why), [`README.ko.md`](README.ko.md) (the Korean twin of this page) |
 | hardening | not started |
 
 ---
 
 ## What this pipeline is judged on
 
-> **Label stand/walk on any recording at ≥95% accuracy over the rows it commits to, and
-> abstain rather than guess on the rest.** Abstention is a feature: an ambiguous row gets a
-> call, a confidence, the reason it is uncertain, and the alternative it was weighing.
+> **Label stand/walk on any h-medi recording at ≥95% accuracy over the rows it commits to,
+> and abstain rather than guess on the rest.** Abstention is a feature: an ambiguous row
+> gets a call, a confidence, the reason it is uncertain, and the alternative it was
+> weighing.
 
 At the shipped threshold of 0.85, on development subjects held out one at a time:
 **coverage 84.66% at accuracy 0.9901, worst subject `rev5` at 0.9525.**
@@ -473,3 +505,22 @@ if the two disagree, believe `runs/regen/s2_ml/roweval_loro.json` and never this
 
 `rev8` is **spent** — read twice on 2026-08-03, both logged in `caveats.md` §3.2. It must
 not be read a third time without a new sealed subject.
+
+---
+
+## What "h-care" still means here
+
+Nothing about the data. It was a wrong product name carried in prose, corrected on
+2026-08-05; the corpus was always h-medi. Three places still contain the string, and each
+is deliberate:
+
+| where | why it stays |
+|---|---|
+| `runs/keep/agent_runs/*/system_prompt.txt`, `archive/runs/*/system_prompt.txt` | **Evidence, not documentation.** These files exist to record *exactly what the agent was told*. Editing one would make the record lie about a run that already happened, and every verdict in the same directory was reached under the text as written. |
+| `labeled_raw/preset_sweep.json`, `runs/keep/agent_runs/*/run_log.jsonl` | Generated artifacts holding absolute paths, so they carry the directory name. Regenerated on the next run; nothing reads the string. |
+| the working directory and the `hurotics-autolabel` remote | Renaming either is a checkout-level move, not an edit, and would break every absolute path stamped into `runs/`. |
+
+`archive/needtowrite.md` **was** rewritten, against the general rule that the archive is
+left as found — on the precedent that file sets itself for the `rev2_view` → `lpf_view`
+rename: the archive exists to be rewritten *from*, and transcribing a name the code no
+longer uses carries the defect forward into whatever is written next.
