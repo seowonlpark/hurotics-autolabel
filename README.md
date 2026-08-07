@@ -183,7 +183,7 @@ on one stage. If you do, note that `runs/regen/` is overwritten in place, so re-
 stage alone leaves the downstream reports describing inputs that no longer exist.
 `freshness.py` stamps the sha256 of every artifact a stage consumed into
 `_inputs.<stage>.json` in that stage's output directory — **one stamp per stage, not per
-directory**, so `train`, `roweval` and `raweval` sharing `runs/regen/s2_ml` cannot vouch for
+directory**, so `train` and `roweval` sharing `runs/regen/s2_ml` cannot vouch for
 each other. `stages.breakdown` checks every directory `runslayout.checkable_dirs()` names at
 the end of every run, stamped or not: a stage that never declared its inputs raises an
 `unchecked` flag rather than reading as clean. **It reports; it does not delete.**
@@ -242,7 +242,6 @@ somewhere scratch.
 ```powershell
 python -m stages.s2_ml.train      # champion + leave-one-rev-out window CV -> locoeval.json
 python -m stages.s2_ml.roweval    # the ROW-level curve, per-subject table, reason validation
-python -m stages.s2_ml.raweval    # the same accuracy, measured on the RAW device route
 ```
 
 `train.py` scores **windows**, which is the unit the model learns on. A caller labels a CSV
@@ -259,11 +258,14 @@ of the tree nothing rebuilds. The LORO pass refits from the spec on demand and s
 re-running the stage — do not try.** Its numbers survive in the tracked
 `runs/keep/s2_ml/roweval_lockbox.json`, and `roweval.render()` re-renders the page from it.
 
-`raweval` closes the last link in the chain: `roweval` measures the `lpf_view` export,
-`verify_serve` shows the raw route agrees with that export row for row but drops `Label`
-before comparing — so it proves *equivalence*, never *correctness*. `raweval` scores the
-raw route directly against human labels, with the lockbox refused in code rather than by
-remembering a flag.
+**`roweval`'s number covers the raw route too, and that is a proof rather than a second
+measurement.** `verify_serve` labels the same recording both ways and compares every column a
+caller receives for exact equality — confidence to 1e-9, and 0 disagreeing verdicts over
+536,590 rows. Identical verdicts against identical truth give identical accuracy, so nothing
+is left for a separate raw-route reading to find. A stage called `raweval` did take that
+second reading until 2026-08-07; it agreed to four decimal places and was removed, because
+two numbers that cannot disagree read as independent confirmation and are not
+(`caveats.md` §1.7).
 
 ### Verifying the raw path
 
@@ -475,7 +477,7 @@ none.
 | **S1** clean | complete — schema/rate/gaps, gyro unit+axis trust, yaw-drift trust, degenerate-time-base rejection, quarantine ledger; gate passes |
 | **S1** exception agent | complete — triages the exception queue into known_expected / novel / needs_human with grounded rationale |
 | **S2** ml | complete — windowing/features, leave-one-rev-out CV, per-row labelling with confidence and ambiguity reasons |
-| **S2** row + raw evaluation | complete — `roweval` on the annotated export, `raweval` on the raw device route, both leave-one-rev-out |
+| **S2** row + raw evaluation | complete — `roweval` leave-one-rev-out on the annotated export; `verify_serve` shows the raw route emits identical verdicts, so that number covers both |
 | **S2** experiment agent | complete — proposes challengers against a logged promotion rule; the ledger records rejections too |
 | **S3** physics | complete — swap-rule anchors, rate-invariance verdict recorded for all four anchors |
 | **S3** label audit | complete — two trial-level detectors, both model-free |

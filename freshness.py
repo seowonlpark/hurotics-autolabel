@@ -64,6 +64,11 @@ def stamp_inputs(out_dir: Path, inputs: dict[str, Path], stage: str | None = Non
     return record
 
 
+# "checked, nothing upstream" rather than "nobody can tell"- what keeps a stage off §A's blind list
+def declare_no_inputs(out_dir: Path, stage: str | None = None) -> dict:
+    return stamp_inputs(out_dir, {}, stage=stage)
+
+
 # complaints about one stamp file; `where` names it the way a reader would look it up
 def _check_stamp(stamp: Path, where: str) -> list[str]:
     try:
@@ -146,7 +151,7 @@ def _self_test() -> list[str]:
 
     # an empty stamp reads CLEAN while no stamp complains: declaring nothing is not never declaring
     empty = tmp / "declares-nothing"
-    stamp_inputs(empty, {})
+    declare_no_inputs(empty)
     expect("a stage that declared no upstream", check_inputs(empty), False)
 
     # two stages sharing ONE directory- the stale one must still be caught after the fresh one runs

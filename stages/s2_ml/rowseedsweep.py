@@ -1,14 +1,4 @@
 # 5 seeds through the shipped LORO row path; python -m stages.s2_ml.rowseedsweep
-#
-# `s2_ml_featseedsweep.json` measures the seed band at the WINDOW unit (5,984 label-pure
-# windows). The headline this repo actually quotes -- coverage 84.66% at 0.9901 -- is at the
-# ROW unit, over 1.24M scored rows, and it has only ever been measured at seed 0. The two are
-# not interchangeable: the row path puts the ambiguity gate on top of the same fitted model,
-# so the window band is a proxy for the row band and nobody had checked how good a proxy.
-#
-# This is a sweep, not a re-run of the claim. roweval.py stays single-seed on purpose (its
-# threshold is not a flag for the same reason); the headline is what seed 0 measured, and this
-# file is the band you read a CHANGE to that headline against.
 
 from __future__ import annotations
 
@@ -26,6 +16,7 @@ from stages.s2_ml.train import (
     MODEL_PARAMS, PRESETS, build_model, load_spec, reference_stats, select_features, trainable,
 )
 
+# a sweep, not a re-run of the claim- seed 0 is the headline, this is the band around it
 OUT_PATH = ABLATIONS / "s2_ml_rowseedsweep.json"
 
 

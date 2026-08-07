@@ -24,9 +24,7 @@ from stages.s2_ml.locoeval import evaluate
 # estimator and window filter come from train.py; restating them here is the wrong that still scores
 from stages.s2_ml.train import MODEL_PARAMS, build_model, trainable
 
-# Beside the model it names, and rewritten whole on every promotion, so it regenerates. The
-# ledger and the proposals log next to it do NOT -- both are append-only records of cycles whose
-# code is already gone, so they are written to keep_dir_for(out_dir) instead.
+# rewritten whole on every promotion, so it regenerates- the ledger beside it does NOT
 CHAMPION_FILENAME = "champion.json"
 
 # the champion's spec, tracked in git; record() rewrites it on every promotion so it cannot drift
@@ -144,13 +142,7 @@ def validate_spec(spec: ExperimentSpec) -> None:
         if missing:
             raise ValueError(f"channels must include the required {missing}; "
                              f"use drop_features to prune what is computed from them")
-        # ...and today it may not add one either. SELECTABLE_FEATURES == FEATURES, so the two
-        # checks above already force this; it is stated on its own because it is the one that
-        # stops holding the day the selectable set widens, and what it prevents is SILENT:
-        # features.{segment_features, feature_names, windows_of_trial} read features.FEATURES
-        # directly- and two of them read it BY POSITION- so an added channel would be loaded,
-        # never turned into a feature, and the fit recorded under a spec that names it. A
-        # four-channel model filed as a five-channel one is the exact skew this repo refuses
+        # ...nor add one: it would load, become no feature, and file under a spec naming it- SILENTLY
         if tuple(spec.channels) != FEATURES:
             raise ValueError(
                 f"channels={list(spec.channels)} is not {list(FEATURES)}; fitting a different "
@@ -175,8 +167,7 @@ def run_experiment(spec: ExperimentSpec, trials=None) -> ExperimentResult:
     validate_spec(spec)
     # resolve the drop list ONCE: the record must name which features a number was measured over
     spec = replace(spec, drop_features=spec.resolved_drops())
-    # `validate_spec` has just guaranteed the spec reads FEATURES and nothing else, so there is
-    # one corpus to load and no per-spec trial set to resolve
+    # `validate_spec` just guaranteed FEATURES and nothing else, so there is one corpus to load
     trials = trials if trials is not None else load_dataset()
     wspec, params, _ = champion_config(spec)
     windows = build_windows(trials, wspec)
@@ -274,10 +265,7 @@ def comparable(new: dict | None, old: dict | None) -> tuple[bool, str]:
     return True, ""
 
 
-# the ONLY path to champion: macro-F1 past PROMOTION_MARGIN. A tie keeps the incumbent- there was a
-# tiebreaker on the row-level error taxonomy and it decided exactly one promotion, ledger entry 8
-# (drop_angvel_dom_hz, 2026-07-21), back when run_experiment computed a taxonomy by default. Once
-# that default went False no challenger carried one, so the branch was unreachable; deleted 2026-08-07.
+# the ONLY path to champion: macro-F1 past PROMOTION_MARGIN, and a tie keeps the incumbent
 def decide(challenger: ExperimentResult, champion: dict | None) -> tuple[bool, str]:
     if champion is None:
         return True, "no incumbent champion; establishing baseline"
@@ -395,10 +383,7 @@ def seed(out_dir: Path, trials=None) -> dict:
     return entry
 
 
-# This CLI READS. It cannot start a cycle -- that needs the agents, so it runs from
-# run_pipeline.py -- and it no longer offers to seed the incumbent either: `_s2_cycle` seeds
-# whenever the ledger has no champion measured over the corpus in front of it, which is every
-# occasion a hand-run `--seed` was for, minus the chance to do it at the wrong moment.
+# this CLI READS- starting a cycle needs the agents, and `_s2_cycle` already seeds when it has to
 def main() -> None:
     import argparse
 

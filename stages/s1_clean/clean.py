@@ -1,15 +1,4 @@
 # S1 clean (python -m stages.s1_clean.clean): resample to the canonical grid; only trust persists
-#
-# Why the canonical-grid frame is built, measured and DROPPED. It was written beside the trust
-# record as parquet until 2026-08-04 and nothing ever read it back: the serve path derives its
-# features from the RAW file at the raw rate, deliberately, so that it reproduces training
-# bit-for-bit (`transform.raw_to_features` filters with `matlab_dt` BEFORE resampling, so a
-# 100 Hz frame is already past the point where that filter can be applied). 689 MB of binary
-# that only S1 could produce and no one could open is not evidence. `data/raw` is
-# source-of-truth; re-run this stage to rebuild anything anyone actually wants.
-#
-# That is not the same decision as `rawread`'s cache, which is a transcode of the CSV and holds
-# nothing this stage computed.
 
 from __future__ import annotations
 
@@ -21,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from freshness import stamp_inputs
+from freshness import declare_no_inputs
 from stages.s1_clean.census import read_header, resolve
 from stages.s1_clean.channel_trust import detect_and_normalize
 from stages.s1_clean.config import (
@@ -150,9 +139,9 @@ def clean_one(path: Path
     # now on the canonical grid: resolve gyro unit + sagittal axis from the data, normalize to deg/s
     out, trust = detect_and_normalize(out)
 
-    # the whole persisted product; built as one name so a dotted stem cannot become two files
+    # the whole persisted product- the grid frame is DROPPED; serve reads raw at the raw rate anyway
     dest = (CLEAN_DIR / session_of(path)["session_dir"] /
-            f"{path.stem}.channel_trust.json")
+            f"{path.stem}.channel_trust.json")  # one name, so a dotted stem cannot become two files
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(
         json.dumps({"file": str(path.relative_to(REPO_ROOT)), **trust}, ensure_ascii=False, indent=2),
@@ -206,7 +195,7 @@ def main() -> None:
         for q in quarantined:
             fh.write(json.dumps(q, ensure_ascii=False) + "\n")
 
-    # The gate: every raw file is accounted for exactly once; assert it, don't hope
+    # the gate: every raw file is accounted for exactly once; assert it, don't hope
     accounted = written + len(quarantined)
     assert accounted == len(paths), f"partition broken: {accounted} accounted != {len(paths)} raw files"
 
@@ -216,7 +205,7 @@ def main() -> None:
     for r in usable:
         methods[r["method"]] = methods.get(r["method"], 0) + 1
 
-    # Gyro trust rollup across the written files
+    # gyro trust rollup across the written files
     norm_sides = [(o["path"], s) for o in observations for s, r in o["channel_trust"]["sides"].items()
                   if r["scale_to_degps"] != 1.0]
     abstained = [(o["path"], s) for o in observations for s in o["channel_trust"]["abstained"]]
@@ -285,10 +274,8 @@ def main() -> None:
     if args.report:
         (out_dir / "clean_report.md").write_text("\n".join(lines), encoding="utf-8")
 
-    # Empty by declaration, not by omission: the only upstream is the `data/raw` tree, which
-    # is thousands of files rather than an artifact to hash. Stamping says this was checked
-    # and has nothing to declare, which is what keeps it out of breakdown's unchecked list.
-    stamp_inputs(out_dir, {}, stage="s1_clean")
+    # the only upstream is the `data/raw` tree, which is a corpus rather than an artifact to hash
+    declare_no_inputs(out_dir, stage="s1_clean")
 
     print(f"[s1] {written} clean, {len(quarantined)} quarantined, "
           f"{len(usable)} usable segments, {len(dropped)} dropped -> {out_dir}")

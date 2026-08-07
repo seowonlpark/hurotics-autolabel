@@ -22,8 +22,7 @@ from stages.s2_ml.features import rest_reference
 from stages.s2_ml.rest import SWAP_DELTA_DEG
 from stages.s1_clean.config import CANONICAL_HZ, LABEL_UNKNOWN_MACHINE
 
-# the trained pair plus both unknowns, built from the codes rather than restating them: this is a
-# debugging printer, and a printer that disagrees with the vocabulary is worse than no printer
+# built from the codes, not restated- a printer disagreeing with the vocabulary is worse than none
 LABEL_NAME = {**CLASS_NAME,
               HUMAN_UNKNOWN: "human_unknown",
               LABEL_UNKNOWN_MACHINE: "machine_unknown"}

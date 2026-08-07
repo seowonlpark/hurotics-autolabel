@@ -223,6 +223,48 @@ claiming the same `raw` file — is currently **not** checked and would be worth
 Otherwise the manifest is hand-edited, exactly as the constants were. What changed is that it is
 one file, validated on load, with reasons attached, instead of four mechanisms in three modules.
 
+### 1.7 `raweval` measured what `verify_serve` already proved, and is deleted **[removed 2026-08-07]**
+
+`stages/s2_ml/raweval.py` scored the raw device route against human labels and reported it beside
+`roweval`'s `lpf_view` number. It read as a second, independent confirmation. It was not one.
+
+`verify_serve` labels the same recording **both ways** and compares every column a caller
+receives for exact equality, with confidence held to 1e-9 and coverage mismatches counted
+separately. Identical verdicts against identical truth give identical accuracy — necessarily, not
+approximately. An aggregate accuracy figure can absorb a handful of flipped rows; an
+exact-equality check over 536,590 rows cannot. The weaker instrument was the one being quoted.
+
+The same applies to the axis-map story `raweval` was justified by. A mis-mapped sagittal channel
+breaks `verify_transform` at 1e-9, immediately and loudly. Catching it downstream as "one
+variant's accuracy sits apart from the others" is strictly worse: later, noisier, and it needs a
+human to notice a table.
+
+**Measured before deleting, not argued.** Last run, on the three subjects it could pair:
+
+| route | coverage | selective accuracy |
+|---|---|---|
+| raw device (`raweval`) | 0.9091 | 0.9914 |
+| `lpf_view` (`roweval`, same three subjects) | 0.9088 | 0.9914 |
+
+**What was done first, because deleting it removed a backstop.** `verify_serve` compared five
+verdict columns and `label_csv` delivers nine. `reason_detail` was among the unchecked, and it
+carries a suffix derived from `rest_trusted`, which is computed **per route** — so the one column
+that could genuinely diverge between routes was the one nobody compared. `VERDICT_COLS` now reads
+`label.LABEL_COLUMNS`, so a new column joins the comparison by existing and a renamed one raises.
+Re-run over the widened set: **18 pairs, 536,590 rows, 0 disagreeing verdicts, max |Δconfidence| = 0.**
+
+`raweval`'s per-variant table moved to `verify_serve` as **coverage, not accuracy**: every
+servable variant must have a pair in the comparison, so one cannot pass by being absent. It is
+wider there — 78 servable files rather than the 18 paired ones. All three variants are covered
+today (10, 7 and 1 pairs); a variant with none is reported, not failed, because a freshly
+collected variant legitimately has no annotation yet.
+
+**What is genuinely lost.** `raweval` was the only place human labels were joined onto the raw
+file's **own timestamps** rather than the export's grid. That matters only if the two grids can
+differ, and `verify_transform` compares the derived channels element-wise — which cannot pass
+unless they line up. So the loss is real and empty at the same time: no check disappeared, one
+redundant statement of an existing check did.
+
 ---
 
 ## 2. Known-imperfect behaviour

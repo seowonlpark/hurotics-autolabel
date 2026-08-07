@@ -1,20 +1,4 @@
 # one parse per raw CSV: a verbatim transcode cache, so four stages stop re-tokenizing 2.7 GB
-#
-# `s1_census`, `s1_clean`, `s2_verify_serve` and `s2_label_all` each walked `data/raw` and parsed
-# every file in full -- four passes, ~37 s each, and the widest consumer reads 13 of 67-91 columns.
-# This is the one reader they all go through now.
-#
-# The cache is a TRANSCODE, not a computation, and that distinction is the whole design. It stores
-# exactly what `pd.read_csv(index_col=False)` returns with the `Unnamed` columns dropped: no
-# resampling, no filtering, no column selection, no unit normalization, no renaming. There is
-# therefore no "which version of the code built this parquet" question to answer -- the only input
-# is the CSV's bytes, so the source's own (size, mtime) is a complete key. `data/raw` stays
-# source-of-truth; delete `data/cache` at any time and the next run rebuilds it.
-#
-# The trailing-comma guard gets STRONGER, not weaker. `index_col=False` runs once here, on the full
-# width, and the three downstream readers inherit a frame that already passed it (see clean.py:111
-# and DOMAIN_NOTES 1.3). Selecting columns with `usecols` instead would have suppressed exactly
-# that guard at three call sites, which is why this reads whole files and caches them.
 
 from __future__ import annotations
 

@@ -1,11 +1,4 @@
 # the cache returns the CSV, exactly (python -m stages.s1_clean.verify_rawread)
-#
-# The whole claim rawread makes is that it is a transcode: cached and uncached reads are the same
-# frame, not merely a close one. That is a claim about every file in the corpus, so it is checked
-# against every file in the corpus -- column names, order, dtypes and values, NaN included.
-#
-# Cheap enough to run unconditionally: the uncached side is the parse the pipeline used to do four
-# times, and the cached side is the thing being trusted afterwards.
 
 from __future__ import annotations
 

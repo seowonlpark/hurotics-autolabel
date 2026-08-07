@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from scipy.signal import decimate
 
-from freshness import stamp_inputs
+from freshness import declare_no_inputs
 from stages.console import use_replacement_encoding
 from stages.report import add_report_flag
 from stages.s1_clean.config import CANONICAL_HZ, DECIMATE_FILTER
@@ -23,10 +23,10 @@ from runslayout import REGEN
 REPO_ROOT = Path(__file__).resolve().parents[2]
 S3_OUT_DIR = REGEN / "s3_physics"
 
-# Halve the rate: a genuine bandwidth cut, not timestamp quantization at the same rate
+# halve the rate: a genuine bandwidth cut, not timestamp quantization at the same rate
 AUDIT_FACTOR = 2
 
-# Change above this => the anchor tracks the grid, not the body
+# change above this => the anchor tracks the grid, not the body
 AUDIT_TOL = 0.10
 
 # anchors this audit EXPECTS to fail, named rather than tolerated silently; main exits non-zero
@@ -198,9 +198,8 @@ def main() -> None:
     if args.report:
         (out_dir / "rate_audit.md").write_text(render_report(report), encoding="utf-8")
 
-    # Model-free by construction: this reads the window grid and the anchors, never the champion.
-    # Declared rather than left unstamped, so "no model dependency" and "never checked" stay distinct.
-    stamp_inputs(out_dir, {}, stage="rate_audit")
+    # model-free by construction: this reads the window grid and the anchors, never the champion
+    declare_no_inputs(out_dir, stage="rate_audit")
 
     print(f"[rate] -> {out_dir / ('rate_audit.md' if args.report else 'rate_audit.json')}")
 

@@ -21,8 +21,7 @@ TIME_COL = "Time"
 STAND, WALK, HUMAN_UNKNOWN = 0, 10, -1
 TRAIN_CLASSES = (STAND, WALK)
 
-# the trained classes' names, defined once beside the codes; every stage that prints a class
-# reads this, so a code and its name can never drift apart in one file and not another
+# names defined once beside the codes, so a code and its name cannot drift apart between stages
 CLASS_NAME = {STAND: "stand", WALK: "walk"}
 
 # DERIVED now, not restated- both were hand-edited constants naming specific recordings until §1.6

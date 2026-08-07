@@ -184,7 +184,7 @@ python run_pipeline.py --dry-run        # 무엇이 어떤 순서로 돌지만, 
 `runs/regen/`은 제자리에서 덮어써지므로, 한 단계만 다시 돌리면 하류 리포트가 이제는 존재하지
 않는 입력을 서술한 상태로 남는다. `freshness.py`는 각 단계가 소비한 모든 산출물의 sha256을
 그 단계 출력 디렉터리의 `_inputs.<stage>.json`에 찍는다 — **디렉터리당이 아니라 단계당 하나**라,
-`runs/regen/s2_ml`을 공유하는 `train`·`roweval`·`raweval`은 서로를 보증하지 못한다.
+`runs/regen/s2_ml`을 공유하는 `train`과 `roweval`은 서로를 보증하지 못한다.
 `stages.breakdown`은 매 실행 끝에 `runslayout.checkable_dirs()`가 지목한 모든 디렉터리를,
 도장이 찍혔든 아니든 검사한다: 입력을 선언한 적 없는 단계는 깨끗한 것으로 읽히는 대신
 `unchecked` 플래그를 띄운다. **보고할 뿐, 지우지는 않는다.**
@@ -239,7 +239,6 @@ census는 `manifest.jsonl`을 만든다 (파일당 한 행: 세션, variant, 실
 ```powershell
 python -m stages.s2_ml.train      # 챔피언 + leave-one-rev-out 윈도우 CV -> locoeval.json
 python -m stages.s2_ml.roweval    # 행 단위 곡선, 피험자별 표, reason 검증
-python -m stages.s2_ml.raweval    # 같은 정확도를, 원시 장비 경로에서 측정
 ```
 
 `train.py`는 **윈도우**를 채점한다. 모델이 학습하는 단위가 그것이기 때문이다. 그런데 호출자는
@@ -255,10 +254,12 @@ CSV를 라벨링해서 **행**을 받고, 둘은 다르다 — 행은 그 행을
 시도하지 말 것.** 그 숫자들은 git에 추적되는 `runs/keep/s2_ml/roweval_lockbox.json`에 살아
 있고, `roweval.render()`가 거기서 페이지를 다시 렌더한다.
 
-`raweval`은 사슬의 마지막 고리를 닫는다. `roweval`은 `lpf_view` 내보내기를 측정하고,
-`verify_serve`는 원시 경로가 그 내보내기와 행 단위로 일치함을 보이지만 비교 전에 `Label`을
-버린다 — 즉 *동등성*을 증명할 뿐 *정확성*은 절대 증명하지 않는다. `raweval`은 원시 경로를
-사람 라벨에 직접 채점하며, 락박스는 플래그를 기억하는 게 아니라 코드에서 거부한다.
+**`roweval`의 숫자는 원시 경로에도 그대로 적용되며, 이건 두 번째 측정이 아니라 증명이다.**
+`verify_serve`가 같은 녹화를 양쪽 경로로 라벨링해서 호출자가 받는 모든 열을 완전 일치로
+비교한다 — confidence는 1e-9까지, 536,590행에서 불일치 0. 판정이 같고 정답이 같으면 정확도도
+같으므로, 원시 경로를 따로 읽어서 새로 알아낼 것이 남지 않는다. 2026-08-07까지 `raweval`이
+그 두 번째 판독을 했고 소수점 넷째 자리까지 일치했으며, 그래서 지웠다 — 서로 어긋날 수 없는
+두 숫자는 독립적 확인처럼 읽히지만 독립적이지 않기 때문이다 (`caveats.md` §1.7).
 
 ### 원시 경로 검증
 
@@ -459,7 +460,7 @@ Length, GCP, 어드미턴스, PID 상태는 장비가 *계산한* 것이다. 계
 | **S1** clean | 완료 — 스키마/레이트/결측, 자이로 단위+축 신뢰, 요 드리프트 신뢰, 퇴화 타임베이스 거부, 격리 장부. 게이트 통과 |
 | **S1** exception 에이전트 | 완료 — 예외 큐를 known_expected / novel / needs_human으로 분류, 근거 명시 |
 | **S2** ml | 완료 — 윈도잉/특징, leave-one-rev-out CV, 신뢰도와 모호성 이유를 담은 행 단위 라벨링 |
-| **S2** 행 + 원시 평가 | 완료 — 주석 내보내기에는 `roweval`, 원시 장비 경로에는 `raweval`, 둘 다 leave-one-rev-out |
+| **S2** 행 + 원시 평가 | 완료 — 주석 내보내기에 `roweval` leave-one-rev-out. `verify_serve`가 원시 경로도 동일 판정임을 보이므로 그 숫자가 양쪽을 덮는다 |
 | **S2** experiment 에이전트 | 완료 — 기록된 승격 규칙에 대해 도전자를 제안. 장부는 기각도 기록한다 |
 | **S3** physics | 완료 — 스왑 규칙 앵커, 앵커 네 개 전부에 대한 레이트 불변성 판정 기록 |
 | **S3** label audit | 완료 — 시행 수준 검출기 두 개, 둘 다 모델 비의존 |

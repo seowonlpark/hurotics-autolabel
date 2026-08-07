@@ -1,20 +1,4 @@
 # S2 train: fit the champion, score it leave-one-rev-out, write the artifacts; lockbox untouched
-#
-# WHY ExtraTrees and not RandomForest -- `champion_spec.json`'s rationale points here for this,
-# so it lives here rather than in the spec, where every edit re-trips the input stamps of three
-# stages that declare it. Both fitted on identical features, folds and params, 5 seeds each
-# (`runs/keep/ablations/s2_ml_seedsweep.json`):
-#
-#   ExtraTrees     macro-F1 0.9194   coverage @0.85 0.8760   selective accuracy 0.9887
-#   RandomForest   macro-F1 0.9138   coverage @0.85 0.8189   selective accuracy 0.9889
-#
-# The precision a caller gets is the same to within a thousandth. What differs is how much of
-# the corpus is left to be precise ABOUT: RandomForest abstains on nearly one window in five,
-# ExtraTrees on one in eight. The usual explanation -- randomized splits decorrelate the trees,
-# so the vote spreads out instead of piling up against the threshold -- is not measured here;
-# what is measured is the coverage gap, and it is what the choice rests on.
-# `runs/keep/ablations/s2_ml_rf42` is the earlier single-seed RF fit at 42 features that the
-# sweep supersedes; it is kept because it is the only copy of that measurement.
 
 from __future__ import annotations
 
@@ -60,7 +44,7 @@ PRESETS = {"high_coverage": 0.70, "balanced": 0.85, "high_precision": 0.95}
 DEFAULT_PRESET = "balanced"
 
 
-# the champion estimator; the CLASS is not a parameter- a proposal may retune, not replace
+# the CLASS is not a parameter- ExtraTrees wins on COVERAGE, not precision (s2_ml_seedsweep.json)
 def build_model(params: dict | None = None) -> ExtraTreesClassifier:
     return ExtraTreesClassifier(**(params or MODEL_PARAMS))
 
@@ -133,7 +117,7 @@ def reference_stats(df: pd.DataFrame, feats: list[str]) -> dict:
         # the ambiguity band, so `label.py` reads it off the champion rather than recomputing at serve
         "band_lo": band_lo,
         "band_hi": band_hi,
-        # Per-feature training range, for the out-of-distribution check
+        # per-feature training range, for the out-of-distribution check
         "feat_p01": {c: float(np.percentile(df[c], 1)) for c in feats},
         "feat_p99": {c: float(np.percentile(df[c], 99)) for c in feats},
     }
@@ -143,10 +127,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(REGEN / "s2_ml"))
     add_report_flag(ap)
-    # The ONE override here, because it is the one whose output is read: an ablation's `locoeval`
-    # sits beside the champion's in `breakdown`. There is deliberately no `--window-s` twin -- the
-    # window is a field of `ExperimentSpec`, so a window change belongs in the ledger, where it is
-    # recorded with the rationale that motivated it and the decision it drew.
+    # the ONE override, because an ablation's locoeval is read- a window change belongs in the ledger
     ap.add_argument("--drop", nargs="+", metavar="FEATURE", default=None,
                     help="ablation: train without these features instead of the spec's "
                          "drop_features. Marks the run an experiment, not the champion.")
@@ -159,7 +140,7 @@ def main() -> None:
     trials = load_dataset()
     windows = build_windows(trials, spec)
 
-    # The champion's own drop list unless an ablation overrides it on the command line
+    # the champion's own drop list unless an ablation overrides it on the command line
     champion = load_spec()
     dropped = args.drop if args.drop is not None else champion["drop_features"]
     feats = select_features(feature_columns(windows), dropped)
@@ -199,7 +180,7 @@ def main() -> None:
                   f"worst_rev {row['worst_rev_accuracy']:.4f} "
                   f"({row.get('worst_rev') or '?'})")
 
-    # Champion: refit on every training rev; the lockbox stays sealed
+    # champion: refit on every training rev; the lockbox stays sealed
     model = build_model()
     model.fit(train_df[feats].to_numpy(float), y)
     importances = sorted(zip(feats, model.feature_importances_), key=lambda x: -x[1])
@@ -244,10 +225,7 @@ def main() -> None:
     # the spec can change without anyone touching data, so between a promotion and a refit all this lies
     stamp_inputs(out_dir, {"champion_spec": CHAMPION_SPEC_PATH}, stage="train")
 
-    # This stage used to write the bare `_inputs.json` here, before stamps were split per stage.
-    # Left behind it becomes a stamp with no writer: nothing refreshes it, so the next spec change
-    # makes it complain about a report that was in fact rebuilt. Superseded, so removed by the
-    # stage that owned it -- the same reasoning that deleted `s3_physics/physics.md` (RUNBOOK §7).
+    # the old bare stamp, superseded by the per-stage split- left behind it has no writer
     (out_dir / "_inputs.json").unlink(missing_ok=True)
 
     print(f"[s2] artifacts -> {out_dir}")

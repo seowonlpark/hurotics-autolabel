@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from freshness import stamp_inputs
+from freshness import declare_no_inputs
 from stages.s1_clean.census import build_registry
 from stages.s1_clean.manifest import profile_file
 from stages.report import add_report_flag
@@ -98,10 +98,8 @@ def main() -> None:
     if args.report:
         write_census_md(registry, rows, out_dir / "census.md")
 
-    # Empty by declaration, not by omission: the only upstream is the `data/raw` tree, which
-    # is thousands of files rather than an artifact to hash. Stamping says this was checked
-    # and has nothing to declare, which is what keeps it out of breakdown's unchecked list.
-    stamp_inputs(out_dir, {}, stage="s1_census")
+    # the only upstream is the `data/raw` tree, which is a corpus rather than an artifact to hash
+    declare_no_inputs(out_dir, stage="s1_census")
 
     errs = [r for r in rows if "read_error" in r]
     print(f"[s1] done. {len(rows)} rows, {len(errs)} read errors -> {out_dir}")

@@ -29,7 +29,7 @@ ACCURACY_TARGET = 0.95
 
 # which headline each checked-in document quotes, explicit per artifact and hand-maintained
 PROSE_CLAIMS = {
-    # README.ko.md is here for the same reason as README.md- a stale translation reads as independently checked
+    # README.ko.md is here for the same reason as README.md- a stale translation reads as checked
     "S2 row-level": ["README.md", "README.ko.md", "caveats.md", "OPERATING_POINTS.md"],
 }
 
@@ -288,7 +288,7 @@ def section_s1(src: Source) -> list[str]:
                       [[f"`{Path(s['path']).name}`", s.get("index"),
                         f"{_num(s.get('source_hz'), 0):.3f} Hz", s.get("reason", "")]
                        for s in rate_rejects])
-    # One file losing several segments is a different finding from several files losing one
+    # one file losing several segments is a different finding from several files losing one
     by_file = Counter(s["path"] for s in fragments)
     if by_file and by_file.most_common(1)[0][1] > 1:
         f_path, n = by_file.most_common(1)[0]
@@ -445,7 +445,7 @@ def section_s2(src: Source) -> list[str]:
 
     out += _section_s2_ledger(src)
 
-    # The measured comparison behind the choice, if the sweep is still around
+    # the measured comparison behind the choice, if the sweep is still around
     sweep = ABLATIONS / "s2_ml_seedsweep.json"
     if sweep.is_file():
         rows_by_model: dict[str, list[dict]] = {}
@@ -488,7 +488,7 @@ def section_s2(src: Source) -> list[str]:
                 f"there is no one noise band to quote; compare means over seeds and carry the "
                 f"within-set spread alongside.", ""]
 
-    # Ablations, if their run dirs survive; each is a full locoeval, so they compare directly
+    # ablations, if their run dirs survive; each is a full locoeval, so they compare directly
     abl = sorted(ABLATIONS.glob("s2_ml_abl_*"))
     if abl:
         rows = [["**shipped**", f"{len(meta['features'])}", _f(loco["macro_f1"]), "—"]]
@@ -651,48 +651,7 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
                     f"{hu['abstain_rate_elsewhere']:.1%} elsewhere. `-1` never enters "
                     f"training, so the agreement is not circular.", ""]
 
-    # the route, not the population: everything above scores lpf_view, a caller feeds a raw log
-    raw = src.json(REGEN / "s2_ml" / "raweval.json", "python -m stages.s2_ml.raweval")
-    if raw:
-        o, tr = raw["overall"], raw.get("transitive_lpf_view")
-        out += ["#### Raw device path (`raweval.json`) — end to end, against human labels",
-                "",
-                f"Everything above scores the annotated `lpf_view` export. A caller supplies "
-                f"a raw device log, and the extra distance it travels — the axis map, the "
-                f"bridge, decimation to {meta['fs_hz']:g} Hz — is exactly where the sagittal "
-                f"axis was wrong for the majority variant until 2026-08-03. This scores that "
-                f"route directly: **{raw['n_pairs']} raw CSVs** whose human annotation exists, "
-                f"labelled through `label_csv` and joined back against it.", ""]
-        out += _table(["population", "rows", "coverage", "accuracy on committed",
-                       "worst subject"], [
-            [f"raw device — {', '.join(raw['revs'])}", f"{o['rows_scored']:,}",
-             f"**{_pct(o['coverage'], 2)}**", f"**{_f(o['selective_accuracy'])}**",
-             _f(o["worst_subject"]) + (f" (`{o['worst_subject_rev']}`)"
-                                       if o.get("worst_subject_rev") else "")],
-        ] + ([[f"`lpf_view` route, same subjects", f"{tr['rows_scored']:,}",
-               _pct(tr["coverage"], 2), _f(tr["selective_accuracy"]), "—"]] if tr else []))
-        out += [f"**Two subjects fewer than the table above, and no lockbox.** `rev8` is "
-                f"paired but refused in code (§7), and only "
-                f"{len(raw['revs'])} development subjects have a raw file preserved "
-                f"alongside their annotation, so this is a narrower population than the "
-                f"row-level curve — not a second opinion on it.", ""]
-        if tr:
-            d_cov = o["coverage"] - tr["coverage"]
-            d_acc = o["selective_accuracy"] - tr["selective_accuracy"]
-            out += [f"Against the route whose accuracy it used to borrow: coverage "
-                    f"{d_cov:+.4f}, accuracy {d_acc:+.4f}. The two row sets are not "
-                    f"identical — one scores the export's grid, the other the raw file's "
-                    f"own rows — so exact equality was never the bar. A difference large "
-                    f"enough to move the operating point would have been, and this is "
-                    f"three orders of magnitude short of it.", ""]
-        out += _table(["variant", "revs", "rows", "coverage", "accuracy"],
-                      [[f"`{v}`", ", ".join(r["revs"]), f"{r['rows_scored']:,}",
-                        _pct(r["coverage"], 1), _f(r["selective_accuracy"])]
-                       for v, r in sorted(raw["per_variant"].items())])
-        out += ["Per variant because the axis map is per variant: a mis-mapped sagittal "
-                "channel would show up as one row sitting apart from the others, which is "
-                "the check the transitive argument could not perform at all.", ""]
-
+    # `raweval` reported the raw route here until 2026-08-07- both routes emit the same (§1.7)
     if lock:
         dev = next((r for r in (row or {}).get("curve", [])
                     if abs(r["threshold"] - shipped) < 1e-9), None)
@@ -1108,7 +1067,7 @@ def _section_operating_points(src: Source) -> list[str]:
             f"**{uncovered:.2%} of corpus rows are uncovered at every threshold** and are "
             f"abstentions of the recording, not of the model.", ""]
 
-    # The resolution of the coverage column, not a second finding
+    # the resolution of the coverage column, not a second finding
     worst_band = max(sweep["corpus"], key=lambda c: c.get("boundary", 0))
     if worst_band.get("boundary"):
         shipped_band = next((c for c in sweep["corpus"]
@@ -1405,7 +1364,7 @@ def build(src: Source) -> tuple[str, dict]:
         "cannot disagree with a stage. Re-run the stage, not this, to change a number.", "",
         "---", "",
     ]
-    # Flags first; a reader who stops after one screen should stop on the problems
+    # flags first; a reader who stops after one screen should stop on the problems
     body += section_flags(flags)
     body += ["---", ""]
     for fn in (section_corpus, section_s1, section_s2, section_s3, section_sweep):

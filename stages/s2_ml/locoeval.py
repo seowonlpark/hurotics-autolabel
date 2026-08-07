@@ -115,8 +115,7 @@ def selective_curve(y_true: np.ndarray, p_walk: np.ndarray,
         n_keep = int(keep.sum())
         worst, worst_rev = float("nan"), None
         if g is not None and n_keep:
-            # carry the NAME, not just the minimum: which subject is worst is the actionable
-            # half and it cannot be recovered from the artifact once it is dropped here
+            # carry the NAME, not just the minimum- it cannot be recovered once dropped here
             per = [(float(correct[keep & (g == name)].mean()), str(name)) for name in pd.unique(g)
                    if (keep & (g == name)).any()]
             # ties break on the name, so the column does not wander between runs

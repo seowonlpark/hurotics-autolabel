@@ -29,9 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # generation of the `.json` payload- bump it whenever a key is added or dropped below
 SCHEMA_VERSION = 3
 
-# a single-use read freezes whichever generation was current the day it ran, and re-running to
-# tidy the schema costs a read of a spent subject (caveats.md 3.2). So the artifact carries its
-# own generation and this table says what that generation meant- do not date artifacts from git
+# a single-use read freezes its generation, so the artifact carries it- never date one from git
 _GEN1 = ("tag", "threshold", "revs", "curve", "reasons", "human_unknown")
 _GEN2 = (*_GEN1, "n_features", "features", "per_rev", "confusion", "physics_gate")
 SCHEMA_HISTORY = {1: _GEN1, 2: _GEN2, 3: (*_GEN2, "schema_version", "read_note")}
@@ -74,14 +72,12 @@ def score_trials(model, meta: dict, trials, threshold: float) -> pd.DataFrame:
     return pd.concat(out, ignore_index=True)
 
 
-# the rows `label.py` would commit to at `thr`- threshold, band AND physics gate
-# ceiling is hard False: `label.py` no longer implements one, so the shipped arm cannot have it on
+# the rows `label.py` commits to at `thr`- ceiling is hard False, the shipped arm cannot have one
 def _committed(v: pd.DataFrame, conf: np.ndarray, thr: float) -> np.ndarray:
     return _committed_under(v, conf, thr, False, label_mod.PHYSICS_FLOOR)
 
 
-# `label.PHYSICS_FLOOR` crossed with a ceiling `label.py` does not have: the ceiling arms are the
-# retraction kept under measurement, so a feature-set change that revives it shows up here
+# the ceiling arms are a retraction kept under measurement, so a change reviving it shows up here
 PHYSICS_POLICIES = {
     "off": (False, False),
     "ceiling": (True, False),
@@ -121,8 +117,7 @@ def _committed_under(v: pd.DataFrame, conf: np.ndarray, thr: float,
     return (conf >= eff) & ~band
 
 
-# the worst-scoring subject and its accuracy. The NAME is the actionable half: a bare minimum
-# says a subject is bad, not which one to go and look at, and it is unrecoverable afterwards
+# the worst subject and its accuracy- the NAME is the actionable half, and unrecoverable after this
 def _worst_rev(correct: np.ndarray, revs: np.ndarray,
                keep: np.ndarray) -> tuple[float, str | None]:
     per = [(float(correct[keep & (revs == r)].mean()), str(r)) for r in pd.unique(revs)
@@ -148,7 +143,7 @@ def physics_gate_table(df: pd.DataFrame, threshold: float) -> dict:
                 "worst_rev": worst_rev,
                 "errors_kept": int((~correct[k]).sum())}
 
-    # The OFF arm swept finely, so any gated coverage can be matched against it
+    # the OFF arm swept finely, so any gated coverage can be matched against it
     off_sweep = [{"threshold": float(t),
                   **point(_committed_under(v, conf, t, False, False))}
                  for t in _MATCH_GRID]
@@ -455,10 +450,7 @@ def main() -> None:
     if args.lockbox and not args.read_note.strip():
         ap.error("--lockbox needs --read-note: say which read this is and why (caveats.md 3.2)")
 
-    # NOT a flag. `curve` below sweeps every threshold and the sweep is in the `.json`, so an
-    # override would only re-pick which row of it the per-rev and confusion tables are cut at --
-    # and this stage is THE accuracy claim, which the repo quotes at the declared operating point.
-    # Read another point off the curve; do not re-run the stage to move the headline.
+    # NOT a flag- read another point off the curve, do not re-run the stage to move the headline
     threshold = PRESETS["balanced"]
 
     out_dir = (REPO_ROOT / args.out).resolve()
@@ -543,9 +535,7 @@ def main() -> None:
     t_spec = WindowSpec(window_s=base_meta["window_s"],
                         stride_s=base_meta["inference_stride_s"],
                         fs_hz=base_meta["fs_hz"])
-    # The lockbox pass reads a split that is spent once (dataset.py), so its two reports are the
-    # only ones that exist and no re-run legitimately replaces them: they go to the keep-half.
-    # The LORO pass refits from the spec on demand, so it stays with the rest of the stage output.
+    # the lockbox read is spent once, so its reports go to the keep-half; LORO refits on demand
     dest = keep_dir_for(out_dir) if args.lockbox else out_dir
     dest.mkdir(parents=True, exist_ok=True)
 
@@ -567,10 +557,7 @@ def main() -> None:
          "per_rev": by_rev, "confusion": conf, "reasons": reasons.to_dict("records"),
          "human_unknown": unk, "physics_gate": gate}), indent=2),
         encoding="utf-8")
-    # This is the accuracy claim the repo quotes, and it is re-fitted from the spec rather than
-    # loaded, so a promotion between this run and a reader silently changes what it describes.
-    # The stamp follows the report into `dest`: it is the record of what THAT file describes, and
-    # for the lockbox it is the only warning a reader gets, since the read cannot be redone.
+    # the stamp follows the report into `dest`- for the lockbox it is the only warning a reader gets
     stamp_inputs(dest, {"champion_spec": CHAMPION_SPEC_PATH}, stage=stem)
 
     ext = ".md" if args.report else ".json"

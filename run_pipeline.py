@@ -162,7 +162,7 @@ async def _s2_cycle(run_dir: Path) -> None:
 
     trials = load_dataset()
 
-    # built once, read twice: the features the experimenter sees, and a print of the ground beneath them
+    # built once, read twice: the features the experimenter sees, and a print of the ground
     windows = build_windows(trials, champion_config(load_champion_spec())[0])
     feats = feature_columns(windows)
     here = corpus_fingerprint(trainable(windows, "train"))
@@ -338,11 +338,8 @@ def build_steps() -> list[Step]:
              gate=REGEN / "s2_ml" / "roweval_loro.json",
              desc="THE accuracy claim: real label.py per held-out rev",
              runtime="super long"),
-        # the same claim for the raw route, measured rather than inferred; refuses the lockbox in code
-        Step("s2_raweval",
-             [PY, "-m", "stages.s2_ml.raweval"],
-             gate=REGEN / "s2_ml" / "raweval.json",
-             desc="the same claim on the raw device route", runtime="super long"),
+        # `s2_raweval` sat here until 2026-08-07- `verify_serve` proves the raw route agrees (§1.7)
+
         # S3 pointed at the ANNOTATIONS; it names the windows a human should adjudicate
         Step("s3_label_audit",
              [PY, "-m", "stages.s3_physics.label_audit"],
@@ -364,10 +361,10 @@ def build_steps() -> list[Step]:
              gate=REGEN / "s3_physics" / "plausibility.json",
              desc="file-level sanity bounds, checked against injected faults",
              runtime="medium"),
-        # the serve path over the WHOLE corpus, no ground truth in it- must follow s2_experiment's refit
+        # the serve path over the WHOLE corpus, no ground truth- must follow s2_experiment's refit
         Step("s2_label_all",
              [PY, "-m", "stages.s2_ml.label_all"],
-             # the `.csv` IS the machine-read artifact here; the sweep is legitimately skipped when gated
+             # the `.csv` IS the machine-read artifact; the sweep is legitimately skipped when gated
              gate=LABELED_RAW / "label_summary.csv",
              desc="label every raw file: corpus coverage, refusals, preset sweep",
              runtime="super long"),

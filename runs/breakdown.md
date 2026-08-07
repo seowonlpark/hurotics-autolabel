@@ -1,7 +1,7 @@
 # Pipeline breakdown
 
-- generated: **2026-08-07T01:39:22.159612+00:00**
-- commit: `f72b9b3`
+- generated: **2026-08-07T02:02:33.360680+00:00**
+- commit: `6a6adb7`
 - flags raised: **4** (concentration, gap, risk)
 - artifacts missing: **0**
 
@@ -364,27 +364,6 @@ The lockbox column is **not** monotonic — see the note under the lockbox table
 | `low_excursion_gait` | 6,342 | 0.7108 |
 
 Independent check: the model abstains on **55.8%** of the 26,533 rows a human marked `-1`, against 15.3% elsewhere. `-1` never enters training, so the agreement is not circular.
-
-#### Raw device path (`raweval.json`) — end to end, against human labels
-
-Everything above scores the annotated `lpf_view` export. A caller supplies a raw device log, and the extra distance it travels — the axis map, the bridge, decimation to 100 Hz — is exactly where the sagittal axis was wrong for the majority variant until 2026-08-03. This scores that route directly: **13 raw CSVs** whose human annotation exists, labelled through `label_csv` and joined back against it.
-
-| population | rows | coverage | accuracy on committed | worst subject |
-|---|---|---|---|---|
-| raw device — rev13, rev4, rev7 | 474,773 | **90.91%** | **0.9914** | 0.9821 (`rev7`) |
-| `lpf_view` route, same subjects | 475,260 | 90.88% | 0.9914 | — |
-
-**Two subjects fewer than the table above, and no lockbox.** `rev8` is paired but refused in code (§7), and only 3 development subjects have a raw file preserved alongside their annotation, so this is a narrower population than the row-level curve — not a second opinion on it.
-
-Against the route whose accuracy it used to borrow: coverage +0.0003, accuracy +0.0000. The two row sets are not identical — one scores the export's grid, the other the raw file's own rows — so exact equality was never the bar. A difference large enough to move the operating point would have been, and this is three orders of magnitude short of it.
-
-| variant | revs | rows | coverage | accuracy |
-|---|---|---|---|---|
-| `0fda484e` | rev7 | 219,270 | 83.4% | 0.9821 |
-| `4bfd6ab2` | rev4 | 20,751 | 80.7% | 0.9955 |
-| `fb5ea2c2` | rev13 | 234,752 | 98.9% | 0.9985 |
-
-Per variant because the axis map is per variant: a mis-mapped sagittal channel would show up as one row sitting apart from the others, which is the check the transitive argument could not perform at all.
 
 #### Lockbox — rev8, held out of everything
 

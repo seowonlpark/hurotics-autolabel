@@ -36,7 +36,7 @@ PHYSICS_LOUD_MIN = 0.50
 # ...while the model commits almost none to walking; not zero- 4% of a walking file is as broken
 MODEL_WALK_MAX = 0.05
 
-# Below this many covered rows the fractions above are too noisy to act on; 30 s at 100 Hz
+# below this many covered rows the fractions above are too noisy to act on; 30 s at 100 Hz
 MIN_ROWS = 3000
 
 BOUNDS = {
@@ -261,11 +261,7 @@ def run_controls(rev: str = "rev13", trial: int = 1) -> pd.DataFrame:
 
 def main() -> None:
     use_replacement_encoding()
-    # Run as a module this REGENERATES the reference numbers: it calibrates and it runs the
-    # controls, both, every time. They used to be two opt-in flags with an error when neither was
-    # passed, which made the only correct invocation the one the spine already hardcodes -- and
-    # made half a `plausibility.json` a thing that could be written. A bound sited against the
-    # corpus but never fired at an injected fault is a number with no evidence it works.
+    # run as a module this REGENERATES the numbers- a bound never fired at a fault is no evidence
     ap = argparse.ArgumentParser(
         description="Re-site the file-level sanity bounds: calibrate against the corpus and "
                     "fire them at injected faults. (Serving uses this module as a library.)")
@@ -313,15 +309,9 @@ def main() -> None:
     (out_dir / "plausibility.json").write_text(
         json.dumps(payload, indent=2, default=float), encoding="utf-8")
 
-    # The bounds themselves are model-free, but the controls score the fault injections through the
-    # FITTED champion, and a refit moves the "caught_by" column under this file. Stamp what was
-    # actually read. (This is also why the controls are no longer optional: the stamp used to be
-    # empty on a `--calibrate`-only run, so two runs wrote the same filename with different
-    # staleness rules.) Imported here, not at module scope: label.py imports this module, so a
-    # top-level import would close the cycle.
-    from stages.s2_ml.label import DEFAULT_MODEL_DIR
-    # `stage=`, because runs/regen/s3_physics holds rate_audit's and label_audit's outputs too -- an
-    # unnamed stamp there goes stale without saying which of the three stopped matching.
+    # the controls score fault injections through the FITTED champion, so a refit moves this file
+    from stages.s2_ml.label import DEFAULT_MODEL_DIR  # here, not at module scope- label.py imports us
+    # `stage=`, because two other audits share runs/regen/s3_physics and a bare stamp names neither
     stamp_inputs(out_dir, {"champion": DEFAULT_MODEL_DIR / "champion.joblib",
                            "model_meta": DEFAULT_MODEL_DIR / "model_meta.json"},
                  stage="plausibility")

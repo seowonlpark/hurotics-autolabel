@@ -38,7 +38,6 @@ ones: finding out an agent step exists is the thing you came to look up.
   s2_experiment     super long  champion/challenger cycle; code decides promotion (agent)
   verify_serve      super long  one recording labelled both ways, row for row
   s2_roweval        super long  THE accuracy claim: real label.py per held-out rev
-  s2_raweval        super long  the same claim on the raw device route
   s3_label_audit    medium      physics vs annotations: which trials contradict themselves
   s3_label_review   medium      assign a cause to what the audit flagged (agent)
   s3_rate_audit     medium      is an anchor describing the body or the sampling grid?
@@ -141,13 +140,12 @@ Command → gate → everything it writes.
 | 9 | `s2_experiment` (agent) | in-process `_s2_cycle` | `runs/keep/s2_ml/experiments.jsonl` | `runs/keep/agent_runs/<date>_runN/`: `proposal.json`, `critic_review.json` (+ `_rev1` variants on a retry); `runs/regen/s2_ml/`: `experiments.jsonl`, `proposals.jsonl`, `champion.json`. **On promotion**: re-runs `python -m stages.s2_ml.train` and rewrites `stages/s2_ml/champion_spec.json` |
 | 10 | `verify_serve` | `python -m stages.s2_ml.verify_serve` | — | nothing; stdout, `sys.exit(1)` on failure |
 | 11 | `s2_roweval` | `python -m stages.s2_ml.roweval` | `runs/regen/s2_ml/roweval_loro.json` | `runs/regen/s2_ml/`: `roweval_loro.json`, `transitions_loro.json`, `_inputs.roweval_loro.json`; the two `.md` **only with `--report`** |
-| 12 | `s2_raweval` | `python -m stages.s2_ml.raweval` | `runs/regen/s2_ml/raweval.json` | `runs/regen/s2_ml/`: `raweval.json`, `_inputs.raweval.json`; `raweval.md` **only with `--report`** (fits per-rev models into temp dirs) |
-| 13 | `s3_label_audit` | `python -m stages.s3_physics.label_audit` | `runs/regen/s3_physics/label_audit.json` | `runs/regen/s3_physics/`: `label_audit.json`, `label_audit_windows.jsonl`, `_inputs.label_audit.json`; `label_audit.md` **only with `--report`** |
-| 14 | `s3_label_review` (agent) | in-process `_s3_label_review` | — | `runs/keep/agent_runs/<date>_runN/`: `label_review.jsonl`, `label_review_raw.txt` |
-| 15 | `s3_rate_audit` | `python -m stages.s3_physics.rate_audit` | `runs/regen/s3_physics/rate_audit.json` | `runs/regen/s3_physics/`: `rate_audit.json`, `_inputs.rate_audit.json`; `rate_audit.md` **only with `--report`** |
-| 16 | `s3_plausibility` | `python -m stages.s3_physics.plausibility` | `runs/regen/s3_physics/plausibility.json` | `runs/regen/s3_physics/`: `plausibility.json`, `_inputs.plausibility.json` |
-| 17 | `s2_label_all` | `python -m stages.s2_ml.label_all` | `labeled_raw/label_summary.csv` | `labeled_raw/`: `label_summary.csv`, `abstentions.jsonl`, `plausibility.jsonl`, `preset_sweep.json`, `_inputs.json`, and `<session>/<stem>_labelled.csv` per labelled file — **a few GB, gitignored**; `label_report.md` **only with `--report`** |
-| 18 | `breakdown` | `python -m stages.breakdown` | `runs/breakdown.md` | `runs/breakdown.md` |
+| 12 | `s3_label_audit` | `python -m stages.s3_physics.label_audit` | `runs/regen/s3_physics/label_audit.json` | `runs/regen/s3_physics/`: `label_audit.json`, `label_audit_windows.jsonl`, `_inputs.label_audit.json`; `label_audit.md` **only with `--report`** |
+| 13 | `s3_label_review` (agent) | in-process `_s3_label_review` | — | `runs/keep/agent_runs/<date>_runN/`: `label_review.jsonl`, `label_review_raw.txt` |
+| 14 | `s3_rate_audit` | `python -m stages.s3_physics.rate_audit` | `runs/regen/s3_physics/rate_audit.json` | `runs/regen/s3_physics/`: `rate_audit.json`, `_inputs.rate_audit.json`; `rate_audit.md` **only with `--report`** |
+| 15 | `s3_plausibility` | `python -m stages.s3_physics.plausibility` | `runs/regen/s3_physics/plausibility.json` | `runs/regen/s3_physics/`: `plausibility.json`, `_inputs.plausibility.json` |
+| 16 | `s2_label_all` | `python -m stages.s2_ml.label_all` | `labeled_raw/label_summary.csv` | `labeled_raw/`: `label_summary.csv`, `abstentions.jsonl`, `plausibility.jsonl`, `preset_sweep.json`, `_inputs.json`, and `<session>/<stem>_labelled.csv` per labelled file — **a few GB, gitignored**; `label_report.md` **only with `--report`** |
+| 17 | `breakdown` | `python -m stages.breakdown` | `runs/breakdown.md` | `runs/breakdown.md` |
 
 (agent) = `--with-agents` only · every other step runs on the free spine
 
@@ -180,7 +178,6 @@ python -m stages.s1_clean.run          --report   # census.md
 python -m stages.s1_clean.clean        --report   # clean_report.md
 python -m stages.s2_ml.train           --report   # locoeval.md
 python -m stages.s2_ml.roweval         --report   # roweval_*.md + transitions_*.md
-python -m stages.s2_ml.raweval         --report   # raweval.md
 python -m stages.s2_ml.label_all       --report   # label_report.md
 python -m stages.s3_physics.label_audit --report  # label_audit.md
 python -m stages.s3_physics.rate_audit  --report  # rate_audit.md
@@ -320,7 +317,6 @@ python -m stages.s1_clean.run   [--raw data/raw] [--out runs/regen/s1_census]
 python -m stages.s1_clean.clean [--raw data/raw] [--out runs/regen/s1_clean]
 python -m stages.s2_ml.train    [--out DIR] [--drop FEATURE ...]   # --drop = an ablation
 python -m stages.s2_ml.roweval  [--out DIR] [--lockbox]            # --lockbox = SINGLE USE
-python -m stages.s2_ml.raweval  [--out DIR]
 python -m stages.s3_physics.label_audit  [--out DIR] [--include-lockbox]
 python -m stages.s3_physics.rate_audit   [--out DIR] [--include-lockbox]
 python -m stages.s3_physics.plausibility [--out DIR]
@@ -342,8 +338,6 @@ already able to make for itself:
 | --- | --- | --- |
 | `train --window-s F` | the window is a field of `ExperimentSpec`; the CLI copy wrote an unlabelled experiment into the champion's own directory | propose it — the ledger records the window *with* its rationale and outcome (§5) |
 | `roweval --threshold F` | this stage **is** the accuracy claim, and it already sweeps every threshold into `curve` | read another row of `curve` in `roweval_loro.json`; the headline stays at the declared preset |
-| `raweval --threshold F` | same, and it is only readable next to `roweval`, which is cut at the same point | as above |
-| `raweval --no-baseline` | the claim is "the raw route matches the lpf_view route on the same subjects" — without the baseline the file states one side of a comparison | nothing; it always runs now |
 | `plausibility --calibrate/--control` | the spine always passed both, and either alone wrote a half `plausibility.json` under the same name — a bound sited against the corpus but never fired at a fault is a number with no evidence | nothing; both always run |
 | `experiment --seed` | a re-baseline is not a judgement call: `_s2_cycle` now seeds whenever the incumbent's corpus fingerprint does not match the ground in front of it | nothing; it is automatic, and it prints when it fires |
 | `experiment --no-taxonomy` | bought speed by dropping the tiebreaker `decide()` used on a macro-F1 tie. Removing the flag was right, but the default it left behind turned the tiebreaker off permanently — after it, no challenger was ever scored with a taxonomy, so the branch could not fire. The whole row-level taxonomy went on 2026-08-07 (DOMAIN_NOTES §7) | nothing; a macro-F1 tie keeps the incumbent |
@@ -501,8 +495,8 @@ stands between `data/raw` and the labelled CSVs — and a refit still writes it.
 instead of the `_loro` pair. **It is single-use** — `rev8` is spent, read twice on 2026-08-03
 and once on 2026-08-07, and must not be read a fourth time without a new sealed subject. The
 flag requires `--read-note`: a sealed read has to be argued for in a string that ships inside
-the artifact, because a bare flag is too cheap for what it spends. `raweval` refuses the
-lockbox in code rather than by remembering a flag, so it may run on every pass.
+the artifact, because a bare flag is too cheap for what it spends. The `raweval` stage,
+which also refused the lockbox in code, was removed on 2026-08-07 (`caveats.md` §1.7).
 
 ---
 
@@ -511,21 +505,22 @@ lockbox in code rather than by remembering a flag, so it may run on every pass.
 `freshness.stamp_inputs()` writes the sha256 of every artifact a stage consumed into that
 stage's output directory. The stamp is **per stage, not per directory** —
 `_inputs.<stage>.json`, with the bare `_inputs.json` still read for stamps written before
-the split. Callers today:
+the split. A stage with no artifact upstream calls `freshness.declare_no_inputs()` instead,
+which stamps an empty record — "checked, nothing upstream" rather than "nobody can tell".
+Callers today:
 
 | stage | stamp | declares |
 |---|---|---|
 | `train.py` | `runs/<out>/_inputs.train.json` | `champion_spec.json` |
 | `roweval.py` | `runs/regen/s2_ml/_inputs.roweval_loro.json`, or `runs/keep/s2_ml/_inputs.roweval_lockbox.json` under `--lockbox` | `champion_spec.json` |
-| `raweval.py` | `runs/regen/s2_ml/_inputs.raweval.json` | `champion_spec.json` |
 | `plausibility.py` | `runs/regen/s3_physics/_inputs.plausibility.json` | `champion.joblib` + `model_meta.json` — the controls score the injected faults through the fitted champion |
 | `rate_audit.py` | `runs/regen/s3_physics/_inputs.rate_audit.json` | nothing — model-free by construction |
 | `label_audit.py` | `runs/regen/s3_physics/_inputs.label_audit.json` | nothing — reads the annotations and the anchors, never the champion |
 | `s1_clean/run.py`, `clean.py` | `runs/regen/s1_*/_inputs.s1_*.json` | nothing — the only upstream is the `data/raw` tree |
 | `label_all.py` | `labeled_raw/_inputs.json` | `champion.joblib` + `model_meta.json` |
 
-**Why per stage.** `runs/regen/s2_ml` holds three reports with three separate lifetimes —
-`train`'s locoeval, `roweval`'s curve, `raweval`'s raw-path read. One shared stamp let
+**Why per stage.** `runs/regen/s2_ml` holds reports with separate lifetimes —
+`train`'s locoeval and `roweval`'s curve. One shared stamp let
 whichever stage ran last refresh the record for all of them, which is worse than no check:
 a promotion between `s2_train` and `s2_roweval` would leave `locoeval.md` describing the
 old spec and the stamp reporting clean. The self-test builds exactly that case.

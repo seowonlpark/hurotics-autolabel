@@ -22,7 +22,7 @@ GROW_MIN_ANTIPHASE = 0.5   # -corr(L,R): alternation, not two isolated weight sh
 # the four anchors PLAN.md requires a rate verdict for; the swap rule is not a candidate anchor
 ANCHOR_NAMES = ("periodicity", "antiphase", "grav_stab", "gyro_energy")
 
-# Swap-rule verdict bands
+# swap-rule verdict bands
 STANDING, AMBIGUOUS, WALKING = "STANDING", "AMBIGUOUS", "WALKING"
 
 
@@ -136,7 +136,7 @@ def window_anchors(win: pd.DataFrame, fs: float = CANONICAL_HZ,
 
     swaps = swap_count(d - interleg_center, SWAP_DELTA_DEG)
 
-    # Validated descriptors, on raw d
+    # validated descriptors, on raw d
     half = d.size // 2
     ileg_minhalf = (min(float(np.ptp(d[:half])), float(np.ptp(d[half:])))
                     if half >= 1 else 0.0)

@@ -10,15 +10,15 @@ import numpy as np
 import pandas as pd
 
 from stages.s2_ml.dataset import LABEL_COL
-from stages.s2_ml.label import DEFAULT_MODEL_DIR, label_csv, load_champion
+from stages.s2_ml.label import DEFAULT_MODEL_DIR, LABEL_COLUMNS, label_csv, load_champion
 from stages.s2_ml.transform import raw_csv_to_features
 from stages.s2_ml.verify_transform import find_pairs
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = REPO_ROOT / "data" / "raw"
 
-# the columns that ARE the deliverable; a changed reason is a regression even if the state survives
-VERDICT_COLS = ("state", "ambiguous", "reason", "alternative", "n_windows")
+# EVERY column a caller receives, read off label.py- a new one joins the comparison by existing
+VERDICT_COLS = tuple(c for c in LABEL_COLUMNS if c != "confidence")
 
 # the routes differ only by float roundoff, so identical probabilities are expected, not tolerated
 CONFIDENCE_TOLERANCE = 1e-9
@@ -27,12 +27,14 @@ CONFIDENCE_TOLERANCE = 1e-9
 # the verdict columns only, with ground truth structurally removed
 def _comparable(df: pd.DataFrame) -> pd.DataFrame:
     out = df.drop(columns=[c for c in (LABEL_COL,) if c in df.columns])
-    cols = [c for c in VERDICT_COLS if c in out.columns]
-    got = out[cols].copy()
-    # None and NaN both mean "no call"; normalize so the comparison is about verdicts
-    for c in ("state", "reason", "alternative"):
-        if c in got.columns:
-            got[c] = got[c].where(got[c].notna(), "")
+    # a delivered column that is missing here would silently drop out of the comparison
+    if (absent := [c for c in VERDICT_COLS if c not in out.columns]):
+        raise AssertionError(f"label_csv did not deliver {absent}; verify_serve compares "
+                             f"label.LABEL_COLUMNS, so a renamed column must be renamed there")
+    got = out[list(VERDICT_COLS)].copy()
+    # None and NaN both mean "no call", in object and float columns alike; normalize before comparing
+    for c in got.columns:
+        got[c] = got[c].where(got[c].notna(), "") if got[c].dtype == object else got[c].fillna(-999)
     return got
 
 
@@ -53,7 +55,7 @@ def compare_pair(ann_path: Path, raw_path: Path, model_dir: Path,
     cb = raw_out["confidence"].to_numpy(float)
     both = np.isfinite(ca) & np.isfinite(cb)
     conf_delta = float(np.max(np.abs(ca[both] - cb[both]))) if both.any() else 0.0
-    # A row scored on one route and not the other is a disagreement of its own kind
+    # a row scored on one route and not the other is a disagreement of its own kind
     coverage_mismatch = int((np.isfinite(ca) != np.isfinite(cb)).sum())
 
     return {
@@ -68,9 +70,7 @@ def compare_pair(ann_path: Path, raw_path: Path, model_dir: Path,
     }
 
 
-# attempt the bridge on every raw file; records the outcome, never raises
-# no model here on purpose: this measures whether the BRIDGE can read a file, which is a
-# question about the file's own axis/clock/unit records and never about what scores it
+# attempt the bridge on every raw file, recording the outcome- no model, this is about the BRIDGE
 def sweep(raw_dir: Path) -> list[dict]:
     rows = []
     for p in sorted(raw_dir.rglob("*.csv")):
@@ -85,6 +85,31 @@ def sweep(raw_dir: Path) -> list[dict]:
                          "n_rows": None,
                          "reason": f"{type(exc).__name__}: {str(exc).splitlines()[0]}"})
     return rows
+
+
+# the axis map is PER VARIANT, so an unpaired one passes by being absent, not by being right
+def variant_coverage(pairs: list, sweep_rows: list[dict]) -> list[dict]:
+    paired: dict[str, int] = {}
+    for e in pairs:
+        paired[e.variant] = paired.get(e.variant, 0) + 1
+    servable = [r for r in sweep_rows if r["servable"]]
+    return [{"variant": v,
+             "raw_files": sum(1 for r in servable if r["variant"] == v),
+             "pairs_compared": paired.get(v, 0)}
+            for v in sorted({r["variant"] for r in servable})]
+
+
+def render_variant_coverage(rows: list[dict]) -> str:
+    lines = ["variant coverage: does every servable variant have a pair in the comparison?"]
+    for r in rows:
+        mark = "ok      " if r["pairs_compared"] else "UNCHECKED"
+        lines.append(f"   {mark}  {r['variant']}  {r['raw_files']:>3} raw file(s), "
+                     f"{r['pairs_compared']} compared")
+    # not a failure- a freshly collected variant has no annotation yet; a SILENT gap is the hazard
+    if (gap := [r for r in rows if not r["pairs_compared"]]):
+        lines.append(f"   NOTE: {len(gap)} variant(s) have no annotated pair, so the axis map "
+                     f"for them is unverified. The PASS above does not cover them.")
+    return "\n".join(lines)
 
 
 def render_sweep(rows: list[dict]) -> str:
@@ -109,11 +134,7 @@ def render_sweep(rows: list[dict]) -> str:
 
 
 def main() -> None:
-    # No arguments, on purpose. This is a differential check with one question -- does a raw device
-    # log label like its own lpf_view export? -- and every knob it used to take could only make the
-    # answer weaker: a `--threshold` other than the champion's own default preset asks it about a
-    # model nobody serves, and `--skip-pairs` / `--skip-sweep` each turn a PASS into a PASS about
-    # half of it. It runs whole or it does not run.
+    # no arguments on purpose- every knob it used to take turned a PASS into a PASS about half of it
     argparse.ArgumentParser(
         description="Verify the raw serve path against its lpf_view export, end to end."
     ).parse_args()
@@ -159,7 +180,10 @@ def main() -> None:
         print("PASS: raw and lpf_view routes agree on every row of every pair.")
 
     print()
-    print(render_sweep(sweep(RAW_DIR)))
+    sweep_rows = sweep(RAW_DIR)
+    print(render_sweep(sweep_rows))
+    print()
+    print(render_variant_coverage(variant_coverage(pairs, sweep_rows)))
 
     sys.exit(1 if failed else 0)
 

@@ -36,7 +36,7 @@ RAW_DIR = REPO_ROOT / "data" / "raw"
 DEFAULT_OUT_DIR = LABELED_RAW
 
 
-# A path as this repo names it: relative and forward-slashed, absolute if outside
+# a path as this repo names it: relative and forward-slashed, absolute if outside
 def _rel_to_repo(path: Path) -> str:
     try:
         return path.resolve().relative_to(REPO_ROOT).as_posix()
@@ -183,8 +183,7 @@ def render_report(rows: list[dict], threshold: float, model_dir: Path,
 
 
 def main() -> None:
-    # the sweep line prints an em-dash, and the stamp is written after it: on a cp949 console
-    # that crash left labeled_raw/ summarised but never stamped, which reads as never checked
+    # the sweep prints an em-dash and the stamp comes after- a cp949 crash left it never stamped
     use_replacement_encoding()
 
     ap = argparse.ArgumentParser(
@@ -351,7 +350,7 @@ def main() -> None:
     stamp_inputs(out_dir, {"champion": args.model_dir / "champion.joblib",
                            "model_meta": args.model_dir / "model_meta.json"})
 
-    # Same gate S1 enforces: every raw file lands in exactly one bucket
+    # same gate S1 enforces: every raw file lands in exactly one bucket
     ok = sum(1 for r in rows if r["labelled"])
     bad = len(rows) - ok
     assert ok + bad == len(paths), f"partition broken: {ok + bad} != {len(paths)} raw files"

@@ -11,7 +11,7 @@ import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 from scipy.stats import binomtest
 
-from freshness import stamp_inputs
+from freshness import declare_no_inputs
 from runslayout import REGEN
 from stages.s2_ml.dataset import LABEL_COL, STAND, WALK, Trial, load_dataset
 from stages.report import add_report_flag
@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # incoherent when MOST label-pure windows contradict; not tuned- the corpus median is near 0.03
 MAX_DISAGREE = 0.50
 
-# Below this a trial is too short for the fraction to mean anything
+# below this a trial is too short for the fraction to mean anything
 MIN_WINDOWS = 20
 
 # family-wise error rate for the band-policy test: 0.05, Bonferroni'd across the trials tested
@@ -343,10 +343,8 @@ def main() -> None:
     (out_dir / "label_audit_windows.jsonl").write_text(
         "".join(json.dumps(r, default=float) + "\n" for r in noms.to_dict("records")),
         encoding="utf-8")
-    # Model-free like `rate_audit`: this reads the annotations and the anchors, never the champion.
-    # Declared empty rather than left unstamped, so it says "checked, nothing upstream" instead of
-    # "nobody can tell" -- and so no stage sharing runs/regen/s3_physics is silently exempt from the check.
-    stamp_inputs(out_dir, {}, stage="label_audit")
+    # model-free: this reads the annotations and the anchors, never the champion
+    declare_no_inputs(out_dir, stage="label_audit")
 
     print(f"\n[audit] -> {out_dir / ('label_audit.md' if args.report else 'label_audit.json')}")
 

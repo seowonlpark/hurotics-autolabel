@@ -49,16 +49,12 @@ SERVE_REFUSALS = (UnknownVariantError, AxisConflictError, GyroUnitError,
                   DegenerateClockError, NotRawDeviceError, FileNotFoundError)
 
 # ---- the physics floor, DEFAULT OFF; every OPERATING_POINTS number assumes that ----
-# the ceiling that used to sit beside it is gone: measured at -11 errors at the shipped point,
-# noise, and an addressable set of exactly 0 at p>=0.95. `roweval` still sweeps it as a candidate
 PHYSICS_FLOOR = False
 
 # the reduced bar when the swap rule agrees; not tuned- it is the `balanced` preset's own threshold
 PHYSICS_FLOOR_THRESHOLD = 0.70
 
-# abstain on the whole ambiguity band. OFF, but NOT retracted like the ceiling was: the table that
-# beats it scores the band against the very labels the band exists to distrust, so it is a judgement
-# and not a measured loss. kept switchable for anyone holding other evidence about the annotation
+# abstain on the whole band- OFF, but the table beating it scores against the labels it distrusts
 BAND_ABSTAINS = False
 
 # reasons a row is ambiguous, most specific first, so a boundary is reported as a boundary
@@ -269,7 +265,7 @@ def explain(scored: pd.DataFrame, meta: dict, threshold: float,
     posture = scored["posture"].to_numpy(float)
 
     mark(~covered, "uncovered")
-    # Posture first: "not upright at all" outranks any stand-vs-walk story told about it
+    # posture first: "not upright at all" outranks any stand-vs-walk story told about it
     mark(posture > ref["posture_shift_p99"], "posture_shift")
     mark(np.nan_to_num(oob, nan=0.0) >= 3, "out_of_distribution")
     mark(change, "near_transition")
@@ -324,19 +320,17 @@ def label_csv(path: Path, model_dir: Path, threshold: float) -> tuple[pd.DataFra
     # file-level bounds over `scored`, the rows actually scored; it REPORTS, refusing nothing
     provenance["plausibility"] = plausibility_check(scored)
 
-    # Map the grid back onto the caller's own rows by nearest time
+    # map the grid back onto the caller's own rows by nearest time
     t_grid = scored[TIME_COL].to_numpy(float)
     t_in = raw[TIME_COL].to_numpy(float)
     order = np.argsort(t_grid)
     tg = t_grid[order]
     j = np.searchsorted(tg, t_in).clip(1, tg.size - 1)
     nearest = order[np.where(np.abs(t_in - tg[j - 1]) <= np.abs(tg[j] - t_in), j - 1, j)]
-    # Beyond half a grid step from any scored sample, the row sits in a gap
+    # beyond half a grid step from any scored sample, the row sits in a gap
     gap = np.abs(t_in - t_grid[nearest]) > (1000.0 / spec.fs_hz)
 
-    cols = ["state", "label", "confidence", "ambiguous", "reason", "reason_detail",
-            "alternative", "n_windows"]
-    picked = scored.iloc[nearest][cols].reset_index(drop=True)
+    picked = scored.iloc[nearest][list(SCORED_COLUMNS)].reset_index(drop=True)
     picked.loc[gap, ["state", "label", "confidence"]] = None
     picked.loc[gap, "ambiguous"] = True
     picked.loc[gap, "reason"] = "uncovered"
@@ -361,6 +355,13 @@ GOLDEN_COLUMNS = (TIME_COL, *FEATURES, LABEL_COL)
 
 # the model's call on every scored row; Label overwrites the ambiguous ones with -1
 GUESS_COL = "guess"
+
+# what `explain` produces and `label_csv` lifts onto the caller's rows, in output order
+SCORED_COLUMNS = ("state", "label", "confidence", "ambiguous", "reason", "reason_detail",
+                  "alternative", "n_windows")
+
+# THE definition of what a caller receives; `verify_serve` compares every one of these
+LABEL_COLUMNS = (*SCORED_COLUMNS[:2], GUESS_COL, *SCORED_COLUMNS[2:])
 
 # appended AFTER the six, so the golden prefix stays positionally intact for a reader expecting it
 VERDICT_COLUMNS = ("confidence", "ambiguous", "reason")

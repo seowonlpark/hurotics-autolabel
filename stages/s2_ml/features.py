@@ -27,12 +27,11 @@ from stages.s2_ml.rest import (
     rest_span_frame,
 )
 
-# non-overlapping for training: overlap inflates the effective sample count, NOT the CV number
-# (CV is LeaveOneGroupOut(rev), so near-duplicates never cross a fold; caveats.md 3.7 has the A/B)
+# non-overlapping for training: overlap inflates the sample count, NOT the CV number (caveats 3.7)
 DEFAULT_WINDOW_S = 2.0
 DEFAULT_STRIDE_S = 2.0
 
-# A training window must be label-pure; anything less is a transition (rule 2)
+# a training window must be label-pure; anything less is a transition (rule 2)
 PURITY_MIN = 1.0
 
 # the stride band for THIS population (cadence 16-102 steps/min), NOT healthy-adult (0.5, 3.0) Hz
@@ -110,10 +109,7 @@ def _power(A: np.ndarray) -> np.ndarray:
                               axis=1)) ** 2
 
 
-# (dominant gait-band frequency, gait-band share of non-DC power, above-gait-band share)
-# ONE transform for all three: they read the same periodogram of the same windows, and taking
-# it twice was ~6% of segment_features for no difference in the answer
-# the HF share is mostly gone after the 1 Hz low-pass, but dropping it costs worst-subject accuracy
+# ONE transform for all three: same periodogram, and taking it twice was ~6% of segment_features
 def _spectral(A: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     P = _power(A)
     freq = np.fft.rfftfreq(A.shape[1], 1.0 / fs)
@@ -254,7 +250,7 @@ def segment_features(chan: dict[str, np.ndarray], spec: WindowSpec,
         p95 = np.percentile(A, 95, axis=1)
         p05 = np.percentile(A, 5, axis=1)
         z = zeros[f"{side}_ang_LPF"]
-        # How far the thigh lifts above THIS subject's own standing posture
+        # how far the thigh lifts above THIS subject's own standing posture
         cols[f"{side}_ang_p95_rest"] = p95 - z
         cols[f"{side}_ang_med_rest"] = np.median(A, 1) - z
         cols[f"{side}_ang_p95_p05"] = p95 - p05
