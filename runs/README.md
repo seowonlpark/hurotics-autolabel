@@ -36,6 +36,7 @@ or a verdict that some claim in the code or in `OPERATING_POINTS.md` rests on:
 | `keep/ablations/s2_ml_abl_*` | A full LOCO evaluation each, behind `champion_spec.json`'s rejected lines — no count here on purpose, `breakdown` globs whatever is there. Re-running one costs an afternoon, and together they are what makes "low importance is not droppability" a measurement rather than an opinion. |
 | `keep/ablations/s2_ml_rf42` | RandomForest at the 42-feature set the champion carried then — the reproduction behind `champion_spec.json`'s ExtraTrees-over-RandomForest line. No code reads it; the rationale cites it. |
 | `keep/ablations/s2_ml_seedsweep.json` | Five seeds per estimator; the seed-stability row in `breakdown.md`. |
+| `keep/ablations/s2_ml_rowseedsweep.json` | Five seeds through the row path (`stages/s2_ml/rowseedsweep.py`, ~3 min). The band the headline `84.66% at 0.9901` is read against — without it a single-seed delta cannot be told from the draw. Cheap to rebuild, but only against *this* `champion_spec.json`; the copy on disk is the one the shipped number belongs to. |
 | `keep/agent_runs/*` | Paid API calls. `costs.json` records what each one spent; the review ledgers are non-deterministic, so re-running produces different verdicts, not the same ones. |
 
 Artifacts that no live code reads any more move to `archive/`, which has its own README.

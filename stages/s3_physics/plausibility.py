@@ -180,7 +180,7 @@ def _by_code(flagged: list[tuple[str, dict]]) -> dict[str, list[tuple[str, dict]
 def corpus_calibration(spec: WindowSpec | None = None) -> pd.DataFrame:
     spec = spec or WindowSpec(stride_s=0.25)
     rows = []
-    for t in load_dataset(excluded=set()):
+    for t in load_dataset(include_excluded=True):
         frame = t.frame.reset_index(drop=True)
         _z, ileg, trusted = rest_reference(frame, spec.fs_hz)
         means, covs, labs = [], [], []
@@ -240,7 +240,7 @@ def run_controls(rev: str = "rev13", trial: int = 1) -> pd.DataFrame:
     spec = WindowSpec(window_s=meta["window_s"],
                       stride_s=meta.get("inference_stride_s", 0.25),
                       fs_hz=meta.get("fs_hz", 100.0))
-    src = {(t.rev, t.trial): t for t in load_dataset(excluded=set())}[(rev, trial)]
+    src = {(t.rev, t.trial): t for t in load_dataset(include_excluded=True)}[(rev, trial)]
     L, R = FEATURES[0], FEATURES[1]
 
     rows = []

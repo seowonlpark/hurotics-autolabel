@@ -16,7 +16,7 @@ from freshness import check_all, stamp_paths
 from runmeta import git_sha as _git_sha
 from stages.console import use_replacement_encoding
 # the hand-edited exclusion list, imported not restated: a copy answers "acted on?" wrongly
-from stages.s2_ml.dataset import EXCLUDED_TRIALS
+from stages.s2_ml.dataset import EXCLUDED_TRIALS, EXCLUDED_WHY
 
 from runslayout import ABLATIONS, AGENT_RUNS, KEEP_S2, LABELED_RAW, REGEN, checkable_dirs
 
@@ -39,6 +39,9 @@ LOW_COVERAGE_LINE = 0.50
 
 # a drop this short at index 0 is the export preamble; grouping stops 39 of them reading as 39 findings
 PREAMBLE_MAX_ROWS = 12
+
+# resample.py's own words; reword it there and ADD the new one here, never swap- a miss reads as "too short"
+RATE_REJECT_MARKERS = ("matches no known acquisition rate",)
 
 
 # ---- Loading; every artifact is optional, and an absent one is a REPORTED gap, not a skip ----
@@ -184,15 +187,15 @@ def section_corpus(src: Source) -> list[str]:
                 f"`{rev}`", f"{trial}",
                 f"{int(t['windows']):,}" if t else "—",
                 f"**{t['disagree_frac']:.4f}**" if t else "—",
-                f"over the `disagree > {audit['max_disagree']}` line (§3)"
-                if t and t["disagree_frac"] > audit["max_disagree"]
-                else "**not `label_audit`'s call** — excluded on other evidence, go read it",
+                # the manifest's own reason, so the table stops paraphrasing a comment in code
+                EXCLUDED_WHY.get((rev, trial))
+                or ("**not `label_audit`'s call** — excluded on other evidence, go read it"),
             ])
         out += [
             "### Excluded before any of the above", "",
             f"**{len(EXCLUDED_TRIALS)} trial(s)** are dropped as the corpus is loaded "
-            f"(`dataset.EXCLUDED_TRIALS`), so every count on this page is already net of them "
-            f"and no stage below can put them back. The list is edited **by hand**; the "
+            f"(`data/corpus.json`), so every count on this page is already net of them "
+            f"and no stage below can put them back. The manifest is edited **by hand**; the "
             f"`disagree` column is `label_audit`'s, which reads the RAW corpus and so still "
             f"sees these trials. That is what makes the exclusion checkable instead of "
             f"self-confirming — a row whose evidence has gone thin still shows its number here.",
@@ -223,6 +226,16 @@ def section_corpus(src: Source) -> list[str]:
                     f"Signal-only axis detection scores below chance (`DOMAIN_NOTES` §6.2), so "
                     f"guessing is not available.", ""]
     return out
+
+
+# the three causes a drop can have, split on the stage's reason FIRST- (rate, preamble, fragments)
+def bucket_dropped(dropped: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+    rate = [s for s in dropped
+            if any(m in str(s.get("reason", "")) for m in RATE_REJECT_MARKERS)]
+    short = [s for s in dropped if s not in rate]
+    preamble = [s for s in short
+                if s.get("index") == 0 and (s.get("n_source_rows") or 0) <= PREAMBLE_MAX_ROWS]
+    return rate, preamble, [s for s in short if s not in preamble]
 
 
 # S1; what was cleaned, what was thrown away, and what was flagged but kept
@@ -259,13 +272,7 @@ def section_s1(src: Source) -> list[str]:
                     "**yes**" if q.get("needs_human") else "no"] for q in (quar or [])])
 
     # grouped by the stage's own reason FIRST: splitting on row count hid a hardware finding
-    rate_markers = ("matches no known acquisition rate", "fits no known family")
-    rate_rejects = [s for s in dropped
-                    if any(m in str(s.get("reason", "")) for m in rate_markers)]
-    too_short = [s for s in dropped if s not in rate_rejects]
-    preamble = [s for s in too_short
-                if s.get("index") == 0 and (s.get("n_source_rows") or 0) <= PREAMBLE_MAX_ROWS]
-    fragments = [s for s in too_short if s not in preamble]
+    rate_rejects, preamble, fragments = bucket_dropped(dropped)
 
     out += ["### Dropped segments, by cause", ""]
     out += _table(["cause", "segments", "files", "what it is"], [
@@ -290,6 +297,19 @@ def section_s1(src: Source) -> list[str]:
     if by_file and by_file.most_common(1)[0][1] > 1:
         f_path, n = by_file.most_common(1)[0]
         out += [f"Most fragmented: `{Path(f_path).name}` lost **{n}** segments.", ""]
+
+    # a channel can be 100% non-finite in a segment the time base says is fine; separate axis, separate table
+    dead = Counter(c for s in usable for c in (s.get("dead_channels") or []))
+    dead_files = {s["path"] for s in usable if s.get("dead_channels")}
+    if dead:
+        out += ["### Channels with no finite sample — flagged, nothing dropped for them", "",
+                f"**{len(dead)} channel(s) across {len(dead_files)} file(s).** The segment's "
+                f"time base is fine, which is what `usable` judges, so these do not appear in "
+                f"the drop table above. Interpolation carries an all-NaN channel through "
+                f"without complaint and it reaches S2 as NaN features.", ""]
+        out += _table(["channel", "segments"], [[f"`{c}`", f"{n}"] for c, n in dead.most_common()])
+    elif any("dead_channels" in s for s in segs):
+        out += ["No channel is entirely non-finite in any usable segment.", ""]
 
     methods = Counter(s.get("method") or "—" for s in usable)
     out += ["### Resample method, by usable segment", ""]
@@ -590,6 +610,12 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
                 f"number to set a threshold by. {shipped:g} is the lowest threshold at which "
                 f"every held-out development subject independently clears it.", ""]
 
+        # The band the headline row has to be read against. The table above is ONE seed -- the
+        # shipped one -- and until 2026-08-07 the only seed spread on record was at the window
+        # unit, which is a different denominator and a different gate. A change that moves this
+        # row by less than the spread below moved nothing.
+        out += _section_row_seed_band(src, shipped)
+
         # The `worst subject` column above is the worst DEVELOPMENT subject, and the sealed
         # subject is worse at every operating point that ships. Kept out of that column
         # deliberately -- one cell holding two populations is the conflation §0 exists to
@@ -728,6 +754,62 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
     return out
 
 
+# How much of the headline row is the model and how much is the draw. Five seeds through the SAME
+# path that produced it -- same features, same folds, same threshold, same ambiguity gate -- so the
+# spread is the resolution of the row-level claim, not of a proxy. The window sweep above cannot
+# stand in for this: different denominator, and the gate sits between them.
+def _section_row_seed_band(src: Source, shipped: float) -> list[str]:
+    rows = src.json(ABLATIONS / "s2_ml_rowseedsweep.json",
+                    "python -m stages.s2_ml.rowseedsweep")
+    if not rows:
+        return []
+    base = next((r for r in rows if r["seed"] == 0), None)
+
+    # (label, key, formatter) -- the four numbers this repo quotes off the row above
+    metrics = [("selective acc", "selective_accuracy", _f),
+               ("coverage", "coverage", lambda v: _pct(v, 2)),
+               ("worst subject", "worst_rev_accuracy", _f),
+               ("wrong rows kept", "errors_kept", lambda v: f"{v:,.0f}")]
+
+    table, notes = [], []
+    for label, key, fmt in metrics:
+        v = [r[key] for r in rows]
+        table.append([label, fmt(base[key]) if base else "—", fmt(sum(v) / len(v)),
+                      fmt(min(v)), fmt(max(v)), fmt(max(v) - min(v))])
+        # where the shipped draw sits in its own cloud; an extreme is worth saying out loud
+        if base and len(set(v)) > 1:
+            if base[key] == max(v):
+                notes.append(f"**highest** {label}")
+            elif base[key] == min(v):
+                notes.append(f"**lowest** {label}")
+
+    band = max(r["selective_accuracy"] for r in rows) - min(r["selective_accuracy"] for r in rows)
+    out = [f"#### Seed band on that row — {len(rows)} seeds through the same path", "",
+           f"Everything above is `random_state=0`, one draw. ExtraTrees picks split thresholds "
+           f"at random, so a different seed is a different 400 trees on identical data. These "
+           f"are {len(rows)} of them at threshold {shipped:g}, scored row by row:", ""]
+    out += _table(["", "seed 0 (shipped)", f"mean of {len(rows)}", "min", "max", "spread"], table)
+    out += [f"**A single-seed change to selective accuracy below ~{band:.4f} is not a result.** "
+            f"Coverage moves ~"
+            f"{_pct(max(r['coverage'] for r in rows) - min(r['coverage'] for r in rows), 2)} "
+            f"and the worst subject moves ~"
+            f"{max(r['worst_rev_accuracy'] for r in rows) - min(r['worst_rev_accuracy'] for r in rows):.4f} "
+            f"on the seed alone — so read the pair, never accuracy by itself: within this sweep "
+            f"the two are already anticorrelated, and buying accuracy by abstaining more is what "
+            f"the threshold column does for free.", ""]
+    if notes:
+        joined = (", the ".join(notes[:-1]) + f" and the {notes[-1]}") if len(notes) > 1 else notes[0]
+        out += [f"The shipped draw is not a typical one — seed 0 has the {joined} of the "
+                f"{len(rows)}. It is the default, not a pick, "
+                f"but the quoted pair sits at the corner of the cloud rather than its middle.",
+                ""]
+    out += ["This is the *seed* band and nothing else. It does not cover the corpus, the "
+            "annotation, or the subject — between-subject spread is an order of magnitude "
+            "larger (see the worst-subject column, and the lockbox below), and no number of "
+            "seeds shrinks it.", ""]
+    return out
+
+
 # which way the errors go- the one cut pooled accuracy hides completely
 def _section_error_direction(src: Source) -> list[str]:
     row = src.json(REGEN / "s2_ml" / "roweval_loro.json", "python -m stages.s2_ml.roweval")
@@ -776,7 +858,8 @@ def section_s3(src: Source) -> list[str]:
                        f"{meta['fs_hz']:g} Hz",
              "~2 gait cycles — the shortest span that can show a leg swap"],
             ["training stride", f"{meta['stride_s']} s (**non-overlapping**)",
-             "overlapping windows leak between CV folds"],
+             "overlap inflates the effective sample count; "
+             f"`{meta['cv']}` makes fold leakage impossible either way"],
             ["inference stride", f"**{meta['inference_stride_s']} s**",
              "a row is labelled by whichever windows cover it"],
             ["bounded by", "**segment**, never a file",

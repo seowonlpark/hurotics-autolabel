@@ -151,7 +151,9 @@ S2는 `data/labeled`에서 학습한다. 신호의 사본을 하나 더 저장�
 **이건 `runs/regen` 대 `runs/keep`과는 다른 질문이다.** 후자는 전체 실행으로 그 파일을 다시
 만들 수 있느냐로 나뉜다 — `rm -rf runs/regen`은 안전하고 때로는 옳은 선택이지만,
 `runs/keep` 밑의 것은 어떤 대가로도 복구되지 않는다.
-`runs/keep/s2_ml/roweval_lockbox.json`은 1회용 rev8 판독이고,
+`runs/keep/s2_ml/roweval_lockbox.json`은 rev8 판독이고 — 대체된 2026-08-03 판독은
+`roweval_lockbox.2026-08-03.json`으로 그 옆에 남는다. 재판독은 산출물을 갈아치우지만
+기록을 갈아치우지는 않는다 —
 `runs/keep/s2_ml/experiments.jsonl`은 특징 집합이 지금에 이른 경위의 유일한 기록이며,
 `runs/keep/ablations/`에는 `champion_spec.json`이 기각한 항목들의 근거인 LOCO 평가가 들어
 있다. 색인은 `runs/README.md`고, `runs/` 밑 모든 경로의 유일한 정의는 `runslayout.py`다 —
@@ -350,7 +352,7 @@ python -m stages.s2_ml.label_all --summary-only       # 스윕만, 파일별 CSV
 |---|---|
 | `Label` | 확정 판정: `0` 서 있음, `10` 걷기, `-1` 채점했으나 임계값 미만, `255` 이 행을 덮는 윈도우가 없었음 |
 | `guess` | 임계값을 적용하기 *전*의 같은 판정: 조금이라도 채점된 모든 행에 `0` 또는 `10`, 아무것도 없었던 곳은 `255`. `-1`은 절대 나오지 않는다 |
-| `confidence` | 앙상블의 `max(p, 1-p)`. `255` 행은 채점된 적이 없으므로 비어 있다 |
+| `confidence` | 앙상블의 `max(p, 1-p)`. `255` 행은 채점된 적이 없으므로 비어 있다. **보정된 확률이 아니다** — 순서일 뿐이고, 임계값과 비교하는 것 외의 용도는 없다. 하위 계산에 숫자로 넣지 말 것. `caveats.md` §2.6 참조 |
 | `ambiguous` | 모든 `-1`과 `255` 행에서 `True` — `Label`을 해독하기 싫은 사람을 위한 평범한 불리언 |
 | `reason` | 어떤 의심인가: `near_transition`, `weight_shift_or_step`, `model_split`, `posture_shift`, `low_excursion_gait`, `out_of_distribution`, `uncovered`. 확신한 행에서는 비어 있다 |
 
@@ -365,9 +367,14 @@ python -m stages.s2_ml.label_all --summary-only       # 스윕만, 파일별 CSV
 > 필요한 독자를 위해), `--full`은 프레임 전체를 유지한다. `label`과 `label_all`은 같은 두
 > 플래그를 받고 기본 모양도 같다.
 
-`label.REASONS`에는 reason 코드가 두 개 더 있다 — `physics_contradicts`와
-`amplitude_ambiguous` — 그리고 **둘 다 출하 출력에는 나타날 수 없다.** 각각 기본값이 `False`인
-플래그를 켰을 때만 생성되기 때문이다. 그것을 꺼 둔 근거 측정은 `OPERATING_POINTS.md`에 있다.
+`label.REASONS`에는 reason 코드가 하나 더 있다 — `amplitude_ambiguous` — 그리고 **출하
+출력에는 나타날 수 없다.** 기본값이 `False`인 `BAND_ABSTAINS`를 켰을 때만 쓰이기 때문이다.
+켤 수 있게 남겨둔 건 의도다: 밴드를 이기는 표는 밴드가 바로 그 불신 대상으로 삼는 라벨에 대고
+밴드를 채점한 것이라, 꺼 두는 건 판단이지 결론난 손실이 아니다 (`OPERATING_POINTS.md`).
+`PHYSICS_CEILING` 플래그 뒤에 `physics_contradicts` 코드가 함께 있었지만 **둘 다 삭제됐다.**
+그쪽은 결론이 났기 때문이다 — ceiling은 출하 지점에서 −11 errors고 p ≥ 0.95에서는 잡을 게
+아예 없다. 다만 `roweval`은 가상의 ceiling을 계속 스윕해서, 그 철회가 기억이 아니라 측정으로
+남게 한다.
 
 **판정은 S2 단독의 것이다.** 행 단위 상태는 ExtraTrees 앙상블에서 나오고, 물리 진단은 그
 의심에 *이름을 붙이는 데만* 쓰인다. 그러므로 `ambiguous`는 "앙상블이 확신하지 못했다"는
@@ -480,13 +487,15 @@ Length, GCP, 어드미턴스, PID 상태는 장비가 *계산한* 것이다. 계
 `runs/regen/s2_ml/roweval_loro.json`을 믿고 이 표는 절대 믿지 말 것
 (`python -m stages.s2_ml.roweval --report`가 페이지로 렌더한다).
 
-> **이건 개발 피험자 수치다.** 봉인된 락박스 피험자 `rev8`은 **확정한 행에 대해 0.9308**,
-> 커버리지 76.4%를 기록한다 — 거기서는 목표에 미달이고, 걷기 재현율 1.0000에 대해 서 있음
-> 재현율은 0.5752다. 위의 어떤 숫자든 인용하기 전에 `caveats.md` §3.2를, 그리고 무엇이 얇고
+> **이건 개발 피험자 수치다.** 봉인된 락박스 피험자 `rev8`은 **확정한 행에 대해 0.9269**,
+> 커버리지 75.6%를 기록한다 — 거기서는 목표에 미달이고, 걷기 재현율 1.0000에 대해 서 있음
+> 재현율은 0.5622다. 위의 어떤 숫자든 인용하기 전에 `caveats.md` §3.2를, 그리고 무엇이 얇고
 > 무엇이 미검증이며 무엇을 의도적으로 뺐는지를 함께 읽을 것.
 
-`rev8`은 **소진됐다** — 2026-08-03에 두 번 판독했고 둘 다 `caveats.md` §3.2에 기록돼 있다.
-새로 봉인한 피험자 없이 세 번째로 읽어서는 안 된다.
+`rev8`은 **소진됐다** — 2026-08-03에 두 번, 2026-08-07에 한 번, 총 세 번 판독했고 셋 다
+`caveats.md` §3.2에 기록돼 있다.
+새로 봉인한 피험자 없이 네 번째로 읽어서는 안 된다. `--lockbox`는 이제 `--read-note` 없이는
+실행을 거부한다 — 봉인을 쓰는 이유는 타이핑해야 하고, 그 문장은 산출물 안에 남는다.
 
 ---
 

@@ -48,14 +48,17 @@ RAW_DEVICE, LPF_VIEW = "raw_device", "lpf_view"
 SERVE_REFUSALS = (UnknownVariantError, AxisConflictError, GyroUnitError,
                   DegenerateClockError, NotRawDeviceError, FileNotFoundError)
 
-# ---- physics floor and ceiling, both DEFAULT OFF; every OPERATING_POINTS number assumes that ----
-PHYSICS_CEILING = False
+# ---- the physics floor, DEFAULT OFF; every OPERATING_POINTS number assumes that ----
+# the ceiling that used to sit beside it is gone: measured at -11 errors at the shipped point,
+# noise, and an addressable set of exactly 0 at p>=0.95. `roweval` still sweeps it as a candidate
 PHYSICS_FLOOR = False
 
 # the reduced bar when the swap rule agrees; not tuned- it is the `balanced` preset's own threshold
 PHYSICS_FLOOR_THRESHOLD = 0.70
 
-# abstain on the whole ambiguity band; OFF, since raising the threshold dominates it (measured)
+# abstain on the whole ambiguity band. OFF, but NOT retracted like the ceiling was: the table that
+# beats it scores the band against the very labels the band exists to distrust, so it is a judgement
+# and not a measured loss. kept switchable for anyone holding other evidence about the annotation
 BAND_ABSTAINS = False
 
 # reasons a row is ambiguous, most specific first, so a boundary is reported as a boundary
@@ -69,11 +72,6 @@ REASONS = {
     "near_transition": (
         "a predicted state change falls within one window of this row",
         "the other class - the boundary is real, its exact timing is not resolvable"),
-    "physics_contradicts": (
-        "the swap rule is decisive here and says the opposite of the model "
-        "(`PHYSICS_CEILING`)",
-        "either class - two opinions that read the same interleg signal disagree, so "
-        "neither is independent evidence for the other"),
     "weight_shift_or_step": (
         "interleg signal crosses once in the window: the swap rule's own AMBIGUOUS verdict",
         "stand (a weight shift) or walk (a single step) - one leg passing the other is both"),
@@ -228,22 +226,17 @@ def explain(scored: pd.DataFrame, meta: dict, threshold: float,
     guess[~covered] = np.nan
     conf = np.where(covered, np.maximum(p, 1.0 - p), np.nan)
 
-    # floor and ceiling as one per-row EFFECTIVE THRESHOLD, so a row can never be gated both ways
+    # the floor as a per-row EFFECTIVE THRESHOLD, so one comparison decides every row
     phys = scored["physics"].to_numpy(object)
     phys_class = np.where(phys == WALKING, float(WALK),
                           np.where(phys == STANDING, float(STAND), np.nan))
     decisive = covered & np.isfinite(phys_class)
     agrees = decisive & (phys_class == guess)
-    contradicts = decisive & (phys_class != guess)
 
     eff = np.full(len(scored), float(threshold))
     if PHYSICS_FLOOR:
         eff[agrees] = PHYSICS_FLOOR_THRESHOLD
-    if PHYSICS_CEILING:
-        eff[contradicts] = np.inf  # nothing clears it: a contradiction abstains outright
     ambiguous = ~covered | (conf < eff)
-    # its own column, like `in_band`: the ceiling abstains at EVERY threshold, so a sweep subtracts it
-    gated = PHYSICS_CEILING & contradicts
 
     # the ambiguity band, averaged as the probability is; the probability itself is NOT consulted
     band = (float(ref["band_lo"]), float(ref["band_hi"])) if "band_lo" in ref else None
@@ -280,8 +273,6 @@ def explain(scored: pd.DataFrame, meta: dict, threshold: float,
     mark(posture > ref["posture_shift_p99"], "posture_shift")
     mark(np.nan_to_num(oob, nan=0.0) >= 3, "out_of_distribution")
     mark(change, "near_transition")
-    # after `near_transition`, where the two disagree by construction; before the swap rule's abstention
-    mark(gated, "physics_contradicts")
     mark((swaps >= 0.5) & (swaps < 1.5), "weight_shift_or_step")
     mark((guess == WALK) & (mh < ref["walk_minhalf_p05"]), "low_excursion_gait")
     # after the diagnostic reasons: the band takes the rows nothing sharper explained
@@ -296,7 +287,6 @@ def explain(scored: pd.DataFrame, meta: dict, threshold: float,
     scored["ambiguous"] = ambiguous
     # its own column, not implicit in `reason`: a banded row can still be attributed to a sharper one
     scored["in_band"] = in_band
-    scored["physics_gated"] = gated
     scored["reason"] = reason
     scored["reason_detail"] = [REASONS[r][0] if r else "" for r in reason]
     scored["alternative"] = [REASONS[r][1] if r else "" for r in reason]

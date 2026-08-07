@@ -149,7 +149,9 @@ with the claim. See `.gitignore`, which explains itself.
 **That is a different question from `runs/regen` vs `runs/keep`,** which splits on whether a
 full run can rebuild a file at all — `rm -rf runs/regen` is safe and sometimes the right
 move; nothing under `runs/keep` can be recovered at any price.
-`runs/keep/s2_ml/roweval_lockbox.json` is the single-use rev8 read,
+`runs/keep/s2_ml/roweval_lockbox.json` is the rev8 read, with the superseded 2026-08-03 one
+kept beside it as `roweval_lockbox.2026-08-03.json` — a re-read replaces the artifact but
+never the record,
 `runs/keep/s2_ml/experiments.jsonl` is the only record of how the feature set got to where
 it is, and `runs/keep/ablations/` holds the LOCO evaluations behind `champion_spec.json`'s
 rejected lines. `runs/README.md` is the index; `runslayout.py` is the single definition of
@@ -358,7 +360,7 @@ Each labelled CSV **opens with the annotated corpus's own six columns** — `Tim
 |---|---|
 | `Label` | the committed call: `0` stand, `10` walk, `-1` scored but under the threshold, `255` no window covered the row |
 | `guess` | the same call *before* the threshold: `0` or `10` on every row that was scored at all, `255` where nothing was. Never `-1` |
-| `confidence` | `max(p, 1-p)` from the ensemble; empty on a `255` row, which was never scored |
+| `confidence` | `max(p, 1-p)` from the ensemble; empty on a `255` row, which was never scored. **Not a calibrated probability** — an ordering, and the only thing it is fit for is comparison against a threshold. Nothing downstream may do arithmetic with it. See `caveats.md` §2.6 |
 | `ambiguous` | `True` for every `-1` and `255` row — the plain boolean, if you don't want to decode `Label` |
 | `reason` | which doubt: `near_transition`, `weight_shift_or_step`, `model_split`, `posture_shift`, `low_excursion_gait`, `out_of_distribution`, `uncovered`. Empty on a confident row |
 
@@ -375,10 +377,15 @@ Each labelled CSV **opens with the annotated corpus's own six columns** — `Tim
 > `--full` keeps the entire frame. `label` and `label_all` take the same two flags and
 > default to the same shape.
 
-Two further reason codes exist in `label.REASONS` — `physics_contradicts` and
-`amplitude_ambiguous` — and **neither can appear in shipped output**, because each is
-produced only when a flag that defaults to `False` is switched on. `OPERATING_POINTS.md`
-holds the measurement that keeps them off.
+One further reason code exists in `label.REASONS` — `amplitude_ambiguous` — and **it cannot
+appear in shipped output**, because it is written only when `BAND_ABSTAINS` is on and that
+flag defaults to `False`. It stays switchable deliberately: the table that beats the band
+scores it against exactly the labels the band exists to distrust, so leaving it off is a
+judgement and not a settled loss (`OPERATING_POINTS.md`). A `physics_contradicts` code used
+to sit beside it behind a `PHYSICS_CEILING` flag; both are **deleted**, because that one was
+settled — the ceiling is worth −11 errors at the shipped point and has nothing at all to
+catch at p ≥ 0.95. `roweval` still sweeps a hypothetical ceiling so the retraction stays
+measured rather than remembered.
 
 **The call is S2's alone.** The per-row state comes from the ExtraTrees ensemble; the
 physics diagnostics are used only to *name* the doubt. So `ambiguous` means "the ensemble
@@ -498,13 +505,13 @@ if the two disagree, believe `runs/regen/s2_ml/roweval_loro.json` and never this
 (`python -m stages.s2_ml.roweval --report` renders it as a page).
 
 > **These are development-subject numbers.** The sealed lockbox subject `rev8` scores
-> **0.9308 on the rows it commits to**, at 76.4% coverage — the target is missed there, and
-> its stand recall is 0.5752 against a walk recall of 1.0000. Read `caveats.md` §3.2 before
+> **0.9269 on the rows it commits to**, at 75.6% coverage — the target is missed there, and
+> its stand recall is 0.5622 against a walk recall of 1.0000. Read `caveats.md` §3.2 before
 > quoting anything above, along with what is thin, what is unverified, and what was
 > deliberately left out.
 
-`rev8` is **spent** — read twice on 2026-08-03, both logged in `caveats.md` §3.2. It must
-not be read a third time without a new sealed subject.
+`rev8` is **spent** — read twice on 2026-08-03 and once on 2026-08-07, all three logged in
+`caveats.md` §3.2. It must not be read a fourth time without a new sealed subject.
 
 ---
 

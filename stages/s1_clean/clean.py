@@ -1,4 +1,15 @@
 # S1 clean (python -m stages.s1_clean.clean): resample to the canonical grid; only trust persists
+#
+# Why the canonical-grid frame is built, measured and DROPPED. It was written beside the trust
+# record as parquet until 2026-08-04 and nothing ever read it back: the serve path derives its
+# features from the RAW file at the raw rate, deliberately, so that it reproduces training
+# bit-for-bit (`transform.raw_to_features` filters with `matlab_dt` BEFORE resampling, so a
+# 100 Hz frame is already past the point where that filter can be applied). 689 MB of binary
+# that only S1 could produce and no one could open is not evidence. `data/raw` is
+# source-of-truth; re-run this stage to rebuild anything anyone actually wants.
+#
+# That is not the same decision as `rawread`'s cache, which is a transcode of the CSV and holds
+# nothing this stage computed.
 
 from __future__ import annotations
 
@@ -9,7 +20,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
 from freshness import stamp_inputs
 from stages.s1_clean.census import read_header, resolve
@@ -22,6 +32,7 @@ from stages.s1_clean.config import (
     KEEP_MEASURED,
 )
 from stages.s1_clean.manifest import session_of
+from stages.s1_clean.rawread import read_raw_body
 from stages.s1_clean.resample import resample_file
 from stages.report import add_report_flag
 
@@ -108,9 +119,7 @@ def clean_one(path: Path
     if "Time" not in res.index_by_name:
         return None, [], "no Time column", None, {}
 
-    # index_col=False is load-bearing: a trailing comma otherwise shifts every column left by one
-    df = pd.read_csv(path, encoding="utf-8-sig", index_col=False)
-    df = df.loc[:, [c for c in df.columns if not c.startswith("Unnamed")]]
+    df = read_raw_body(path)
     # assert the positions line up rather than let the rename raise a bare length error
     if len(df.columns) != len(res.index_by_name):
         return (None, [],
@@ -226,7 +235,7 @@ def main() -> None:
         f"- usable duration: **{sum(r['duration_s'] for r in usable) / 60:.1f} min**",
         f"- columns kept: **{len(KEEP_MEASURED)} measured + {len(KEEP_EXCEPTIONS)} documented exceptions**",
         f"- persisted per file: **`channel_trust.json` only** — the canonical-grid frame is "
-        f"measured and dropped (see this module's docstring)",
+        f"measured and dropped (see this module's header)",
         "",
         "Measured-only: every column that churns position between variants is a *computed* one,",
         "so this collapses every schema variant into a single canonical shape.",

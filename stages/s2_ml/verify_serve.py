@@ -12,7 +12,7 @@ import pandas as pd
 from stages.s2_ml.dataset import LABEL_COL
 from stages.s2_ml.label import DEFAULT_MODEL_DIR, label_csv, load_champion
 from stages.s2_ml.transform import raw_csv_to_features
-from stages.s2_ml.verify_transform import find_pairs, index_raw_files
+from stages.s2_ml.verify_transform import find_pairs
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = REPO_ROOT / "data" / "raw"
@@ -121,13 +121,14 @@ def main() -> None:
     _model, meta = load_champion(DEFAULT_MODEL_DIR)
     threshold = meta["presets"][meta["default_preset"]]
 
-    pairs = find_pairs(index_raw_files())
+    pairs = find_pairs()
     if not pairs:
         raise SystemExit("no paired recordings found — cannot verify the serve path")
     print(f"[verify_serve] {len(pairs)} paired recordings, threshold {threshold:.2f}\n")
     results = []
-    for i, (ann_path, raw_path, _raw_df, _vid) in enumerate(pairs, 1):
-        r = compare_pair(ann_path, Path(raw_path), DEFAULT_MODEL_DIR, threshold)
+    for i, entry in enumerate(pairs, 1):
+        ann_path = entry.annotated
+        r = compare_pair(ann_path, entry.raw, DEFAULT_MODEL_DIR, threshold)
         results.append(r)
         if r["fatal"]:
             print(f"  {i:>2}/{len(pairs)} {ann_path.name:<34} FATAL {r['fatal']}")

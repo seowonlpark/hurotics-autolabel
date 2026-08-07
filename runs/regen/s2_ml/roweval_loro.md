@@ -67,7 +67,7 @@ The model never sees `-1` in training, so this is independent evidence.
 
 ## Physics floor and ceiling, at threshold 0.85
 
-`label.PHYSICS_CEILING` abstains where the swap rule is decisive and contradicts the model; `label.PHYSICS_FLOOR` accepts a lower confidence (0.70) where it is decisive and agrees. **Both ship OFF.** This table is what a decision to change that has to argue against.
+`label.PHYSICS_FLOOR` accepts a lower confidence (0.70) where the swap rule is decisive and agrees. **It ships OFF.** A *ceiling* — abstain where the swap rule is decisive and contradicts — is **not implemented**: it was retracted by measurement, and the `ceiling` / `both` arms below are that retraction kept under measurement rather than argued from memory.
 
 Of the **10,391** errors the shipped policy commits to, the physics contradicts **580** (5.6%). That is the ceiling's entire addressable set — no tuning reaches an error the swap rule does not object to. The two read the same 1 Hz-filtered interleg angle, so they are wrong together (`caveats.md` §1.1c).
 

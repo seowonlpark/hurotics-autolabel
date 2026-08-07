@@ -16,23 +16,26 @@ Two populations, and they disagree:
 | | coverage | accuracy on committed rows |
 |---|---|---|
 | development subjects (leave-one-rev-out, 7 revs) | 84.66% | **0.9901** |
-| **rev8 — sealed lockbox, one unseen subject** | 76.4% | **0.9308** |
+| **rev8 — sealed lockbox, one unseen subject** | 75.55% | **0.9269** |
 
 **The 95% target is met on development subjects and missed on the lockbox.** Everything
 below is measured on the development subjects, because the lockbox is spent and must not
 be re-read. Treat the development numbers as an upper bound, not an estimate.
 
-> **The two rows were measured with different feature sets [2026-08-04].** Until this date
-> `roweval` fitted every column `build_windows` emits (42) rather than the 38 the champion
-> declares, so the development row described a model that was never shipped. It has been
-> re-measured at 38 — the change moved it by 0.0003, well inside the ablation's noise band.
-> The lockbox row was NOT re-measured, because measuring it again is spending it again
-> (§7). A provenance mismatch is the cheaper of the two costs, and it is stated rather than
-> tidied away.
+> **Both rows are now 38 features, and that cost a third read [2026-08-07].** Until
+> 2026-08-04 `roweval` fitted every column `build_windows` emits (42) rather than the 38 the
+> champion declares. The development row was re-measured at 38 that day and moved 0.0003;
+> the lockbox row was left at 42 on the argument that a provenance mismatch is cheaper than
+> spending a read. That argument was **reversed on 2026-08-07** — not for the provenance,
+> but because the 08-03 artifact predated `per_rev`, `confusion` and `physics_gate` and
+> those cannot be backfilled from a summary. rev8 moved 0.9308 → 0.9269. `caveats.md` §3.2
+> and §3.2b carry the full record, including what the read bought and the one number in it
+> that must not be acted on. **Three reads is where this stops.**
 
 The gap is not sampling noise. On rev8, **walk recall is 1.0000 and stand recall is
-0.5752** on committed rows; every confident error is standing called walking. And accuracy
-there is *non-monotonic* in the threshold (0.8997 → 0.9308 → 0.9184 at 0.70/0.85/0.95),
+0.5622** on committed rows; every confident error is standing called walking — the
+`walk → stand` confusion cell is 0, so "every" is literal. And accuracy
+there is *non-monotonic* in the threshold (0.9018 → 0.9269 → 0.9064 at 0.70/0.85/0.95),
 so on that subject raising the threshold past 0.85 buys nothing at all. See `caveats.md`
 §3.2 and §3.0.
 
@@ -90,7 +93,7 @@ wildly unbalanced on the committed set — 90% of committed errors are stand cal
 its standing. `rev5` holds 0.9525 accuracy while getting **a third of its standing wrong**:
 0.6647 stand recall against 1.0000 walk recall, over 4,175 committed stand rows.
 
-That is the same shape as the lockbox — 0.5752 against 1.0000 — **on a development
+That is the same shape as the lockbox — 0.5622 against 1.0000 — **on a development
 subject.** §3.2 currently reads the rev8 gap as evidence about unseen subjects; at least
 part of it is evidence about subjects with small standing sets, and that part was visible in
 development all along under a pooled number that averaged it out. The recall columns were
@@ -156,11 +159,13 @@ an empty one. Re-derive post hoc when you want the call; re-run `label.py` when 
 doubt explained.
 
 **That recipe is only valid while abstention is a pure function of confidence, which is
-true today because both other knobs ship OFF.** Turn on `BAND_ABSTAINS` or `PHYSICS_CEILING`
+true today because the one knob that could break it ships OFF.** Turn on `BAND_ABSTAINS`
 and a row can abstain at any confidence, so `confidence >= t` no longer reproduces what the
 serve path did — silently, and in the direction of claiming more coverage than was
 delivered. That is the same failure `roweval._committed` exists to prevent on the
-measurement side (§6.7). If you flip either flag, re-run rather than re-derive.
+measurement side (§6.7). If you flip it, re-run rather than re-derive. `PHYSICS_FLOOR` is
+the other survivor and it fails the recipe the opposite way, by committing rows *below* `t`.
+The `PHYSICS_CEILING` that used to be named here is deleted (§ below).
 
 **And it is exact everywhere except on the threshold itself** [measured 2026-08-04].
 `confidence` is emitted rounded to 4 decimals while `ambiguous` was decided on the
@@ -251,13 +256,20 @@ the same reason `roweval` exists at all rather than quoting window numbers. That
 threshold wins here and merely ties there, and why deleting the stage cost no measurement:
 **it was the weaker instrument reading the same quantity.**
 
-## The physics floor and ceiling, and why they are the *other* knob that is off
+## The physics floor, the ceiling that was deleted, and why the floor is the *other* knob that is off
 
-`label.PHYSICS_CEILING` abstains where the swap rule is decisive and contradicts the model;
-`label.PHYSICS_FLOOR` accepts 0.70 instead of the threshold where it is decisive and agrees.
-**Both ship OFF, so every number above is a property of that.** The floor is *not* dominated
-by the threshold, which makes stating the measurement here obligatory rather than optional.
-The ceiling was not either, until the feature-set correction — see below.
+`label.PHYSICS_FLOOR` accepts 0.70 instead of the threshold where the swap rule is decisive
+and agrees. **It ships OFF, so every number above is a property of that.** The floor is
+*not* dominated by the threshold, which makes stating the measurement here obligatory
+rather than optional.
+
+A matching **ceiling** — abstain where the swap rule is decisive and *contradicts* — used to
+sit beside it as `label.PHYSICS_CEILING`, with its own reason code `physics_contradicts`.
+**Both are deleted** [2026-08-07]: the measurement below retracted the ceiling and nothing
+has argued it back. What is *not* deleted is the measurement — `roweval.PHYSICS_POLICIES`
+still sweeps `ceiling` and `both` as hypotheticals, so a future feature set that revives the
+case shows up in the table instead of being lost with the code. The floor is a flag because
+it is still live; the ceiling is a table because it is not.
 
 Each arm matched against threshold-only **at the same coverage**, leave-one-rev-out over
 1,244,292 rows (`roweval.physics_gate_table`). Negative = fewer surviving errors = better:
@@ -295,13 +307,19 @@ by an argument, and the reason is the same both times: S2 and the swap rule read
 the gate appears to buy is mostly a fact about the feature set, not about the physics.
 **Anything written against the −147 figure now has no measurement behind it.**
 
-**They are off anyway, and the reason is not the measurement.** Every number in this
-document — including the per-subject floor that picked 0.85 — is computed with both flags
-False. Switching one on silently would make this file describe a policy nobody runs, which
-is the exact failure that left the amplitude band ON in one stage and OFF in another for
-weeks (§ above). To turn one on: flip it, re-run `s2_roweval`, and re-derive this document
-from the new curve. The measurement has made that a decision someone can check rather than
-argue.
+**That is why the ceiling is deleted and the floor is only off.** A knob whose case has been
+retracted twice, by the same shared-error-mode argument both times, is not a knob — it is a
+result, and the honest place for a result is the table above. Keeping it as a flag invited
+someone to flip it on the −147 figure that no longer exists. The floor's case, by contrast,
+still stands at the shipped point, so it stays flippable.
+
+**The floor is off anyway, and the reason is not the measurement.** Every number in this
+document — including the per-subject floor that picked 0.85 — is computed with
+`PHYSICS_FLOOR` and `BAND_ABSTAINS` both False. Switching one on silently would make this
+file describe a policy nobody runs, which is the exact failure that left the amplitude band
+ON in one stage and OFF in another for weeks (§ above). To turn one on: flip it, re-run
+`s2_roweval`, and re-derive this document from the new curve. The measurement has made that
+a decision someone can check rather than argue.
 
 ## Reproducing
 
@@ -314,5 +332,7 @@ python -m stages.s3_physics.rate_audit              # body or clock? gyro_energy
 python -m stages.s3_physics.plausibility  # file-level bounds: calibrate, then fire at faults
 ```
 
-`roweval --lockbox` exists but **rev8 is spent** (read twice, 2026-08-03, both logged in
-`caveats.md` §3.2). Do not run it again without a new sealed subject.
+`roweval --lockbox` exists but **rev8 is spent** — read three times: twice 2026-08-03, once
+2026-08-07, all logged in `caveats.md` §3.2. Do not run it again without a new sealed
+subject. The flag now refuses to run without `--read-note`, so a fourth read has to be typed
+out and lands in the artifact.

@@ -16,7 +16,6 @@ from stages.report import add_report_flag
 from stages.s2_ml.dataset import (
     CLASS_NAME,
     DEFAULT_LOCKBOX_REVS,
-    EXCLUDED_TRIALS,
     LABEL_COL,
     STAND,
     TIME_COL,
@@ -24,8 +23,6 @@ from stages.s2_ml.dataset import (
     WALK,
     _read_raw,
     load_dataset,
-    rev_of,
-    trial_of,
 )
 from stages.s2_ml.features import WindowSpec, build_windows, feature_columns
 from stages.s2_ml.label import label_csv
@@ -35,28 +32,27 @@ from runslayout import REGEN
 from stages.s2_ml.train import (
     CHAMPION_SPEC_PATH, PRESETS, load_spec, select_features, trainable,
 )
-from stages.s2_ml.verify_transform import find_pairs, index_raw_files
+from stages.s2_ml.verify_transform import find_pairs
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-# paired recordings, minus every sealed rev
+# paired recordings, minus every sealed subject
 def _drop_lockbox(pairs: list, lockbox: tuple[str, ...] = DEFAULT_LOCKBOX_REVS) -> list:
-    kept, refused = [], []
-    for pair in pairs:
-        (refused if rev_of(pair[0]) in lockbox else kept).append(pair)
-    if refused:
-        revs = sorted({rev_of(p[0]) for p in refused})
+    kept = [e for e in pairs if e.subject not in lockbox]
+    if (refused := [e for e in pairs if e.subject in lockbox]):
+        revs = sorted({e.subject for e in refused})
         print(f"[rawe] lockbox: refusing {len(refused)} pair(s) from {revs} (§7)")
     return kept
 
 
-# minus the trials whose ANNOTATIONS are quarantined
+# minus the trials whose ANNOTATIONS are quarantined; the manifest carries the reason with them
 def _drop_quarantined(pairs: list) -> list:
-    kept = [p for p in pairs
-            if (rev_of(p[0]), trial_of(p[0])) not in EXCLUDED_TRIALS]
-    if (n := len(pairs) - len(kept)):
-        print(f"[rawe] quarantine: refusing {n} pair(s) with excluded annotations")
+    kept = [e for e in pairs if not e.exclude]
+    for e in pairs:
+        if e.exclude:
+            # ASCII only: an em-dash on a cp949 console turns a refusal into a UnicodeEncodeError
+            print(f"[rawe] quarantine: refusing {e.subject}/t{e.session} - {e.exclude}")
     return kept
 
 
@@ -92,14 +88,15 @@ def truth_for(out: pd.DataFrame, ann_path: Path, fs_hz: float) -> np.ndarray:
 
 
 # label one raw device CSV through the shipping entry point, truth joined back on
-def score_pair(ann_path: Path, raw_path: Path, model_dir: Path, variant: str,
+def score_pair(entry, model_dir: Path, variant: str,
                threshold: float, fs_hz: float) -> pd.DataFrame:
-    out, prov = label_csv(raw_path, model_dir, threshold)
+    ann_path = entry.annotated
+    out, prov = label_csv(entry.raw, model_dir, threshold)
     truth = truth_for(out, ann_path, fs_hz)
     guess = pd.to_numeric(out["label"], errors="coerce").to_numpy(float)
     return pd.DataFrame({
-        "rev": rev_of(ann_path),
-        "trial": trial_of(ann_path),
+        "rev": entry.subject,
+        "trial": entry.session,
         "variant": variant,
         "axis": prov["sagittal_deg_axis"],
         "truth": truth,
@@ -188,7 +185,7 @@ def render(res: dict, threshold: float, pairs: list, transitive: dict | None) ->
         "",
         "**The lockbox is not in this table.** `rev8`'s four pairs are refused in code (§7), "
         "so every subject here is a development subject. Read this against `roweval_loro`'s "
-        "0.9901, not against rev8's 0.9308.",
+        "0.9901, not against rev8's 0.9269.",
         "",
         "| | |",
         "|---|---|",
@@ -227,7 +224,7 @@ def render(res: dict, threshold: float, pairs: list, transitive: dict | None) ->
               "| rev | trials | rows | coverage | accuracy | errors | stand recall | walk recall |",
               "|---|---|---|---|---|---|---|---|"]
     for rev, r in sorted(res["per_rev"].items()):
-        n_tr = sum(1 for p in pairs if rev_of(p[0]) == rev)
+        n_tr = sum(1 for e in pairs if e.subject == rev)
         lines.append(
             f"| `{rev}` | {n_tr} | {r['rows_scored']:,} | {r['coverage']:.1%} "
             f"| {r['selective_accuracy']:.4f} | {r['errors_kept']:,} "
@@ -289,10 +286,10 @@ def main() -> None:
     out_dir = (REPO_ROOT / args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    pairs = _drop_quarantined(_drop_lockbox(find_pairs(index_raw_files())))
+    pairs = _drop_quarantined(_drop_lockbox(find_pairs()))
     if not pairs:
         raise SystemExit("no scorable pairs — nothing to measure")
-    paired_revs = sorted({rev_of(p[0]) for p in pairs})
+    paired_revs = sorted({e.subject for e in pairs})
     print(f"[rawe] {len(pairs)} pair(s) over {paired_revs}")
 
     trials = load_dataset()
@@ -311,11 +308,10 @@ def main() -> None:
         parts = []
         for rev in paired_revs:
             d = fold_model_dir(train_df, feats, rev, base_meta, tmp)
-            mine = [p for p in pairs if rev_of(p[0]) == rev]
+            mine = [e for e in pairs if e.subject == rev]
             print(f"[rawe] held-out {rev}: labelling {len(mine)} raw file(s)")
-            for ann_path, raw_path, _df, vid in mine:
-                parts.append(score_pair(ann_path, Path(raw_path), d, vid,
-                                        threshold, spec.fs_hz))
+            for entry in mine:
+                parts.append(score_pair(entry, d, entry.variant, threshold, spec.fs_hz))
         df = pd.concat(parts, ignore_index=True)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -340,8 +336,8 @@ def main() -> None:
     payload = {"threshold": threshold, "n_pairs": len(pairs),
                "revs": paired_revs, "n_features": len(feats),
                "lockbox_refused": list(DEFAULT_LOCKBOX_REVS),
-               "pairs": [{"annotated": Path(a).name, "raw": Path(r).name, "variant": v}
-                         for a, r, _d, v in pairs],
+               "pairs": [{"annotated": e.annotated.name, "raw": e.raw.name,
+                          "variant": e.variant} for e in pairs],
                "transitive_lpf_view": transitive, **res}
     (out_dir / "raweval.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     if args.report:

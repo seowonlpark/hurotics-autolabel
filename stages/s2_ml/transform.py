@@ -16,6 +16,7 @@ from stages.s1_clean.config import (
     DOCUMENTED_GYRO_PERMUTATION,
     GAP_FACTOR,
 )
+from stages.s1_clean.rawread import read_raw_body
 
 # csv2mat.m: f_ang = f_angvel = 1 for locomotion; f_angvel = 10 is the GCP variant, NOT this task
 FC_ANG_HZ = 1.0
@@ -176,9 +177,7 @@ def check_gyro_unit(trust: dict | str) -> None:
 def load_raw_frame(path: Path) -> tuple[pd.DataFrame, str, str]:
     header = read_header(path)
     names = [strip_prefix(c) for c in header]
-    # index_col=False: a trailing comma otherwise shifts every column left, invisibly to the count check
-    df = pd.read_csv(path, encoding="utf-8-sig", index_col=False)
-    df = df.loc[:, [c for c in df.columns if not c.startswith("Unnamed")]]
+    df = read_raw_body(path)
     if len(df.columns) > len(names):
         raise NotRawDeviceError(
             f"{path.name}: {len(df.columns)} data columns but only {len(names)} header "

@@ -87,11 +87,10 @@ def label_one(path: Path, model_dir: Path, threshold: float
     }, findings
 
 
-# the three flags that decide whether coverage is a pure function of confidence
+# the two flags that decide whether coverage is a pure function of confidence
 def gates_off() -> dict:
     return {
         "BAND_ABSTAINS": bool(label_mod.BAND_ABSTAINS),
-        "PHYSICS_CEILING": bool(label_mod.PHYSICS_CEILING),
         "PHYSICS_FLOOR": bool(label_mod.PHYSICS_FLOOR),
     }
 

@@ -26,6 +26,25 @@ from stages.s2_ml.train import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# generation of the `.json` payload- bump it whenever a key is added or dropped below
+SCHEMA_VERSION = 3
+
+# a single-use read freezes whichever generation was current the day it ran, and re-running to
+# tidy the schema costs a read of a spent subject (caveats.md 3.2). So the artifact carries its
+# own generation and this table says what that generation meant- do not date artifacts from git
+_GEN1 = ("tag", "threshold", "revs", "curve", "reasons", "human_unknown")
+_GEN2 = (*_GEN1, "n_features", "features", "per_rev", "confusion", "physics_gate")
+SCHEMA_HISTORY = {1: _GEN1, 2: _GEN2, 3: (*_GEN2, "schema_version", "read_note")}
+
+
+# the contract, checked at write time- a key added without bumping the generation fails here
+def _check_schema(payload: dict) -> dict:
+    expected, got = set(SCHEMA_HISTORY[SCHEMA_VERSION]), set(payload)
+    if expected != got:
+        raise AssertionError(f"schema {SCHEMA_VERSION} drift: "
+                             f"missing {sorted(expected - got)}, extra {sorted(got - expected)}")
+    return payload
+
 
 # champion fitted on every training rev except `exclude_rev`, with its own reference stats
 def fit_on(train_df: pd.DataFrame, feats: list[str], exclude_rev: str | None):
@@ -56,12 +75,13 @@ def score_trials(model, meta: dict, trials, threshold: float) -> pd.DataFrame:
 
 
 # the rows `label.py` would commit to at `thr`- threshold, band AND physics gate
+# ceiling is hard False: `label.py` no longer implements one, so the shipped arm cannot have it on
 def _committed(v: pd.DataFrame, conf: np.ndarray, thr: float) -> np.ndarray:
-    return _committed_under(v, conf, thr,
-                            label_mod.PHYSICS_CEILING, label_mod.PHYSICS_FLOOR)
+    return _committed_under(v, conf, thr, False, label_mod.PHYSICS_FLOOR)
 
 
-# The four settings of `label.PHYSICS_CEILING` / `label.PHYSICS_FLOOR`
+# `label.PHYSICS_FLOOR` crossed with a ceiling `label.py` does not have: the ceiling arms are the
+# retraction kept under measurement, so a feature-set change that revives it shows up here
 PHYSICS_POLICIES = {
     "off": (False, False),
     "ceiling": (True, False),
@@ -209,7 +229,7 @@ def per_rev(df: pd.DataFrame, threshold: float) -> list[dict]:
     for r in sorted(pd.unique(revs)):
         m = revs == r
         km = k & m
-        # per-class recall on committed rows: rev8's stand recall 0.5752 hides inside 0.9308 accuracy
+        # per-class recall on committed rows: rev8's stand recall 0.5622 hides inside 0.9269 accuracy
         per_class = {}
         for cls, name in ((STAND, "stand"), (WALK, "walk")):
             in_cls = km & (truth == cls)
@@ -289,10 +309,11 @@ def render_physics_gate(g: dict) -> list[str]:
     share = f"{cec / ce:.1%}" if ce else "n/a"
     lines = [
         "", f"## Physics floor and ceiling, at threshold {g['threshold']:.2f}", "",
-        "`label.PHYSICS_CEILING` abstains where the swap rule is decisive and contradicts "
-        "the model; `label.PHYSICS_FLOOR` accepts a lower confidence "
-        f"({g['floor_threshold']:.2f}) where it is decisive and agrees. **Both ship OFF.** "
-        "This table is what a decision to change that has to argue against.", "",
+        "`label.PHYSICS_FLOOR` accepts a lower confidence "
+        f"({g['floor_threshold']:.2f}) where the swap rule is decisive and agrees. **It ships "
+        "OFF.** A *ceiling* — abstain where the swap rule is decisive and contradicts — is "
+        "**not implemented**: it was retracted by measurement, and the `ceiling` / `both` arms "
+        "below are that retraction kept under measurement rather than argued from memory.", "",
         f"Of the **{ce:,}** errors the shipped policy commits to, the physics contradicts "
         f"**{cec:,}** ({share}). That is the ceiling's entire addressable set — no tuning "
         f"reaches an error the swap rule does not object to. The two read the same "
@@ -426,7 +447,13 @@ def main() -> None:
     add_report_flag(ap)
     ap.add_argument("--lockbox", action="store_true",
                     help="SINGLE USE: fit on all training revs, score the sealed revs")
+    ap.add_argument("--read-note", default="",
+                    help="required under --lockbox: which read this is, and why it was spent")
     args = ap.parse_args()
+
+    # spending a sealed read has to be typed out, not defaulted into- a flag alone is too cheap
+    if args.lockbox and not args.read_note.strip():
+        ap.error("--lockbox needs --read-note: say which read this is and why (caveats.md 3.2)")
 
     # NOT a flag. `curve` below sweeps every threshold and the sweep is in the `.json`, so an
     # override would only re-pick which row of it the per-rev and confusion tables are cut at --
@@ -531,13 +558,14 @@ def main() -> None:
         (dest / f"{stem}.md").write_text(
             render(tag, c, reasons, unk, revs, by_rev, threshold, conf, gate),
             encoding="utf-8")
-    (dest / f"{stem}.json").write_text(json.dumps(
-        {"tag": tag, "threshold": threshold, "revs": revs,
+    (dest / f"{stem}.json").write_text(json.dumps(_check_schema(
+        {"schema_version": SCHEMA_VERSION, "read_note": args.read_note.strip(),
+         "tag": tag, "threshold": threshold, "revs": revs,
          # recorded so a stale artifact is identifiable: which model produced this curve
          "n_features": len(feats), "features": feats,
          "curve": c,
          "per_rev": by_rev, "confusion": conf, "reasons": reasons.to_dict("records"),
-         "human_unknown": unk, "physics_gate": gate}, indent=2),
+         "human_unknown": unk, "physics_gate": gate}), indent=2),
         encoding="utf-8")
     # This is the accuracy claim the repo quotes, and it is re-fitted from the spec rather than
     # loaded, so a promotion between this run and a reader silently changes what it describes.

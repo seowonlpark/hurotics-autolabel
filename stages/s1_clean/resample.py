@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 import numpy as np
 import pandas as pd
@@ -35,6 +35,8 @@ class Segment:
     n_output_rows: int = 0
     usable: bool = True
     reason: str = ""
+    # channel health is a SEPARATE axis from usable- usable is about the time base, and breakdown buckets on it
+    dead_channels: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -43,7 +45,8 @@ class Segment:
 # split at dt > GAP_FACTOR * median(dt); [start, end) row pairs
 def segment_at_gaps(t: np.ndarray) -> list[tuple[int, int]]:
     if t.size < 2:
-        return [(0, int(t.size))]
+        # no rows is no segments- a (0, 0) pair hands the caller an empty slice it will index into
+        return [(0, 1)] if t.size else []
     dt = np.diff(t)
     cuts = np.flatnonzero(dt > GAP_FACTOR * float(np.median(dt))) + 1
     bounds = np.concatenate(([0], cuts, [t.size]))
@@ -87,6 +90,9 @@ def _interp_to_grid(t: np.ndarray, df: pd.DataFrame, grid: np.ndarray) -> pd.Dat
 def resample_segment(
     t: np.ndarray, df: pd.DataFrame, seg: Segment
 ) -> tuple[pd.DataFrame | None, Segment]:
+    # no finite sample anywhere in this segment- np.interp would carry it through without a word
+    seg.dead_channels = [c for c in df.columns
+                         if not np.isfinite(df[c].to_numpy(dtype=float)).any()]
     nominal = nominal_rate(seg.source_hz)
 
     if nominal is None:

@@ -7,20 +7,15 @@ import argparse
 import numpy as np
 import pandas as pd
 
+from stages.s2_ml.corpus import trials as corpus_trials
 from stages.s2_ml.dataset import (
     CLASS_NAME,
-    DEFAULT_LOCKBOX_REVS,
-    EXCLUDED_TRIALS,
+    EXCLUDED_WHY,
     FEATURES,
     HUMAN_UNKNOWN,
     LABEL_COL,
-    LABELED_DIR,
     TIME_COL,
-    assign_split,
-    find_trials,
-    load_trial,
-    rev_of,
-    trial_of,
+    load_entry,
 )
 from stages.console import use_replacement_encoding
 from stages.s2_ml.features import rest_reference
@@ -49,16 +44,17 @@ def crossings(d: np.ndarray, delta: float = SWAP_DELTA_DEG) -> np.ndarray:
 
 def inspect(rev: str, trial_no: int, t_center_s: float, span_s: float = 12.0,
             every_ms: int = 100) -> None:
-    # `excluded=set()` is load-bearing: a READER that hides the quarantine cannot audit it
-    paths = [p for p in find_trials(LABELED_DIR, excluded=set())
-             if rev_of(p) == rev and trial_of(p) == trial_no]
-    if not paths:
+    # include_excluded is load-bearing: a READER that hides the quarantine cannot audit it
+    found = [e for e in corpus_trials(include_excluded=True)
+             if e.subject == rev and e.session == trial_no]
+    if not found:
         raise SystemExit(f"no labeled trial for {rev} trial {trial_no}")
-    if (rev, trial_no) in EXCLUDED_TRIALS:
-        print(f"NOTE: {rev} trial {trial_no} is in dataset.EXCLUDED_TRIALS — it trains "
-              f"nothing and is scored nowhere. You are reading it to check that call.\n")
-    # the trial's real split: inventing a fourth value would make the record lie about a lockbox trial
-    trial = load_trial(paths[0], assign_split(rev, DEFAULT_LOCKBOX_REVS))
+    if (why := EXCLUDED_WHY.get((rev, trial_no))):
+        print(f"NOTE: {rev} trial {trial_no} is quarantined in data/corpus.json - it trains "
+              f"nothing and is scored nowhere. You are reading it to check that call.")
+        print(f"      reason: {why}\n")
+    # the split comes from the manifest; inventing one would make the record lie about a lockbox trial
+    trial = load_entry(found[0])
     frame = trial.frame.reset_index(drop=True)
 
     # the SAME rest zero S2 and S3 use; a fresh one would adjudicate against an origin neither used
