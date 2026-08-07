@@ -209,10 +209,19 @@ the scan produced (cross-checked against the shipped `raweval.json`'s 13, which 
 set after the lockbox and quarantine drops); `locoeval.json` and `model_meta.json` re-run
 byte-identical; `verify_transform` still passes 18 pairs at `max_err = 7.25e-13`.
 
-**What this does not fix.** `subject` is still whatever string the manifest says, and
-nothing checks that two subjects are really two people. The manifest is hand-edited, exactly
-as the constants were — the change is that it is now one file, validated, with reasons
-attached, instead of four mechanisms in three modules.
+**The limit is not a gap to close.** `subject` is the CV group, and the whole leave-one-rev-out
+claim rests on two subjects being two people. **Nothing in the data can establish that** — not
+this manifest, not a stricter validator, not a smarter loader. If one person were recorded twice
+under two IDs, every fold would train on them and test on them, and the corpus would look exactly
+as it does now. It is a fact about who was in the room, held by whoever ran the sessions.
+
+So it is a **declaration**, and the point of §1.6 is that it is now written down as one. Do not
+file this as a missing check and do not try to add one; the honest handling is a person
+confirming the roster. The one adjacent thing that *is* checkable — two different subjects
+claiming the same `raw` file — is currently **not** checked and would be worth adding.
+
+Otherwise the manifest is hand-edited, exactly as the constants were. What changed is that it is
+one file, validated on load, with reasons attached, instead of four mechanisms in three modules.
 
 ---
 

@@ -11,8 +11,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-# runs/regen is regenerated in place, so a file sitting there need not match any commit; each run
-# stamps the sha that produced it. One shared definition, with the S2 experiment ledger
+# runs/regen need not match any commit, so every run stamps the sha that produced it
 from runmeta import git_sha as _git_sha
 # the runs/ tree, defined once: REGEN rebuilds from this command, KEEP never does
 from runslayout import AGENT_RUNS, BREAKDOWN_MD, KEEP_S2, LABELED_RAW, REGEN
@@ -38,19 +37,14 @@ class Step:
     key: str                       # short id, the --from handle and the progress label
     cmd: list[str] | None = None   # subprocess argv
     fn: Callable[[], None] | None = None   # OR run in-process; exactly one of the two
-    # Artifact that must exist after; None => trust the exit code. Always the machine-read `.json`
-    # twin, never the `.md`: the JSON is what the next stage and `breakdown` actually parse, so it
-    # is the artifact whose absence really breaks the run. Gating on the rendered report made the
-    # human-facing copy load-bearing, which is backwards -- a report exists to be read, not to be
-    # depended on, and it should stay deletable without the pipeline concluding the stage never ran.
+    # must exist after, None => exit code only; the `.json` twin- a report is read, not depended on
     gate: Path | None = None
     agent: bool = False            # paid agent step (needs the API key)
     desc: str = ""                 # one line, for --keys; what this step answers, not how
     runtime: str = ""              # one of RUNTIMES; relative scale, not a measurement
 
 
-# runs/keep/agent_runs/YYYY-MM-DD_runN; never overwrite a previous run. Under keep/ because the
-# reviews inside are paid and non-deterministic: re-running the agent does not reproduce them.
+# runs/keep/agent_runs/YYYY-MM-DD_runN, never overwritten- the reviews inside are paid and one-off
 def _new_run_dir() -> Path:
     today = date.today().isoformat()
     n = 1
@@ -168,17 +162,12 @@ async def _s2_cycle(run_dir: Path) -> None:
 
     trials = load_dataset()
 
-    # built once and read twice: the feature names the experimenter is shown, and the fingerprint
-    # of the ground they are measured over
+    # built once, read twice: the features the experimenter sees, and a print of the ground beneath them
     windows = build_windows(trials, champion_config(load_champion_spec())[0])
     feats = feature_columns(windows)
     here = corpus_fingerprint(trainable(windows, "train"))
 
-    # An ABSENT champion is seeded, and so is one measured over ground this corpus no longer is:
-    # `decide()` would refuse to compare against it and every cycle from here would cost a fit and
-    # settle nothing. Re-measuring the TRACKED spec is the re-baseline that refusal asks for, and
-    # it is not a judgement call -- the fingerprints either match or they do not -- so it happens
-    # here rather than through a flag someone has to know to pass.
+    # seed an ABSENT champion, and one measured over other ground too- `decide()` would only refuse
     champion = load_champion(s2_dir)
     if champion is not None:
         same_ground, why = comparable(here, champion.get("corpus"))
@@ -233,7 +222,7 @@ async def _s2_cycle(run_dir: Path) -> None:
         print(f"[s2-exp] {'proposed' if attempt == 1 else 'revised'} "
               f"'{proposal.get('name')}': {proposal.get('rationale')}")
 
-        # Critique before spending a training run, which is the cycle's whole cost asymmetry
+        # critique before spending a training run, which is the cycle's whole cost asymmetry
         cr = await run_agent(s2_critic.S2_CRITIC_AGENT,
                              s2_critic.build_prompt(proposal, rows, report_md, champion),
                              run_dir)
@@ -258,7 +247,7 @@ async def _s2_cycle(run_dir: Path) -> None:
         print(f"[s2] not run (critic: {verdict}); champion unchanged")
         return
 
-    # Deterministic from here; neither agent sees what happens next
+    # deterministic from here; neither agent sees what happens next
     try:
         spec = ExperimentSpec(
             name=proposal["name"], rationale=proposal["rationale"],
@@ -311,9 +300,7 @@ def build_steps() -> list[Step]:
         Step("verify_freshness",
              [PY, "-m", "freshness", "--self-test"],
              desc="the staleness checker still fires (self-test)", runtime="short"),
-        # before anything reads data/raw: every stage below now reads the cache, so this is the
-        # one place that still proves the cache and the CSV are the same frame. It warms the
-        # cache as a side effect, which is why the census below it is no longer a full parse.
+        # the one place left that proves the cache and the CSV are the same frame- it warms it too
         Step("verify_rawread",
              [PY, "-m", "stages.s1_clean.verify_rawread"],
              desc="the raw-read cache returns the CSV exactly", runtime="long"),
@@ -356,7 +343,7 @@ def build_steps() -> list[Step]:
              [PY, "-m", "stages.s2_ml.raweval"],
              gate=REGEN / "s2_ml" / "raweval.json",
              desc="the same claim on the raw device route", runtime="super long"),
-        # S3 pointed at the ANNOTATIONS, and it names the windows a human should adjudicate
+        # S3 pointed at the ANNOTATIONS; it names the windows a human should adjudicate
         Step("s3_label_audit",
              [PY, "-m", "stages.s3_physics.label_audit"],
              gate=REGEN / "s3_physics" / "label_audit.json",
@@ -377,15 +364,10 @@ def build_steps() -> list[Step]:
              gate=REGEN / "s3_physics" / "plausibility.json",
              desc="file-level sanity bounds, checked against injected faults",
              runtime="medium"),
-        # the serve path over the WHOLE corpus, not the annotated slice: coverage, refusals and
-        # the preset sweep, with no ground truth anywhere in it. It reads the champion, so it has
-        # to follow s2_experiment's refit -- run before that promotion and every file in
-        # labeled_raw/ describes a model the rest of the run has already replaced. The gate is a
-        # `.csv` rather than the usual `.json` because `label_summary.csv` IS the machine-read
-        # artifact here; `preset_sweep.json` is the wrong choice, since the sweep is legitimately
-        # skipped whenever an abstention gate is on and a missing file would then read as failure.
+        # the serve path over the WHOLE corpus, no ground truth in it- must follow s2_experiment's refit
         Step("s2_label_all",
              [PY, "-m", "stages.s2_ml.label_all"],
+             # the `.csv` IS the machine-read artifact here; the sweep is legitimately skipped when gated
              gate=LABELED_RAW / "label_summary.csv",
              desc="label every raw file: corpus coverage, refusals, preset sweep",
              runtime="super long"),

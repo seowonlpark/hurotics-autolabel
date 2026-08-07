@@ -29,8 +29,7 @@ ACCURACY_TARGET = 0.95
 
 # which headline each checked-in document quotes, explicit per artifact and hand-maintained
 PROSE_CLAIMS = {
-    # README.ko.md is listed for the same reason as README.md: a translation that outlives the
-    # number it translates is worse than no translation, because it reads as independently checked
+    # README.ko.md is here for the same reason as README.md- a stale translation reads as independently checked
     "S2 row-level": ["README.md", "README.ko.md", "caveats.md", "OPERATING_POINTS.md"],
 }
 
@@ -172,10 +171,7 @@ def section_corpus(src: Source) -> list[str]:
             out += [f"Sealed lockbox subject: **{', '.join(lb['revs'])}** — single use. "
                     f"See §2 for what it scored and `caveats.md` §3.2 before quoting it.", ""]
 
-    # Stated POSITIVELY, because the count above is already net of it: a reader who counts
-    # trials on disk and gets a different number has to be able to find out why here. §A checks
-    # only the other direction -- judged bad and still IN -- so without this the removals are
-    # the one edit to the corpus that nothing reports.
+    # stated POSITIVELY- §A only checks the other direction, so nothing else reports the removals
     if EXCLUDED_TRIALS:
         audit = src.json(REGEN / "s3_physics" / "label_audit.json",
                          "python -m stages.s3_physics.label_audit")
@@ -468,10 +464,7 @@ def section_s2(src: Source) -> list[str]:
         out += ["The deciding line is coverage at equal precision: same quality of answer, "
                 "more answers.", ""]
 
-    # The resolution limit every ablation below has to be read against. Seeds vary WITHIN each
-    # feature set, so a between-set gap can be compared to the spread of a single draw- the
-    # 5-seed standard error is ~6x smaller and reading one against the other is how the
-    # zeroing family spent a year documented as load-bearing on a seed-0 artifact.
+    # the band every ablation below is read against- a seed-0 gap is how the zeroing family fooled us
     fset = ABLATIONS / "s2_ml_featseedsweep.json"
     band = None
     if fset.is_file():
@@ -571,13 +564,11 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
            "Coverage and accuracy are quoted together everywhere. Either alone is "
            "meaningless: abstain on all but the easiest window and accuracy reads 1.000.", ""]
     shipped = meta["presets"][meta["default_preset"]]
-    # loaded here, not at its own section below, because the row-level table quotes it too;
-    # reading it twice would report the same absent artifact as two gaps
+    # loaded here, not at its section below- reading it twice reports one absent artifact as two gaps
     lock = src.json(KEEP_S2 / "roweval_lockbox.json",
                     "python -m stages.s2_ml.roweval --lockbox  (SINGLE USE)")
 
-    # named where the artifact carries a name — a bare minimum says a subject is worst, not
-    # which one, and the eval drops the name unless it was written (`roweval._worst_rev`)
+    # named where the artifact carries a name- a bare minimum says a subject is worst, not which one
     def _worst(r: dict) -> str:
         acc = _f(r["worst_rev_accuracy"])
         return f"{acc} (`{r['worst_rev']}`)" if r.get("worst_rev") else acc
@@ -610,16 +601,10 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
                 f"number to set a threshold by. {shipped:g} is the lowest threshold at which "
                 f"every held-out development subject independently clears it.", ""]
 
-        # The band the headline row has to be read against. The table above is ONE seed -- the
-        # shipped one -- and until 2026-08-07 the only seed spread on record was at the window
-        # unit, which is a different denominator and a different gate. A change that moves this
-        # row by less than the spread below moved nothing.
+        # the table above is ONE seed- a change moving the row by less than this band moved nothing
         out += _section_row_seed_band(src, shipped)
 
-        # The `worst subject` column above is the worst DEVELOPMENT subject, and the sealed
-        # subject is worse at every operating point that ships. Kept out of that column
-        # deliberately -- one cell holding two populations is the conflation §0 exists to
-        # prevent -- and stated here, beside the number it corrects, rather than only in §A.
+        # `worst subject` above is the worst DEVELOPMENT one; the sealed subject is worse, and separate
         if lock and lock.get("curve"):
             lb_by_thr = {round(r["threshold"], 4): r for r in lock["curve"]}
             rows = []
@@ -754,10 +739,7 @@ def _section_selective(src: Source, loco: dict, meta: dict) -> list[str]:
     return out
 
 
-# How much of the headline row is the model and how much is the draw. Five seeds through the SAME
-# path that produced it -- same features, same folds, same threshold, same ambiguity gate -- so the
-# spread is the resolution of the row-level claim, not of a proxy. The window sweep above cannot
-# stand in for this: different denominator, and the gate sits between them.
+# how much of the headline row is the model and how much is the draw- five seeds down the SAME path
 def _section_row_seed_band(src: Source, shipped: float) -> list[str]:
     rows = src.json(ABLATIONS / "s2_ml_rowseedsweep.json",
                     "python -m stages.s2_ml.rowseedsweep")
@@ -1346,25 +1328,19 @@ def collect_flags(src: Source, loco: dict | None, meta: dict | None,
                   summary: list[dict] | None, abst: list[dict] | None,
                   audit: dict | None) -> list[Flag]:
     flags: list[Flag] = []
-    # freshness first: it invalidates every other number rather than sitting beside them.
-    # Every stage directory is considered, not only the ones already carrying a stamp -- filtering
-    # on `_inputs.json` was checking exactly the dirs that could pass and skipping the ones that
-    # could not, so a stage that never declared its inputs read as clean. The list itself is
-    # runslayout's, so this page and `freshness --check` cannot disagree about what was checked.
-    dirs = checkable_dirs()
+    # freshness first: it invalidates every other number rather than sitting beside them
+    dirs = checkable_dirs()  # runslayout's list, so this page and `freshness --check` cannot disagree
     stamped, blind = [], []
     for d in dirs:
         (stamped if stamp_paths(d) else blind).append(d)
     for c in check_all(stamped):
         flags.append(Flag("stale", "a downstream artifact no longer matches its inputs", c))
 
-    # One flag, not one per directory: "cannot be checked" is a single condition with a single
-    # fix, and N copies of it would crowd out the stale flags above, which are the urgent ones.
+    # one flag, not one per dir- N copies would crowd out the stale flags above, which are urgent
     if blind:
         flags.append(Flag(
             "unchecked", "some stage output cannot be checked for staleness",
-            # repo-relative, not `d.name`: `s2_ml` alone is now ambiguous between the regen half
-            # and the keep half, and the reader needs to know which one to go re-run.
+            # repo-relative, not `d.name`- bare `s2_ml` no longer says which half to go re-run
             "No `_inputs.json` in " + ", ".join(f"`{_rel(d)}`" for d in blind)
             + ". These predate input stamping, so there is no record of which champion spec "
               "or model produced them and no way to tell whether they still describe it. "
@@ -1461,10 +1437,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / BREAKDOWN_MD).write_text(md, encoding="utf-8")
 
-    # `breakdown.json` is no longer written. It was the machine-readable twin of the page above,
-    # and nothing in the repo ever read it -- an artifact produced for a consumer that does not
-    # exist. `build()` still returns `machine`, which the console summary below prints, so
-    # restoring the file is one line if a reader ever turns up.
+    # no `breakdown.json`: nothing ever read it, and `build()` still returns `machine` if one turns up
 
     # ASCII on the console: it is cp949 here; the .md keeps its typography
     print(f"[breakdown] {len(md.splitlines()):,} lines -> {out_dir / BREAKDOWN_MD}")

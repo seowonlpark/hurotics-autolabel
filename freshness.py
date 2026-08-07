@@ -11,12 +11,9 @@ _CHUNK = 1 << 20
 REPO_ROOT = Path(__file__).resolve().parent
 
 
-# One stamp per STAGE, not per directory. `runs/regen/s2_ml` holds three reports with three separate
-# lifetimes -- train's locoeval, roweval's curve, raweval's raw-path read -- and a single shared
-# stamp would let whichever stage ran last refresh the record for all of them. That is worse than
-# no check: a promotion between `train` and `roweval` would leave locoeval.md stale and the stamp
-# saying clean. `stage=None` keeps the bare `_inputs.json` so older stamps still read.
+# one stamp per STAGE, not per dir- else the last stage to run vouches for the others' stale reports
 def stamp_name(stage: str | None) -> str:
+    # stage=None keeps the bare `_inputs.json`, so stamps written before the split still read
     return INPUTS_FILENAME if stage is None else f"_inputs.{stage}.json"
 
 
@@ -89,9 +86,7 @@ def _check_stamp(stamp: Path, where: str) -> list[str]:
     return out
 
 
-# How a directory is named in a complaint. `.name` alone stopped being unique when runs/ split:
-# regen/s2_ml and keep/s2_ml are different stage halves and both are called "s2_ml", so a bare
-# name told the reader to go re-run the wrong one. Repo-relative, and absolute outside the repo.
+# how a dir is named in a complaint- `.name` collides: regen/s2_ml and keep/s2_ml are both "s2_ml"
 def _where(out_dir: Path) -> str:
     try:
         return Path(out_dir).resolve().relative_to(REPO_ROOT).as_posix()
@@ -106,8 +101,7 @@ def check_inputs(out_dir: Path) -> list[str]:
     stamps = stamp_paths(out_dir)
     if not stamps:
         return [f"{where}: no {INPUTS_FILENAME}; cannot tell which inputs produced it"]
-    # Every stage that writes here is checked on its own record, so one stage's fresh run
-    # cannot vouch for another's report sitting in the same directory.
+    # each stage is checked on its own record, so one fresh run cannot vouch for another's report
     out = []
     for s in stamps:
         stage = stage_of(s)
@@ -155,9 +149,7 @@ def _self_test() -> list[str]:
     stamp_inputs(empty, {})
     expect("a stage that declared no upstream", check_inputs(empty), False)
 
-    # Two stages sharing ONE directory, as train/roweval/raweval share runs/regen/s2_ml. The stale one
-    # must still be caught after the fresh one runs; a per-directory stamp would have let the
-    # second run vouch for the first's report, which is the failure this split exists to stop.
+    # two stages sharing ONE directory- the stale one must still be caught after the fresh one runs
     shared, dep = tmp / "two-stages", tmp / "spec2.json"
     dep.write_text('{"v": 1}', encoding="utf-8")
     stamp_inputs(shared, {"spec": dep}, stage="early")
@@ -171,14 +163,14 @@ def _self_test() -> list[str]:
     (out / INPUTS_FILENAME).write_text("{not json", encoding="utf-8")
     expect("an unreadable stamp", check_inputs(out), True)
 
-    # An input that did not exist is recorded as such, and its later APPEARANCE is a change too
+    # an input that did not exist is recorded as such, and its later APPEARANCE is a change too
     absent = tmp / "not-yet.json"
     stamp_inputs(out, {"optional": absent})
     expect("an input absent both times", check_inputs(out), False)
     absent.write_text("{}", encoding="utf-8")
     expect("an input that has since APPEARED", check_inputs(out), True)
 
-    # Repo-relative in the stamp so a move survives; absolute only for inputs outside the repo
+    # repo-relative in the stamp so a move survives; absolute only for inputs outside the repo
     inside = REPO_ROOT / "freshness.py"
     if _store(inside) != "freshness.py":
         failures.append(f"a repo file should be stored relative, got {_store(inside)!r}")
@@ -189,7 +181,7 @@ def _self_test() -> list[str]:
     if _locate(str(tmp)) != tmp:
         failures.append("an absolute stored path must be honoured as written")
 
-    # A stamp written before paths were made relative still has to read, or the fix invalidates all
+    # a stamp written before paths were made relative still has to read, or the fix invalidates all
     legacy = tmp / "legacy"
     legacy.mkdir()
     (legacy / INPUTS_FILENAME).write_text(json.dumps(
@@ -218,13 +210,8 @@ def main() -> None:
         print("[freshness] self-test OK: every complaint fires on its own case")
         return
 
-    # Every stage directory, not only the stamped ones, and NOT a set anyone names on the command
-    # line. Selecting on "has a stamp" meant checking exactly the dirs that could pass, so a stage
-    # that never declared its inputs read as clean and the run reported 0 complaints; a hand-passed
-    # `--check DIR` was the same hole with a person holding it open. Which dirs those are is
-    # runslayout's call, not this file's: it owns the keep/regen split and therefore the question
-    # of what can go stale.
-    from runslayout import checkable_dirs
+    # every stage dir, not only the stamped ones- selecting on "has a stamp" checks only what can pass
+    from runslayout import checkable_dirs  # whose dirs those are is runslayout's call, not this file's
 
     dirs = checkable_dirs()
     complaints = check_all(dirs)

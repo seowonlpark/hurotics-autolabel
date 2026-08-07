@@ -1,7 +1,7 @@
 # Pipeline breakdown
 
-- generated: **2026-08-07T00:55:54.172114+00:00**
-- commit: `5e997bd`
+- generated: **2026-08-07T01:39:22.159612+00:00**
+- commit: `f72b9b3`
 - flags raised: **4** (concentration, gap, risk)
 - artifacts missing: **0**
 
@@ -47,11 +47,11 @@ Sealed lockbox subject: **rev8** — single use. See §2 for what it scored and 
 
 ### Excluded before any of the above
 
-**1 trial(s)** are dropped as the corpus is loaded (`dataset.EXCLUDED_TRIALS`), so every count on this page is already net of them and no stage below can put them back. The list is edited **by hand**; the `disagree` column is `label_audit`'s, which reads the RAW corpus and so still sees these trials. That is what makes the exclusion checkable instead of self-confirming — a row whose evidence has gone thin still shows its number here.
+**1 trial(s)** are dropped as the corpus is loaded (`data/corpus.json`), so every count on this page is already net of them and no stage below can put them back. The manifest is edited **by hand**; the `disagree` column is `label_audit`'s, which reads the RAW corpus and so still sees these trials. That is what makes the exclusion checkable instead of self-confirming — a row whose evidence has gone thin still shows its number here.
 
 | rev | trial | windows | disagree | why it went |
 |---|---|---|---|---|
-| `rev13` | 4 | 62 | **0.9516** | over the `disagree > 0.5` line (§3) |
+| `rev13` | 4 | 62 | **0.9516** | two runs concatenated into one file - a demonstrated label error whose evidence is internal to the file; see runs/regen/s3_physics/label_audit |
 
 ### Hardware variants, by whether they can be served
 
