@@ -1,0 +1,393 @@
+{
+  "schema": 1,
+  "note": "The corpus, declared. Until 2026-08-07 `subject` was a regex over the filename, `raw` was guessed from clock proximity, and `split`/`exclude` were hand-edited constants in stages/s2_ml/dataset.py. See caveats.md 1.6; corpus.py reads this.",
+  "trials": [
+    {
+      "subject": "rev13",
+      "session": 1,
+      "annotated": "data/labeled/rev13/csv/annotated_loco_rev13_trial_1.csv",
+      "raw": "data/raw/20260114/00001_69_2026_1_14_10_4_0.csv",
+      "variant": "fb5ea2c2",
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev13",
+      "session": 2,
+      "annotated": "data/labeled/rev13/csv/annotated_loco_rev13_trial_2.csv",
+      "raw": "data/raw/20260114/00008_69_2026_1_14_10_48_0.csv",
+      "variant": "fb5ea2c2",
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev13",
+      "session": 3,
+      "annotated": "data/labeled/rev13/csv/annotated_loco_rev13_trial_3.csv",
+      "raw": "data/raw/20260114/00009_69_2026_1_14_10_48_0.csv",
+      "variant": "fb5ea2c2",
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev13",
+      "session": 4,
+      "annotated": "data/labeled/rev13/csv/annotated_loco_rev13_trial_4.csv",
+      "raw": "data/raw/20260114/00010_69_2026_1_14_11_2_0.csv",
+      "variant": "fb5ea2c2",
+      "split": "train",
+      "exclude": "two runs concatenated into one file - a demonstrated label error whose evidence is internal to the file; see runs/regen/s3_physics/label_audit"
+    },
+    {
+      "subject": "rev13",
+      "session": 5,
+      "annotated": "data/labeled/rev13/csv/annotated_loco_rev13_trial_5.csv",
+      "raw": "data/raw/20260114/00011_69_2026_1_14_11_2_0.csv",
+      "variant": "fb5ea2c2",
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev13",
+      "session": 6,
+      "annotated": "data/labeled/rev13/csv/annotated_loco_rev13_trial_6.csv",
+      "raw": "data/raw/20260114/00012_69_2026_1_14_11_10_0.csv",
+      "variant": "fb5ea2c2",
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev13",
+      "session": 7,
+      "annotated": "data/labeled/rev13/csv/annotated_loco_rev13_trial_7.csv",
+      "raw": "data/raw/20260114/00013_69_2026_1_14_11_10_0.csv",
+      "variant": "fb5ea2c2",
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev2",
+      "session": 1,
+      "annotated": "data/labeled/rev2/csv/annotated_loco_rev2_trial_1.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev2",
+      "session": 2,
+      "annotated": "data/labeled/rev2/csv/annotated_loco_rev2_trial_2.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev2",
+      "session": 3,
+      "annotated": "data/labeled/rev2/csv/annotated_loco_rev2_trial_3.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev2",
+      "session": 4,
+      "annotated": "data/labeled/rev2/csv/annotated_loco_rev2_trial_4.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev2",
+      "session": 5,
+      "annotated": "data/labeled/rev2/csv/annotated_loco_rev2_trial_5.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev2",
+      "session": 6,
+      "annotated": "data/labeled/rev2/csv/annotated_loco_rev2_trial_6.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev2",
+      "session": 7,
+      "annotated": "data/labeled/rev2/csv/annotated_loco_rev2_trial_7.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev2",
+      "session": 8,
+      "annotated": "data/labeled/rev2/csv/annotated_loco_rev2_trial_8.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev3",
+      "session": 1,
+      "annotated": "data/labeled/rev3/csv/annotated_loco_rev3_trial_1.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev3",
+      "session": 2,
+      "annotated": "data/labeled/rev3/csv/annotated_loco_rev3_trial_2.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev3",
+      "session": 3,
+      "annotated": "data/labeled/rev3/csv/annotated_loco_rev3_trial_3.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev4",
+      "session": 1,
+      "annotated": "data/labeled/rev4/csv/annotated_loco_rev4_trial_1.csv",
+      "raw": "data/raw/20251021/00203_30_2025_10_21_18_18_0_edit.csv",
+      "variant": "4bfd6ab2",
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev5",
+      "session": 1,
+      "annotated": "data/labeled/rev5/csv/annotated_loco_rev5_trial_1.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev5",
+      "session": 2,
+      "annotated": "data/labeled/rev5/csv/annotated_loco_rev5_trial_2.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev5",
+      "session": 3,
+      "annotated": "data/labeled/rev5/csv/annotated_loco_rev5_trial_3.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev5",
+      "session": 4,
+      "annotated": "data/labeled/rev5/csv/annotated_loco_rev5_trial_4.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev5",
+      "session": 5,
+      "annotated": "data/labeled/rev5/csv/annotated_loco_rev5_trial_5.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev5",
+      "session": 6,
+      "annotated": "data/labeled/rev5/csv/annotated_loco_rev5_trial_6.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev5",
+      "session": 7,
+      "annotated": "data/labeled/rev5/csv/annotated_loco_rev5_trial_7.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev5",
+      "session": 8,
+      "annotated": "data/labeled/rev5/csv/annotated_loco_rev5_trial_8.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev6",
+      "session": 1,
+      "annotated": "data/labeled/rev6/csv/annotated_loco_rev6_trial_1.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev6",
+      "session": 2,
+      "annotated": "data/labeled/rev6/csv/annotated_loco_rev6_trial_2.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev6",
+      "session": 3,
+      "annotated": "data/labeled/rev6/csv/annotated_loco_rev6_trial_3.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev6",
+      "session": 4,
+      "annotated": "data/labeled/rev6/csv/annotated_loco_rev6_trial_4.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev6",
+      "session": 5,
+      "annotated": "data/labeled/rev6/csv/annotated_loco_rev6_trial_5.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev6",
+      "session": 6,
+      "annotated": "data/labeled/rev6/csv/annotated_loco_rev6_trial_6.csv",
+      "raw": null,
+      "variant": null,
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev7",
+      "session": 1,
+      "annotated": "data/labeled/rev7/csv/annotated_loco_rev7_trial_1.csv",
+      "raw": "data/raw/20251024/00321_63_2025_10_24_15_32_0.csv",
+      "variant": "0fda484e",
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev7",
+      "session": 2,
+      "annotated": "data/labeled/rev7/csv/annotated_loco_rev7_trial_2.csv",
+      "raw": "data/raw/20251024/00322_63_2025_10_24_15_34_0.csv",
+      "variant": "0fda484e",
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev7",
+      "session": 3,
+      "annotated": "data/labeled/rev7/csv/annotated_loco_rev7_trial_3.csv",
+      "raw": "data/raw/20251024/00323_63_2025_10_24_15_35_0.csv",
+      "variant": "0fda484e",
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev7",
+      "session": 4,
+      "annotated": "data/labeled/rev7/csv/annotated_loco_rev7_trial_4.csv",
+      "raw": "data/raw/20251024/00324_63_2025_10_24_15_56_0.csv",
+      "variant": "0fda484e",
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev7",
+      "session": 5,
+      "annotated": "data/labeled/rev7/csv/annotated_loco_rev7_trial_5.csv",
+      "raw": "data/raw/20251024/00325_63_2025_10_24_15_56_0.csv",
+      "variant": "0fda484e",
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev7",
+      "session": 6,
+      "annotated": "data/labeled/rev7/csv/annotated_loco_rev7_trial_6.csv",
+      "raw": "data/raw/20251024/00326_63_2025_10_24_16_29_0.csv",
+      "variant": "0fda484e",
+      "split": "train",
+      "exclude": null
+    },
+    {
+      "subject": "rev8",
+      "session": 1,
+      "annotated": "data/labeled/rev8/csv/annotated_loco_rev8_trial_1.csv",
+      "raw": "data/raw/20251029/00328_63_2025_10_29_13_45_0.csv",
+      "variant": "0fda484e",
+      "split": "lockbox",
+      "exclude": null
+    },
+    {
+      "subject": "rev8",
+      "session": 2,
+      "annotated": "data/labeled/rev8/csv/annotated_loco_rev8_trial_2.csv",
+      "raw": "data/raw/20251029/00330_63_2025_10_29_13_45_0.csv",
+      "variant": "0fda484e",
+      "split": "lockbox",
+      "exclude": null
+    },
+    {
+      "subject": "rev8",
+      "session": 3,
+      "annotated": "data/labeled/rev8/csv/annotated_loco_rev8_trial_3.csv",
+      "raw": "data/raw/20251029/00331_63_2025_10_29_13_45_0.csv",
+      "variant": "0fda484e",
+      "split": "lockbox",
+      "exclude": null
+    },
+    {
+      "subject": "rev8",
+      "session": 4,
+      "annotated": "data/labeled/rev8/csv/annotated_loco_rev8_trial_4.csv",
+      "raw": "data/raw/20251029/00332_63_2025_10_29_13_45_0.csv",
+      "variant": "0fda484e",
+      "split": "lockbox",
+      "exclude": null
+    }
+  ]
+}
