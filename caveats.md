@@ -955,3 +955,31 @@ not a cleanup, and it should be its own commit with its own reason.
 Nothing measured moved in either of the above. `verify_features` and `freshness --self-test`
 pass, `run_pipeline.py --dry-run` still plans 14 steps, and no gate artifact, champion or figure
 in `runs/breakdown.md` was touched.
+
+### 6.3 What `raweval`'s removal orphaned, and one throwaway **[2026-08-07]**
+
+Cutting a stage leaves its loaders behind, and they read as live corpus API rather than as
+residue. §1.7 removed `raweval.py`; these were everything only it called, plus one file that was
+never anything else:
+
+| removed | why |
+|---|---|
+| `dataset.DEFAULT_LOCKBOX_REVS` | Sole reader was `raweval._drop_lockbox`. It was already only a re-derivation of `split == "lockbox"` from the manifest (§1.6), so anything wanting the sealed subject should ask `corpus.py` rather than a second name for the same query. |
+| `dataset.find_trials` | Sole reader was `raweval`. Returned bare paths, which is the shape §1.6 exists to stop handing around — a path carries no subject, so it cannot be grouped, split or scored. `trials()` returns `Entry` rows instead. |
+| `dataset.load_trial` | Zero readers, before and after. It was the path-shaped door into `load_entry`, and its whole body was the argument against itself: it took a `split` from the caller purely to refuse it when the manifest disagreed. |
+| `corpus.entry_for` | Sole reader was `load_trial`. "A reader handed a file rather than the corpus may want it" is the same speculative generality §5.1 rejected for `decimate_window`; there are no such readers, and `git show` still produces it if one appears. |
+| `_cost_probe.py` | A wall-clock probe of the S1 and label paths, its own first line calling itself a throwaway. Zero references in code, docs or notes, and the `_cost_probe.json` it wrote was never in the worktree. |
+
+**The one thing genuinely lost is the refusal.** `entry_for` was the only place an *undeclared*
+annotated file was fatal — every other route into the corpus starts from the manifest and so can
+never meet one. That is not a hole a caller can fall into today; it becomes one the moment
+something is written that takes a file path from a human. Put the refusal back with the caller
+that needs it, not before.
+
+Nothing measured moved. All 32 tests pass, `verify_features` and `freshness --self-test` pass,
+`--dry-run` still plans 14 steps, and every module still imports.
+
+One stale *claim* was corrected in the same pass, which matters more than the dead code because
+it was being read as current: `RUNBOOK.md` §2 described the annotated corpus as a "glob in
+`s2_ml/dataset.py`" with `rev8` and `("rev13", 4)` named in code. All three are what §1.6
+replaced. §2 now names `data/corpus.json` as an input in its own right, which it never did.

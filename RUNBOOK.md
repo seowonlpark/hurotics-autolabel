@@ -92,9 +92,10 @@ quietly report last week's numbers. Failure prints `--from <key>` and exits. A s
 | path | what | in git? |
 |---|---|---|
 | `data/raw/<YYYYMMDD[_n]>/*.csv` | unlabeled device logs, verbatim. **Session date comes from the folder name**, pattern `^(\d{8})(?:_(\d+))?$` (`s1_clean/config.py`) | no |
-| `data/labeled/rev*/csv/annotated_loco_*_trial_*.csv` | the golden annotated corpus; glob in `s2_ml/dataset.py`. `rev8` is the lockbox, `("rev13", 4)` is excluded | no |
+| `data/labeled/rev*/csv/annotated_loco_*_trial_*.csv` | the golden annotated corpus. **Nothing globs for it** — every path is declared row by row in `data/corpus.json` and read by `s2_ml/corpus.py`, which is also where the lockbox subject and the quarantine live (§1.6). A file on disk that the manifest does not declare is not in the corpus | no |
 | `data/clean/<session>/<stem>.channel_trust.json` | S1 output, and the only thing it persists per file — the canonical-grid frame is measured and dropped. Read by `s2_ml/transform.py`, which refuses to label a raw log without it. **No cleaned frame is persisted**, and no stage reads one | no |
 | `data/cache/<session>/<stem>.parquet` | a **transcode** of the CSV body, written by `s1_clean/rawread.py` — `read_csv(index_col=False)` with the `Unnamed` columns dropped, and nothing else. Not a stage output and not evidence: no resampling, no filtering, no column selection, so there is no code version to track. Keyed on the source's own `(size, mtime_ns)`, stored in the parquet footer; a stale key is a miss. Delete it freely, or set `RAWREAD_CACHE=0` to bypass it | no |
+| `data/corpus.json` | the manifest above — subject, session, split, raw pairing and quarantine reason, one row per recording. `s2_ml/corpus.py` validates it on load and an unknown split, a missing file, a duplicate `(subject, session)` or an empty training set is fatal, so nothing downstream runs without it | **yes** |
 | `stages/s2_ml/champion_spec.json` | the tracked champion declaration; `train.py` asserts the code matches it | **yes** |
 | `.env` | `ANTHROPIC_API_KEY`, loaded by `_agent_step` before each agent run | no |
 

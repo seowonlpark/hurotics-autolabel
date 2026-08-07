@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from stages.s1_clean.resample import resample_file
-from stages.s2_ml.corpus import CORPUS_PATH, Entry, entry_for, load_manifest, trials as _entries
+from stages.s2_ml.corpus import CORPUS_PATH, Entry, load_manifest, trials as _entries
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -24,18 +24,11 @@ TRAIN_CLASSES = (STAND, WALK)
 # names defined once beside the codes, so a code and its name cannot drift apart between stages
 CLASS_NAME = {STAND: "stand", WALK: "walk"}
 
-# DERIVED now, not restated- both were hand-edited constants naming specific recordings until §1.6
-DEFAULT_LOCKBOX_REVS = tuple(sorted({e.subject for e in load_manifest() if e.split == "lockbox"}))
+# DERIVED now, not restated- this was a hand-edited constant naming specific recordings until §1.6
 EXCLUDED_TRIALS = {e.key for e in load_manifest() if e.exclude}
 
 # the reason each quarantine was called; `breakdown` prints it instead of a bare pair
 EXCLUDED_WHY = {e.key: e.exclude for e in load_manifest() if e.exclude}
-
-
-# every labeled trial minus the quarantined; include_excluded loads the raw corpus, as auditors do
-def find_trials(include_excluded: bool = False, manifest: Path = CORPUS_PATH) -> list[Path]:
-    return [e.annotated for e in _entries(include_excluded, manifest)]
-
 
 # == FEATURES today; its own name so validate_spec still checks when a richer corpus arrives
 SELECTABLE_FEATURES = FEATURES
@@ -76,18 +69,6 @@ def load_entry(entry: Entry, unseal: bool = False) -> Trial:
     split = "train" if unseal else entry.split
     return Trial(str(entry.annotated.relative_to(REPO_ROOT)), entry.subject, entry.session,
                  split, frame, len(df), dropped)
-
-
-# one trial by path, for the readers handed a file rather than walking the corpus
-def load_trial(path: Path, split: str | None = None) -> Trial:
-    entry = entry_for(path)
-    # callers used to compute the split themselves; one that now disagrees is refused, not honoured
-    if split is not None and split != entry.split:
-        raise SystemExit(
-            f"[dataset] {Path(path).name}: caller says split {split!r}, the manifest declares "
-            f"{entry.split!r}. Change data/corpus.json if the split is what moved."
-        )
-    return load_entry(entry)
 
 
 # `unseal` relabels the sealed subjects "train" for THIS read; only the auditors may pass it

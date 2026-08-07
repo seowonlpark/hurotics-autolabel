@@ -100,18 +100,6 @@ def pairs(include_excluded: bool = True, path: Path = CORPUS_PATH) -> list[Entry
     return declared
 
 
-# the row for a path, by identity rather than by parsing it; an undeclared file is fatal
-def entry_for(annotated: Path, path: Path = CORPUS_PATH) -> Entry:
-    want = Path(annotated).resolve()
-    for e in load_manifest(path):
-        if e.annotated.resolve() == want:
-            return e
-    raise SystemExit(
-        f"[corpus] {Path(annotated).name} is not declared in {CORPUS_PATH.name}. A recording the "
-        f"manifest does not know has no subject, so it cannot be grouped, split or scored."
-    )
-
-
 # (frame, variant) for one entry, with the RECORDED variant re-derived and enforced
 def load_raw(entry: Entry):
     from stages.s2_ml.transform import load_raw_frame
