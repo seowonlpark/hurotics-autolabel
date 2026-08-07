@@ -1,6 +1,6 @@
 {
-  "generated": "2026-08-04T09:05:17.564280+00:00",
-  "model_dir": "C:\\Users\\\ubc15\uc11c\uc6d0\\Desktop\\h-care-champion-5219cd5\\runs\\regen\\s2_ml",
+  "generated": "2026-08-07T00:30:04.180792+00:00",
+  "model_dir": "C:\\Users\\\ubc15\uc11c\uc6d0\\Desktop\\hurotics-autolabel\\runs\\regen\\s2_ml",
   "shipped_threshold": 0.85,
   "presets": {
     "high_coverage": 0.7,
@@ -9,7 +9,6 @@
   },
   "gates": {
     "BAND_ABSTAINS": false,
-    "PHYSICS_CEILING": false,
     "PHYSICS_FLOOR": false
   },
   "n_files": 78,

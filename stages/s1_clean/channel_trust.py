@@ -54,7 +54,14 @@ def _pooled(df: pd.DataFrame, side: str) -> tuple[dict[str, np.ndarray], dict[st
             {a: np.concatenate(v) for a, v in gyro.items()})
 
 
+# drop non-finite PAIRS first- corrcoef propagates a single NaN, so one bad row would sink the side
+def _finite_pair(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    ok = np.isfinite(x) & np.isfinite(y)
+    return x[ok], y[ok]
+
+
 def _corr(x: np.ndarray, y: np.ndarray) -> float:
+    x, y = _finite_pair(x, y)
     if x.size < 3 or np.std(x) == 0 or np.std(y) == 0:
         return float("nan")
     return float(np.corrcoef(x, y)[0, 1])
@@ -87,7 +94,8 @@ def detect_side(df: pd.DataFrame, side: str) -> dict | None:
     confident = anchor is not None
 
     if confident:
-        slope = float(np.polyfit(ddeg[anchor], gyro[match[anchor]], 1)[0])
+        fit_x, fit_y = _finite_pair(ddeg[anchor], gyro[match[anchor]])
+        slope = float(np.polyfit(fit_x, fit_y, 1)[0])
         unit = _classify_unit(slope)
         method = "detected"
     else:
@@ -113,7 +121,8 @@ def detect_side(df: pd.DataFrame, side: str) -> dict | None:
         "scale_to_degps": UNIT_TO_DEGPS_SCALE[unit],
         "r": round(best_r, 4),
         "slope": None if not np.isfinite(slope) else round(slope, 6),
-        "n": int(ddeg[anchor].size) if anchor else 0,
+        # samples the fit actually saw, not the pooled length- they differ once a row is non-finite
+        "n": int(fit_x.size) if confident else 0,
         "confident": confident,
         "method": method,
         "matches_documented": (not conflicts and unit == doc_unit),

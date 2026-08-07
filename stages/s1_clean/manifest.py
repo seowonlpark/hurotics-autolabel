@@ -17,6 +17,7 @@ from stages.s1_clean.config import (
     SESSION_DIR_PATTERN,
     TIME_UNIT_MS,
 )
+from stages.s1_clean.rawread import read_raw_body
 
 _SESSION = re.compile(SESSION_DIR_PATTERN)
 
@@ -113,9 +114,7 @@ def profile_file(path: Path, repo_root: Path) -> dict:
     )
 
     try:
-        # index_col=False: a trailing comma otherwise shifts every column left by one
-        df = pd.read_csv(path, encoding="utf-8-sig", index_col=False)
-        df = df.loc[:, [c for c in df.columns if not c.startswith("Unnamed")]]
+        df = read_raw_body(path)
     except Exception as exc:
         row["read_error"] = f"body: {exc}"
         return row

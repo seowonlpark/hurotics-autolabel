@@ -282,8 +282,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # the RAW corpus: a quarantined trial must still appear, or the report stops justifying it
-    kw = {"lockbox_revs": ()} if args.include_lockbox else {}
-    trials = load_dataset(excluded=set(), **kw)
+    trials = load_dataset(include_excluded=True, unseal=args.include_lockbox)
 
     scored = [coherence(t) for t in trials]
     rows = [r for r, _ in scored]

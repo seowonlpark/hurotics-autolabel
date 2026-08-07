@@ -4,6 +4,8 @@ __pycache__/
 data/raw/
 data/labeled
 data/clean/
+# a transcode of data/raw, keyed on the source's own (size, mtime); delete it freely
+data/cache/
 tracker/
 archive/
 

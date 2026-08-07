@@ -658,17 +658,26 @@ the corpus for months. Unknown variant abstains until a pair exists.
 - Ground truth already locates transitions exactly. Do not implement cross-correlation lag search.
 - UNKNOWN is excluded consistently across per-trial and corpus-level metrics.
 
-**Error taxonomy** — a strictly precedence-ordered MECE partition. **Corrected against the
-implementation [measured, 2026-07-20]** — `locoeval/diagnose.py` in `seowonlpark/hurotics-locotool`.
-It was ported verbatim to `stages/s2_ml/taxonomy.py`. **This entry said that module was "no longer
-in this repo" and that "nothing here currently computes it"; both were retracted 2026-08-04**, when
-the champion/challenger loop came back and brought it with them. `stages/s2_ml/experiment.py` imports
-`bucket_errors` / `aggregate`, `run_experiment(taxonomy=True)` computes the partition over dense
-per-row predictions, and it lands in the per-experiment `taxonomy` block of
-`runs/keep/s2_ml/experiments.jsonl` and in `champion.json`. It is not inert documentation either:
-`experiment.decide()` uses the `steady_confusion` share as its error-type tiebreaker, so these
-thresholds are load-bearing on promotion. Read the caveat at the end of this section before
-trusting the `flicker` bucket:
+**Error taxonomy — REMOVED from this repo 2026-08-07. Do not port it back without a reader.**
+It is a strictly precedence-ordered MECE partition from the incumbent, `locoeval/diagnose.py` in
+`seowonlpark/hurotics-locotool`, and it lived here as `stages/s2_ml/taxonomy.py` (in git history
+before the deletion commit). **This entry has now been wrong three times about that module** — it
+twice claimed the code was gone and was retracted, and then overstated the case for keeping it: it
+said `decide()`'s `steady_confusion` tiebreaker made these thresholds "load-bearing on promotion",
+present tense. **The precise history matters, because it cuts both ways.** The tiebreaker fired
+exactly once — ledger entry 8, `drop_angvel_dom_hz`, 2026-07-21, promoted on a macro-F1 tie
+(0.8886 vs 0.8862) because `steady_confusion` fell 0.884 → 0.818. **Today's champion descends from
+that promotion**, so the taxonomy is in this pipeline's lineage even though it is no longer in its
+code. But that was when `run_experiment` computed a taxonomy by default. Once the default became
+False (`run_pipeline.py` calls `run_experiment(spec, trials)` and passes nothing), only `seed()`
+computed one, no challenger ever carried one again, and **the branch became unreachable** — the
+whole 2026-08-04 cycle ran without it. Nothing read the output either: `breakdown.py` never opened
+it, and no bucket name appears anywhere in `runs/breakdown.md`. Its one visible number was near
+constant — `steady_confusion` held 0.81–0.91 of all errors in every entry that carried it, which
+`caveats.md` §"stand called walk, 31.4%" says more directly. So it was deleted along with the
+unreachable tiebreaker and `stages/s2_ml/predict.py`, the dense-row path that fed it.
+
+What it measured, kept because it is a real fact about the incumbent and not about our code:
 
     correct
       > omission — a gt segment pred never reaches, split by what pred did instead:
@@ -680,36 +689,27 @@ trusting the `flicker` bucket:
             > early — pred already shows the new label before a gt transition
               > steady_confusion — pred stays in another class for the WHOLE gt segment
 
-An earlier version was wrong twice: **there is no `remainder` bucket** (`steady_confusion` absorbs
-whatever precedence leaves, so the partition closes without a catch-all), and **`omission` splits
-three ways** — `swallowed` is the one worth watching, since a fully absorbed bout leaves no trace at
-all. Thresholds: `FLICKER_MAX_MS=200`, `LAG_MAX_MS=1000`, `SUSTAINED_FRACTION=0.5`,
-`MIN_EVENTS_FOR_STATISTIC=10`, `WEAK_CLASS_F1=0.5`.
+Two things an earlier version got wrong, kept so nobody re-derives them: **there is no `remainder`
+bucket** (`steady_confusion` absorbs whatever precedence leaves, so the partition closes without a
+catch-all), and **`omission` splits three ways**. Upstream thresholds are `FLICKER_MAX_MS=200`,
+`LAG_MAX_MS=1000`, `SUSTAINED_FRACTION=0.5`, `MIN_EVENTS_FOR_STATISTIC=10`, `WEAK_CLASS_F1=0.5` —
+and note our port only ever carried the first three, another reason the "verbatim, they define
+comparability" claim in its header did not survive inspection. Nothing here compares against the
+incumbent's numbers; in this repo "incumbent" means the tracked champion spec, not `diagnose.py`.
 
-**The taxonomy is ROW-level (~10 ms) and a windowed classifier cannot be scored by it directly
-[decided].** A model predicting once per 2 s is piecewise-constant over that span, so it *cannot
-emit* a run shorter than `FLICKER_MAX_MS` — flicker would read zero by construction, not by merit,
-and lag would quantize to whole windows. Inference therefore slides the window at a small stride and
-assigns each prediction to the rows around its **centre**; leading-edge assignment would shift every
-predicted transition half a window late and manufacture `late` rows. Training is unaffected — this is
-inference-side only. Row-level scoring is also what makes our classifier directly comparable to the
-incumbent algorithm under its own metrics.
+**Why bringing it back needs a reader first.** It is ROW-level (~10 ms) and a windowed classifier
+cannot be scored by it directly: a model predicting once per 2 s is piecewise-constant over that
+span, so it *cannot emit* a run shorter than `FLICKER_MAX_MS`, and lag quantizes to whole windows.
+The port worked around that with a second, finer stride — the deleted `predict.py` used 0.1 s
+against the serve path's 0.25 s — so the one `flicker` figure it ever produced, 0.011, was a
+property of the 100 ms measurement grid and **not of anything we ship**. Any revival inherits that
+gap: two strides, and a headline bucket that reads zero on the shipped one.
 
-**The shipped stride is `DEFAULT_INFERENCE_STRIDE_S = 0.25` s** (`stages/s2_ml/train.py`, carried in
-`model_meta.json` and read by `label.py` / `roweval.py`). **Note 250 ms is COARSER than
-`FLICKER_MAX_MS = 200`**, so the argument above does not currently hold: a run shorter than the
-flicker threshold still cannot be emitted.
-
-> **The taxonomy is computed again as of 2026-08-04, and this entry's warning was answered rather
-> than inherited.** It used to end "tolerable only because nothing in this repo computes the
-> row-level taxonomy any more"; `experiment.run_experiment(taxonomy=True)` computes it now. But it
-> does *not* use the 250 ms serve stride. There are two strides, deliberately:
-> `train.DEFAULT_INFERENCE_STRIDE_S = 0.25` is the SERVE path's, chosen for cost over a customer's
-> whole recording, and `predict.DEFAULT_INFERENCE_STRIDE_S = 0.1` is the measurement path's, chosen
-> to sit **finer than `FLICKER_MAX_MS = 200`** so that flicker is expressible at all. `experiment.py`
-> imports the latter. So the `flicker` 0.011 in `champion.json` is a measurement and not an artefact
-> — but read it as a property of the 100 ms grid, not of the shipped 250 ms one, on which a 200 ms
-> flicker still cannot be represented.
+**Still true and unrelated to the taxonomy: inference assigns each window's prediction to the rows
+around its centre [decided].** Leading-edge assignment would shift every predicted transition half
+a window late. Training is unaffected — this is inference-side only. The shipped stride is
+`DEFAULT_INFERENCE_STRIDE_S = 0.25` s (`stages/s2_ml/train.py`, carried in `model_meta.json` and
+read by `label.py` / `roweval.py`).
 
 ---
 

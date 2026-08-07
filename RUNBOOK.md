@@ -12,8 +12,8 @@ disagrees with `README.md`, §7 says so.
 ## 1. The single entry point
 
 ```powershell
-python run_pipeline.py                # deterministic spine only  (14 steps)
-python run_pipeline.py --with-agents  # + 3 paid agent steps      (17 steps)
+python run_pipeline.py                # deterministic spine only  (15 steps)
+python run_pipeline.py --with-agents  # + 3 paid agent steps      (18 steps)
 python run_pipeline.py --keys                   # the step keys, one line each
 python run_pipeline.py --from s2_train          # resume at a step key
 python run_pipeline.py --dry-run                # print argv per step, run nothing
@@ -25,10 +25,11 @@ checkout with no data and no key, and it lists *all* the steps rather than the s
 ones: finding out an agent step exists is the thing you came to look up.
 
 ```
-17 steps, in run order. `--from KEY` starts at one and runs everything after it.
+18 steps, in run order. `--from KEY` starts at one and runs everything after it.
 
   verify_features   short       vectorized feature path vs its scalar reference
   verify_freshness  short       the staleness checker still fires (self-test)
+  verify_rawread    long        the raw-read cache returns the CSV exactly
   s1_census         medium      inventory data/raw: files, sessions, channels
   s1_clean          long        raw -> per-file channel trust; the cleaned frame is dropped
   s1_exception      medium      triage the clean stage's exception queue (agent)
@@ -93,7 +94,8 @@ quietly report last week's numbers. Failure prints `--from <key>` and exits. A s
 |---|---|---|
 | `data/raw/<YYYYMMDD[_n]>/*.csv` | unlabeled device logs, verbatim. **Session date comes from the folder name**, pattern `^(\d{8})(?:_(\d+))?$` (`s1_clean/config.py`) | no |
 | `data/labeled/rev*/csv/annotated_loco_*_trial_*.csv` | the golden annotated corpus; glob in `s2_ml/dataset.py`. `rev8` is the lockbox, `("rev13", 4)` is excluded | no |
-| `data/clean/<session>/<stem>.channel_trust.json` | S1 output, and the only thing it persists per file — the canonical-grid frame is measured and dropped. Read by `s2_ml/transform.py`, which refuses to label a raw log without it. **No parquet is written**, and no stage reads a cleaned frame | no |
+| `data/clean/<session>/<stem>.channel_trust.json` | S1 output, and the only thing it persists per file — the canonical-grid frame is measured and dropped. Read by `s2_ml/transform.py`, which refuses to label a raw log without it. **No cleaned frame is persisted**, and no stage reads one | no |
+| `data/cache/<session>/<stem>.parquet` | a **transcode** of the CSV body, written by `s1_clean/rawread.py` — `read_csv(index_col=False)` with the `Unnamed` columns dropped, and nothing else. Not a stage output and not evidence: no resampling, no filtering, no column selection, so there is no code version to track. Keyed on the source's own `(size, mtime_ns)`, stored in the parquet footer; a stale key is a miss. Delete it freely, or set `RAWREAD_CACHE=0` to bypass it | no |
 | `stages/s2_ml/champion_spec.json` | the tracked champion declaration; `train.py` asserts the code matches it | **yes** |
 | `.env` | `ANTHROPIC_API_KEY`, loaded by `_agent_step` before each agent run | no |
 
@@ -109,8 +111,8 @@ imports, so no path under `runs/` is spelled out twice in code.
 | path | rebuilt by a full `python run_pipeline.py`? | holds |
 |---|---|---|
 | `runs/regen/{s1_census,s1_clean,s2_ml,s3_physics}` | **yes** — `rm -rf runs/regen` is safe | every stage's working output; the fitted model and every metric refitted from `champion_spec.json` |
-| `runs/keep/s2_ml` | **no** | `experiments.jsonl`, `proposals.jsonl`, `roweval_lockbox.json` |
-| `runs/keep/ablations` | **no** | `s2_ml_abl_*`, `s2_ml_rf42`, `s2_ml_seedsweep.json`, `s2_ml_featseedsweep.json` |
+| `runs/keep/s2_ml` | **no** | `experiments.jsonl`, `proposals.jsonl`, `roweval_lockbox.json`, and every superseded read beside it (`roweval_lockbox.<date>.json`) |
+| `runs/keep/ablations` | **no** | `s2_ml_abl_*`, `s2_ml_rf42`, `s2_ml_seedsweep.json`, `s2_ml_featseedsweep.json`, `s2_ml_rowseedsweep.json` |
 | `runs/keep/agent_runs` | **no** | one dated dir per paid agent run (§4) |
 | `runs/breakdown.md` | **yes** | the deliverable (§5) |
 
@@ -130,21 +132,22 @@ Command → gate → everything it writes.
 |---|---|---|---|---|
 | 1 | `verify_features` | `python -m stages.s2_ml.verify_features` | — | nothing; stdout + exit code |
 | 2 | `verify_freshness` | `python -m freshness --self-test` | — | nothing; stdout + exit code |
-| 3 | `s1_census` | `python -m stages.s1_clean.run` | `runs/regen/s1_census/manifest.jsonl` | `runs/regen/s1_census/`: `manifest.jsonl`, `_inputs.s1_census.json`; `census.md` **only with `--report`** |
-| 4 | `s1_clean` | `python -m stages.s1_clean.clean` | `runs/regen/s1_clean/segments.jsonl` | `data/clean/<session>/<stem>.channel_trust.json` — **the only persisted per-file product**; the canonical-grid frame is measured and dropped; `runs/regen/s1_clean/`: `segments.jsonl`, `observations.jsonl`, `quarantine.jsonl`, `_inputs.s1_clean.json`; `clean_report.md` **only with `--report`** |
-| 5 | `s1_exception` (agent) | in-process `_s1_exception` | — | `runs/keep/agent_runs/<date>_runN/exceptions_review.jsonl` (+ `exceptions_review_raw.txt` when the output does not parse) |
-| 6 | `verify_transform` | `python -m stages.s2_ml.verify_transform` | — | nothing; stdout, `sys.exit(1)` on mismatch |
-| 7 | `s2_train` | `python -m stages.s2_ml.train` | `runs/regen/s2_ml/locoeval.json` | `runs/regen/s2_ml/`: `locoeval.json`, `model_meta.json`, `_inputs.train.json`; `locoeval.md` **only with `--report`**; `champion.joblib` **on a refit only** — an experiment run (§5) writes metrics without the estimator |
-| 8 | `s2_experiment` (agent) | in-process `_s2_cycle` | `runs/keep/s2_ml/experiments.jsonl` | `runs/keep/agent_runs/<date>_runN/`: `proposal.json`, `critic_review.json` (+ `_rev1` variants on a retry); `runs/regen/s2_ml/`: `experiments.jsonl`, `proposals.jsonl`, `champion.json`. **On promotion**: re-runs `python -m stages.s2_ml.train` and rewrites `stages/s2_ml/champion_spec.json` |
-| 9 | `verify_serve` | `python -m stages.s2_ml.verify_serve` | — | nothing; stdout, `sys.exit(1)` on failure |
-| 10 | `s2_roweval` | `python -m stages.s2_ml.roweval` | `runs/regen/s2_ml/roweval_loro.json` | `runs/regen/s2_ml/`: `roweval_loro.json`, `transitions_loro.json`, `_inputs.roweval_loro.json`; the two `.md` **only with `--report`** |
-| 11 | `s2_raweval` | `python -m stages.s2_ml.raweval` | `runs/regen/s2_ml/raweval.json` | `runs/regen/s2_ml/`: `raweval.json`, `_inputs.raweval.json`; `raweval.md` **only with `--report`** (fits per-rev models into temp dirs) |
-| 12 | `s3_label_audit` | `python -m stages.s3_physics.label_audit` | `runs/regen/s3_physics/label_audit.json` | `runs/regen/s3_physics/`: `label_audit.json`, `label_audit_windows.jsonl`, `_inputs.label_audit.json`; `label_audit.md` **only with `--report`** |
-| 13 | `s3_label_review` (agent) | in-process `_s3_label_review` | — | `runs/keep/agent_runs/<date>_runN/`: `label_review.jsonl`, `label_review_raw.txt` |
-| 14 | `s3_rate_audit` | `python -m stages.s3_physics.rate_audit` | `runs/regen/s3_physics/rate_audit.json` | `runs/regen/s3_physics/`: `rate_audit.json`, `_inputs.rate_audit.json`; `rate_audit.md` **only with `--report`** |
-| 15 | `s3_plausibility` | `python -m stages.s3_physics.plausibility` | `runs/regen/s3_physics/plausibility.json` | `runs/regen/s3_physics/`: `plausibility.json`, `_inputs.plausibility.json` |
-| 16 | `s2_label_all` | `python -m stages.s2_ml.label_all` | `labeled_raw/label_summary.csv` | `labeled_raw/`: `label_summary.csv`, `abstentions.jsonl`, `plausibility.jsonl`, `preset_sweep.json`, `_inputs.json`, and `<session>/<stem>_labelled.csv` per labelled file — **a few GB, gitignored**; `label_report.md` **only with `--report`** |
-| 17 | `breakdown` | `python -m stages.breakdown` | `runs/breakdown.md` | `runs/breakdown.md` |
+| 3 | `verify_rawread` | `python -m stages.s1_clean.verify_rawread` | — | nothing; stdout, `sys.exit(1)` on mismatch. Reads every raw CSV twice — once directly, once through `data/cache` — and asserts the two frames are identical (names, order, dtypes, values, NaN). **Warms the cache**, so every stage below it stops parsing CSV |
+| 4 | `s1_census` | `python -m stages.s1_clean.run` | `runs/regen/s1_census/manifest.jsonl` | `runs/regen/s1_census/`: `manifest.jsonl`, `_inputs.s1_census.json`; `census.md` **only with `--report`** |
+| 5 | `s1_clean` | `python -m stages.s1_clean.clean` | `runs/regen/s1_clean/segments.jsonl` | `data/clean/<session>/<stem>.channel_trust.json` — **the only persisted per-file product**; the canonical-grid frame is measured and dropped; `runs/regen/s1_clean/`: `segments.jsonl`, `observations.jsonl`, `quarantine.jsonl`, `_inputs.s1_clean.json`; `clean_report.md` **only with `--report`** |
+| 6 | `s1_exception` (agent) | in-process `_s1_exception` | — | `runs/keep/agent_runs/<date>_runN/exceptions_review.jsonl` (+ `exceptions_review_raw.txt` when the output does not parse) |
+| 7 | `verify_transform` | `python -m stages.s2_ml.verify_transform` | — | nothing; stdout, `sys.exit(1)` on mismatch |
+| 8 | `s2_train` | `python -m stages.s2_ml.train` | `runs/regen/s2_ml/locoeval.json` | `runs/regen/s2_ml/`: `locoeval.json`, `model_meta.json`, `_inputs.train.json`; `locoeval.md` **only with `--report`**; `champion.joblib` **on a refit only** — an experiment run (§5) writes metrics without the estimator |
+| 9 | `s2_experiment` (agent) | in-process `_s2_cycle` | `runs/keep/s2_ml/experiments.jsonl` | `runs/keep/agent_runs/<date>_runN/`: `proposal.json`, `critic_review.json` (+ `_rev1` variants on a retry); `runs/regen/s2_ml/`: `experiments.jsonl`, `proposals.jsonl`, `champion.json`. **On promotion**: re-runs `python -m stages.s2_ml.train` and rewrites `stages/s2_ml/champion_spec.json` |
+| 10 | `verify_serve` | `python -m stages.s2_ml.verify_serve` | — | nothing; stdout, `sys.exit(1)` on failure |
+| 11 | `s2_roweval` | `python -m stages.s2_ml.roweval` | `runs/regen/s2_ml/roweval_loro.json` | `runs/regen/s2_ml/`: `roweval_loro.json`, `transitions_loro.json`, `_inputs.roweval_loro.json`; the two `.md` **only with `--report`** |
+| 12 | `s2_raweval` | `python -m stages.s2_ml.raweval` | `runs/regen/s2_ml/raweval.json` | `runs/regen/s2_ml/`: `raweval.json`, `_inputs.raweval.json`; `raweval.md` **only with `--report`** (fits per-rev models into temp dirs) |
+| 13 | `s3_label_audit` | `python -m stages.s3_physics.label_audit` | `runs/regen/s3_physics/label_audit.json` | `runs/regen/s3_physics/`: `label_audit.json`, `label_audit_windows.jsonl`, `_inputs.label_audit.json`; `label_audit.md` **only with `--report`** |
+| 14 | `s3_label_review` (agent) | in-process `_s3_label_review` | — | `runs/keep/agent_runs/<date>_runN/`: `label_review.jsonl`, `label_review_raw.txt` |
+| 15 | `s3_rate_audit` | `python -m stages.s3_physics.rate_audit` | `runs/regen/s3_physics/rate_audit.json` | `runs/regen/s3_physics/`: `rate_audit.json`, `_inputs.rate_audit.json`; `rate_audit.md` **only with `--report`** |
+| 16 | `s3_plausibility` | `python -m stages.s3_physics.plausibility` | `runs/regen/s3_physics/plausibility.json` | `runs/regen/s3_physics/`: `plausibility.json`, `_inputs.plausibility.json` |
+| 17 | `s2_label_all` | `python -m stages.s2_ml.label_all` | `labeled_raw/label_summary.csv` | `labeled_raw/`: `label_summary.csv`, `abstentions.jsonl`, `plausibility.jsonl`, `preset_sweep.json`, `_inputs.json`, and `<session>/<stem>_labelled.csv` per labelled file — **a few GB, gitignored**; `label_report.md` **only with `--report`** |
+| 18 | `breakdown` | `python -m stages.breakdown` | `runs/breakdown.md` | `runs/breakdown.md` |
 
 (agent) = `--with-agents` only · every other step runs on the free spine
 
@@ -204,7 +207,9 @@ One report cannot be rebuilt by re-running its stage: `roweval_lockbox.md` would
 `roweval --lockbox`, and rev8 is spent (§5). Its numbers survive in the tracked
 `runs/keep/s2_ml/roweval_lockbox.json` — which is why that file is in `keep/` — and
 `roweval.render()` will re-render them from it. Do **not** re-run the stage to get the page
-back.
+back. The page present today came from the 2026-08-07 read, which was spent on a schema
+problem and not on the page; `runs/keep/s2_ml/roweval_lockbox.2026-08-03.json` holds the
+earlier read and has no page at all, which is the shape this rule is about.
 
 ### Why the order is what it is
 
@@ -341,7 +346,7 @@ already able to make for itself:
 | `raweval --no-baseline` | the claim is "the raw route matches the lpf_view route on the same subjects" — without the baseline the file states one side of a comparison | nothing; it always runs now |
 | `plausibility --calibrate/--control` | the spine always passed both, and either alone wrote a half `plausibility.json` under the same name — a bound sited against the corpus but never fired at a fault is a number with no evidence | nothing; both always run |
 | `experiment --seed` | a re-baseline is not a judgement call: `_s2_cycle` now seeds whenever the incumbent's corpus fingerprint does not match the ground in front of it | nothing; it is automatic, and it prints when it fires |
-| `experiment --no-taxonomy` | bought speed by dropping the tiebreaker `decide()` needs on a macro-F1 tie | nothing |
+| `experiment --no-taxonomy` | bought speed by dropping the tiebreaker `decide()` used on a macro-F1 tie. Removing the flag was right, but the default it left behind turned the tiebreaker off permanently — after it, no challenger was ever scored with a taxonomy, so the branch could not fire. The whole row-level taxonomy went on 2026-08-07 (DOMAIN_NOTES §7) | nothing; a macro-F1 tie keeps the incumbent |
 | `experiment --show` | it was the only thing this CLI could do that did not need the agents | it is the default now: `python -m stages.s2_ml.experiment` |
 | `verify_serve --threshold/--skip-pairs/--skip-sweep` | a differential check with one question; skipping half of it turns a PASS into a PASS about half | nothing; it runs whole |
 | `freshness --check DIR...` | naming the dirs by hand is exactly how a stage escapes the staleness check — the same hole `checkable_dirs()` was written to close | nothing; it checks every checkable dir |
@@ -461,6 +466,25 @@ nothing else. `s2_ml_rf42`, `s2_ml_seedsweep.json` and `s2_ml_featseedsweep.json
 same kind of artifact: the last is the 5-seeds-*within*-each-feature-set sweep that sets the
 resolution band every row of the ablation table has to be read against.
 
+`s2_ml_rowseedsweep.json` is the same measurement one unit down, and it exists because the
+one above could not stand in for it:
+
+```powershell
+python -m stages.s2_ml.rowseedsweep          # ~35 s per seed, 5 by default
+```
+
+Five seeds through the **row** path — the same features, folds, threshold and ambiguity gate
+that produce the shipped `coverage 84.66% at 0.9901`, with `random_state` as the only thing
+that varies. The window sweep measures 5,984 label-pure windows; the headline is 1,244,292
+scored rows behind a gate, so its band had to be measured, not inferred. Seed 0 reproduces the headline
+exactly, which is what makes the other four a band rather than a different experiment.
+`breakdown` prints it directly under the row-level curve.
+
+**It does not re-run the claim.** `roweval.py` stays single-seed for the same reason its
+threshold is not a flag: the shipped number is what seed 0 measured. This file is what you
+read a *change* to that number against — and at `spread 0.0004` on selective accuracy, most
+single-seed deltas anyone will ever quote are inside it.
+
 **An experiment does not write `champion.joblib`.** An ablation exists to have its
 `locoeval` read next to the champion's, and that is all anything reads: `breakdown` opens
 `locoeval.json` and nothing else, and no serve path points at an ablation dir. What each
@@ -474,9 +498,11 @@ stands between `data/raw` and the labelled CSVs — and a refit still writes it.
 "persist the estimator when something loads it", not "persist it when it is cheap to".
 
 `roweval --lockbox` writes `roweval_lockbox.md/.json` and `transitions_lockbox.md/.json`
-instead of the `_loro` pair. **It is single-use** — `rev8` is spent, read twice on
-2026-08-03, and must not be read a third time without a new sealed subject. `raweval`
-refuses the lockbox in code rather than by remembering a flag, so it may run on every pass.
+instead of the `_loro` pair. **It is single-use** — `rev8` is spent, read twice on 2026-08-03
+and once on 2026-08-07, and must not be read a fourth time without a new sealed subject. The
+flag requires `--read-note`: a sealed read has to be argued for in a string that ships inside
+the artifact, because a bare flag is too cheap for what it spends. `raweval` refuses the
+lockbox in code rather than by remembering a flag, so it may run on every pass.
 
 ---
 
@@ -530,21 +556,22 @@ go stale under them. `keep/s2_ml` holds the spent lockbox, and its stamp is the 
 warning that a single-use read describes an older `champion_spec.json`. There is no re-run
 that would catch it later, so the check fires there or nowhere.
 
-**And for the lockbox already on disk it fires too late.** `runs/keep/s2_ml` carries no
-stamp and will keep raising `unchecked` on every run, because the read predates stamping and
-`roweval --lockbox` cannot be repeated. What the artifact records is `curve`, `threshold`,
-`revs`, `reasons`, `human_unknown` — and **no model identity**: the `n_features`/`features`
-keys `roweval.py` writes today were added afterwards, so a future lockbox read is
-identifiable and this one is not. The git history is the only remaining evidence, and it
-does not reassure: at `dcb2b7b`, the commit that versioned this file, `model_meta.json`
-recorded **42 features**, while the shipped champion is
-`extratrees400_drop_moments38` at **38**. The on-disk copy is semantically identical to that
-commit's (same curve, same `0.9308` at coverage `0.7639`; only the JSON formatting differs),
-so the headline lockbox number was most likely measured on the **42-feature** model, not the
-one that ships. The spec's own rationale puts the 42→38 difference inside the five-seed
-noise band on LORO, which is the reason to think it still stands — but it is an argument,
-not a measurement, and no measurement is available. Quote `0.9308` with that attached, and
-see `caveats.md` §3.2 before quoting it at all.
+**That gap used to be unclosable, and it is the reason the lockbox was re-read [2026-08-07].**
+The 08-03 artifact carried no stamp and no model identity — `curve`, `threshold`, `revs`,
+`reasons`, `human_unknown`, and nothing that said which model produced them. `n_features` and
+`features` were added 2026-08-04, so every later read is identifiable and that one was not.
+The git history was the only evidence and it did not reassure: at `dcb2b7b`, the commit that
+versioned the file, `model_meta.json` recorded **42 features** against the champion's
+`extratrees400_drop_moments38` at **38**, and the on-disk copy matched that commit's curve
+exactly. So the headline was *probably* measured on a model that never shipped, and the
+argument for quoting it anyway was the spec's five-seed noise band on LORO — an argument, not
+a measurement.
+
+It is a measurement now. The 08-07 read is stamped, carries `schema_version`, `n_features:
+38`, the full feature list, and a `read_note` saying why it was spent. **0.9308 → 0.9269**,
+which is 13× the 0.0003 the same correction moved the development row — inside the noise
+band the old argument appealed to, but not by the margin that argument assumed. Quote
+`0.9269`, and see `caveats.md` §3.2 and §3.2b before quoting it at all.
 
 The staleness check used to live in `run_pipeline.py` against `runs/s4_fusion` by name; it
 moved out with that stage rather than being repointed, because a hardcoded second copy

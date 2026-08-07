@@ -27,7 +27,8 @@ from stages.s2_ml.rest import (
     rest_span_frame,
 )
 
-# non-overlapping for training: overlap manufactures near-duplicate rows and flatters every metric
+# non-overlapping for training: overlap inflates the effective sample count, NOT the CV number
+# (CV is LeaveOneGroupOut(rev), so near-duplicates never cross a fold; caveats.md 3.7 has the A/B)
 DEFAULT_WINDOW_S = 2.0
 DEFAULT_STRIDE_S = 2.0
 

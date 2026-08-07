@@ -21,8 +21,6 @@ from stages.s2_ml.dataset import (
 )
 from stages.s2_ml.features import WindowSpec, build_windows, feature_columns
 from stages.s2_ml.locoeval import evaluate
-from stages.s2_ml.predict import DEFAULT_INFERENCE_STRIDE_S, dense_predict_trial
-from stages.s2_ml.taxonomy import aggregate, bucket_errors
 # estimator and window filter come from train.py; restating them here is the wrong that still scores
 from stages.s2_ml.train import MODEL_PARAMS, build_model, trainable
 
@@ -89,7 +87,6 @@ class ExperimentResult:
     per_rev_macro_f1: dict # per-held-out-rev macro-F1
     n_features: int # features after drops
     n_train_windows: int # training windows used
-    taxonomy: dict | None = None # row-level error taxonomy, if run
     corpus: dict | None = None # what it was measured OVER; see corpus_fingerprint
 
     def to_dict(self) -> dict:
@@ -97,10 +94,6 @@ class ExperimentResult:
              "accuracy": self.accuracy, "balanced_accuracy": self.balanced_accuracy,
              "per_rev_macro_f1": self.per_rev_macro_f1,
              "n_features": self.n_features, "n_train_windows": self.n_train_windows}
-        if self.taxonomy:
-            d["taxonomy"] = {"row_accuracy": self.taxonomy["row_accuracy"],
-                             "dominant": self.taxonomy["dominant"],
-                             "fractions": self.taxonomy["fractions"]}
         if self.corpus:
             d["corpus"] = self.corpus
         return d
@@ -178,8 +171,7 @@ def select_features(all_feats: list[str], drop: list[str]) -> list[str]:
 
 
 # train + score one spec under leave-one-rev-out; the lockbox is never touched
-def run_experiment(spec: ExperimentSpec, trials=None, *, taxonomy: bool = False,
-                   stride_s: float = DEFAULT_INFERENCE_STRIDE_S) -> ExperimentResult:
+def run_experiment(spec: ExperimentSpec, trials=None) -> ExperimentResult:
     validate_spec(spec)
     # resolve the drop list ONCE: the record must name which features a number was measured over
     spec = replace(spec, drop_features=spec.resolved_drops())
@@ -197,28 +189,19 @@ def run_experiment(spec: ExperimentSpec, trials=None, *, taxonomy: bool = False,
     y = train_df["label"].to_numpy(int)
     groups = train_df["rev"].to_numpy()
 
-    # one leave-one-rev-out pass scores windows and rows from the same fold; filled by mask, not order
+    # one leave-one-rev-out pass; oof is filled by mask, not by order
     oof = np.empty_like(y)
-    per_run: list = []
     for rev in sorted(pd.unique(groups)):
         te = groups == rev
         model = build_model(params)
         model.fit(X[~te], y[~te])
         oof[te] = model.predict(X[te])
-        if not taxonomy:
-            continue
-        for tr in trials:
-            if tr.split != "train" or tr.rev != rev:
-                continue
-            for gt, pred, t in dense_predict_trial(model, tr.frame, feats, wspec, stride_s):
-                per_run.append(bucket_errors(gt, pred, t))
 
     result = evaluate(y, oof, groups=groups)
-    tax = aggregate(per_run) if taxonomy else None
 
     return ExperimentResult(spec, result.macro_f1, result.accuracy,
                             result.balanced_accuracy, result.per_rev_macro_f1,
-                            len(feats), len(train_df), tax, corpus_fingerprint(train_df))
+                            len(feats), len(train_df), corpus_fingerprint(train_df))
 
 
 # the current champion record, or None
@@ -291,20 +274,10 @@ def comparable(new: dict | None, old: dict | None) -> tuple[bool, str]:
     return True, ""
 
 
-# on a macro-F1 tie, prefer lower steady_confusion: a sustained wrong call drives a powered device
-STEADY_CONFUSION_MARGIN = 0.02
-
-
-# steady_confusion share of a result or champion record, or None if no taxonomy
-def _steady(result_or_champion) -> float | None:
-    tax = (result_or_champion.taxonomy if isinstance(result_or_champion, ExperimentResult)
-           else result_or_champion.get("taxonomy"))
-    if not tax:
-        return None
-    return tax["fractions"]["steady_confusion"]
-
-
-# the ONLY path to champion: macro-F1 past PROMOTION_MARGIN, tie broken on steady_confusion
+# the ONLY path to champion: macro-F1 past PROMOTION_MARGIN. A tie keeps the incumbent- there was a
+# tiebreaker on the row-level error taxonomy and it decided exactly one promotion, ledger entry 8
+# (drop_angvel_dom_hz, 2026-07-21), back when run_experiment computed a taxonomy by default. Once
+# that default went False no challenger carried one, so the branch was unreachable; deleted 2026-08-07.
 def decide(challenger: ExperimentResult, champion: dict | None) -> tuple[bool, str]:
     if champion is None:
         return True, "no incumbent champion; establishing baseline"
@@ -322,19 +295,6 @@ def decide(challenger: ExperimentResult, champion: dict | None) -> tuple[bool, s
     if delta >= PROMOTION_MARGIN:
         return True, (f"macro-F1 {challenger.macro_f1:.4f} beats champion "
                       f"{champion['macro_f1']:.4f} by {delta:+.4f} >= {PROMOTION_MARGIN}")
-
-    # tie on the headline metric -> fall through to the error-type preference
-    if abs(delta) < PROMOTION_MARGIN:
-        new, old = _steady(challenger), _steady(champion)
-        if new is not None and old is not None:
-            drop = old - new
-            if drop >= STEADY_CONFUSION_MARGIN:
-                return True, (
-                    f"macro-F1 {challenger.macro_f1:.4f} ties champion "
-                    f"{champion['macro_f1']:.4f} ({delta:+.4f}), but steady_confusion "
-                    f"falls {old:.3f} -> {new:.3f} ({drop:.3f} >= "
-                    f"{STEADY_CONFUSION_MARGIN}); at equal accuracy, prefer the model "
-                    f"that fails passively")
 
     return False, (f"macro-F1 {challenger.macro_f1:.4f} vs champion "
                    f"{champion['macro_f1']:.4f} ({delta:+.4f}); "
@@ -363,9 +323,8 @@ def record(out_dir: Path, result: ExperimentResult, promoted: bool, reason: str,
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     if promoted:
-        # carry taxonomy, or decide()'s error-type tiebreaker silently never fires next time
         keys = ("ts", "git_sha", "spec", "macro_f1", "accuracy", "balanced_accuracy",
-                "per_rev_macro_f1", "n_features", "taxonomy", "corpus")
+                "per_rev_macro_f1", "n_features", "corpus")
         (out_dir / CHAMPION_FILENAME).write_text(
             json.dumps({k: entry[k] for k in keys if k in entry}, indent=2),
             encoding="utf-8")
@@ -424,16 +383,15 @@ def ledger_by_basis(out_dir: Path,
 
 
 # measure the tracked champion as the incumbent: its number must come from THIS code, corpus and grid
-def seed(out_dir: Path, trials=None, *, taxonomy: bool = True) -> dict:
+def seed(out_dir: Path, trials=None) -> dict:
     spec = load_champion_spec()
     print(f"[s2-exp] seeding the incumbent from champion_spec.json: '{spec.name}'")
-    result = run_experiment(spec, trials, taxonomy=taxonomy)
+    result = run_experiment(spec, trials)
     entry = record(out_dir, result, True,
                    "seed: the tracked champion spec, re-measured as the incumbent",
                    update_spec=False)
     print(f"[s2-exp] incumbent macro-F1 {result.macro_f1:.4f} over "
-          f"{result.n_train_windows:,} windows, {result.n_features} features"
-          + (f", dominant error '{result.taxonomy['dominant']}'" if result.taxonomy else ""))
+          f"{result.n_train_windows:,} windows, {result.n_features} features")
     return entry
 
 

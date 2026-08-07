@@ -311,6 +311,12 @@ def build_steps() -> list[Step]:
         Step("verify_freshness",
              [PY, "-m", "freshness", "--self-test"],
              desc="the staleness checker still fires (self-test)", runtime="short"),
+        # before anything reads data/raw: every stage below now reads the cache, so this is the
+        # one place that still proves the cache and the CSV are the same frame. It warms the
+        # cache as a side effect, which is why the census below it is no longer a full parse.
+        Step("verify_rawread",
+             [PY, "-m", "stages.s1_clean.verify_rawread"],
+             desc="the raw-read cache returns the CSV exactly", runtime="long"),
         Step("s1_census",
              [PY, "-m", "stages.s1_clean.run"],
              gate=REGEN / "s1_census" / "manifest.jsonl",

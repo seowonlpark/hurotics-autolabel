@@ -655,33 +655,7 @@ every annotated trial matches zero or one raw candidate, each at `max|Δt| = 0`.
 buys nothing and risks nothing *on this corpus*; it is still the wrong rule to carry
 elsewhere, so it stays listed in `caveats.md` §3.4.
 
-### 6.11 `predict.py` — dense-stride inference, and why there are two strides
-
-Turns a windowed classifier into per-row predictions: slide the window at a small stride,
-assign each prediction to the rows around its **centre**. Resolution becomes the stride
-rather than the window, and centring (not leading-edge) keeps transitions unbiased.
-
-The one number worth arguing about is `DEFAULT_INFERENCE_STRIDE_S = 0.1`, and it is
-**deliberately not** `train.DEFAULT_INFERENCE_STRIDE_S = 0.25`. Two strides, two jobs: 250 ms
-is the serve path's, priced for a customer's whole recording; 100 ms is the measurement
-path's, chosen to sit finer than `FLICKER_MAX_MS = 200` so a flicker is *expressible at
-all*. At 250 ms the error taxonomy's flicker bucket would read zero by construction — see
-DOMAIN_NOTES §, where that hazard is recorded as a live warning against the serve stride.
-
-### 6.12 `taxonomy.py` — score our errors on the incumbent's yardstick
-
-A verbatim port of the sibling repo's `locoeval/diagnose.py` bucketing — precedence
-`correct > omission/swallowed/edge_omission > flicker > late > early > steady_confusion` —
-with the thresholds **copied, not tuned**, because they are what make the two repos'
-numbers comparable. `FLICKER_MAX_MS`, `LAG_MAX_MS` and `SUSTAINED_FRACTION` are constants
-of the comparison, not knobs of this pipeline; tuning one silently would end the
-comparability it exists for.
-
-It takes dense per-row predictions, never window labels. **This module was deleted with the
-champion/challenger loop and came back with it on 2026-08-04**; DOMAIN_NOTES carried "no
-longer in this repo / nothing computes it" for the gap in between.
-
-### 6.13 `experiment.py` — the only path to champion
+### 6.11 `experiment.py` — the only path to champion
 
 An agent proposes an `ExperimentSpec`; this runs it, scores it with `locoeval`, applies the
 rule, and logs **every** outcome — rejections included — to `experiments.jsonl`. Promotion
@@ -691,12 +665,12 @@ is never an agent's call.
 |---|---|
 | `decide()` gates on leave-one-rev-out macro-F1 past `PROMOTION_MARGIN` | one metric, stated in advance, computed by code. The agents never see a promotion switch |
 | `comparable()` **refuses** to subtract across corpora | a macro-F1 delta is meaningless across a changed class set, corpus or window count. Fail-passive: an unverifiable comparison keeps the incumbent rather than promoting on it. The comment names the real incident — a two-class incumbent scoring six-class challengers for a whole import |
-| `STEADY_CONFUSION_MARGIN = 0.02`, the tiebreaker | on a macro-F1 tie, prefer lower `steady_confusion`: *a sustained wrong call becomes a sustained wrong ACTION on a powered device, whereas omissions fail passive.* This is the one place the error taxonomy is load-bearing rather than descriptive |
-| one LORO pass fits both windows and rows | the fold holding a rev out is the same model that scores that rev's OOF windows and its dense rows, so it is fit once for both. `oof` is filled by mask, so fold order cannot matter |
+| no tiebreaker; a macro-F1 tie keeps the incumbent | there was one — `STEADY_CONFUSION_MARGIN = 0.02` over the row-level error taxonomy, on the argument that *a sustained wrong call becomes a sustained wrong ACTION on a powered device, whereas omissions fail passive*. It decided one promotion (`drop_angvel_dom_hz`, 2026-07-21) and then went unreachable when challengers stopped being scored with a taxonomy. Deleted 2026-08-07 with the taxonomy itself |
+| one LORO pass, `oof` filled by mask | the fold holding a rev out is the model that scores that rev's OOF windows, so it is fit once. Filling by mask rather than by order means fold order cannot matter |
 | `champion_spec.json` tracked in git, `champion.json` not | `champion.json` lives under `runs/`, which is rewritten by every cycle; the spec is the champion's identity as *data*, committed alongside the claims it supports. `train.py` stamps it via `freshness.stamp_inputs`, because a promotion rewrites it and until a refit follows, everything in `runs/s2_ml/` describes the model that just lost |
 | estimator and `trainable` imported from `train.py` | this file arrived from a sibling repo whose champion was a RandomForest over a `label != TRANSITION` filter. Both are wrong here, **and both are the kind of wrong that still produces a number** |
 
-### 6.14 `raweval.py` — the accuracy of the route a caller actually uses
+### 6.12 `raweval.py` — the accuracy of the route a caller actually uses
 
 `roweval` scores the annotated `lpf_view` export. `verify_serve` shows the raw device route
 agrees with that export row for row — but it drops `Label` before comparing, so it proves
@@ -715,7 +689,7 @@ The narrowness is stated rather than smoothed over: 3 development subjects, 13 C
 lockbox. It is a direct measurement of a smaller population, **not** a second opinion on the
 row-level curve.
 
-### 6.15 `transitions.py` — what the biggest abstention bucket is made of
+### 6.13 `transitions.py` — what the biggest abstention bucket is made of
 
 `near_transition` suppresses more rows than any other reason and has the weakest suppressed
 guess (0.6090) of any in `OPERATING_POINTS.md`, and until 2026-08-04 nothing measured the

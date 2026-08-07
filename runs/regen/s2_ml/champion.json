@@ -28,19 +28,6 @@
     "rev7": 0.9111276455026456
   },
   "n_features": 38,
-  "taxonomy": {
-    "row_accuracy": 0.9514,
-    "dominant": "steady_confusion",
-    "fractions": {
-      "omission": 0.0,
-      "swallowed": 0.004,
-      "edge_omission": 0.027,
-      "flicker": 0.011,
-      "late": 0.048,
-      "early": 0.06,
-      "steady_confusion": 0.85
-    }
-  },
   "corpus": {
     "n_windows": 5984,
     "classes": [

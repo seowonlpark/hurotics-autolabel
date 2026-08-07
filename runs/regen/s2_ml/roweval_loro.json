@@ -1,4 +1,6 @@
 {
+  "schema_version": 3,
+  "read_note": "",
   "tag": "leave-one-rev-out",
   "threshold": 0.85,
   "revs": [
